@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Petri</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:      #f4f4f2;
+    --panel:   #ffffff;
+    --text:    #000000;
+    --muted:   #7a7a78;
+    --line:    rgba(0,0,0,.11);
+    --line-2:  rgba(0,0,0,.20);
+    --accent:  #7a56a8;
+    --veil:    rgba(255,255,255,.88);
+    --key:     #f2f2f0;
+    --shadow:  0 18px 40px -28px rgba(0,0,0,.55);
+  }
+  html[data-theme="dark"]{
+    --bg:      #0d0d0e;
+    --panel:   #191a1c;
+    --text:    #f4f4f3;
+    --muted:   #8c8c8a;
+    --line:    rgba(255,255,255,.13);
+    --line-2:  rgba(255,255,255,.24);
+    --accent:  #a884e0;
+    --veil:    rgba(13,13,14,.88);
+    --key:     #232427;
+    --shadow:  0 18px 40px -26px rgba(0,0,0,.9);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    height:100%;
+    overflow:hidden;
+    background:var(--bg);
+    color:var(--text);
+    font-family:"Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+    touch-action:none;
+  }
+
+  canvas#stage{ position:fixed; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+
+  /* ── readout ── */
+
+  .readout{ position:fixed; top:26px; left:28px; z-index:5; pointer-events:none; }
+  .count{ display:flex; align-items:baseline; gap:10px; }
+  .count b{
+    font-size:60px; font-weight:600; line-height:.84;
+    letter-spacing:-.045em; font-variant-numeric:tabular-nums;
+    display:inline-block; transform-origin:left bottom;
+  }
+  .count b.tick{ animation:absorb .26s cubic-bezier(.3,1.6,.5,1); }
+  @keyframes absorb{ 0%{transform:scale(1)} 40%{transform:scale(1.1)} 100%{transform:scale(1)} }
+  .count span{ font-size:14px; color:var(--muted); }
+
+  .stats{
+    margin-top:16px; display:flex; flex-wrap:wrap;
+    gap:6px 22px; font-size:12.5px; max-width:280px;
+  }
+  .stats div{ display:flex; gap:7px; }
+  .stats i{ font-style:normal; color:var(--muted); }
+  .stats em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
+
+  /* ── leaderboard ── */
+
+  .board{ position:fixed; top:28px; right:28px; z-index:5; width:168px; font-size:12.5px; pointer-events:none; }
+  .board[hidden]{ display:none; }
+  .board h2{
+    font-weight:500; font-size:12.5px; color:var(--muted);
+    padding-bottom:7px; margin-bottom:8px; border-bottom:1px solid var(--line);
+  }
+  .board ol{ list-style:none; }
+  .board li{
+    display:flex; justify-content:space-between; gap:10px;
+    padding:2.5px 0; color:var(--muted); font-variant-numeric:tabular-nums;
+  }
+  .board li span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .board li.you{ color:var(--text); font-weight:600; }
+
+  /* ── bottom-left corner stack ── */
+
+  .corner{
+    position:fixed; left:28px; bottom:28px; z-index:7;
+    display:flex; flex-direction:column; align-items:flex-start;
+    gap:12px; pointer-events:none;
+  }
+
+  .minimap{
+    width:132px; height:132px; order:3;
+    background:var(--panel); border:1px solid var(--line); border-radius:4px;
+  }
+  .minimap[hidden]{ display:none; }
+
+  .gear{
+    order:2; width:38px; height:38px;
+    display:grid; place-items:center;
+    background:var(--panel); border:1px solid var(--line); border-radius:50%;
+    color:var(--muted); cursor:pointer; pointer-events:auto;
+    transition:color .15s ease, border-color .15s ease;
+  }
+  .gear:hover{ color:var(--text); border-color:var(--line-2); }
+  .gear:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+  .gear svg{ width:17px; height:17px; }
+
+  .settings{
+    order:1; width:250px;
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    padding:18px 18px 14px; box-shadow:var(--shadow); pointer-events:auto;
+  }
+  .settings[hidden]{ display:none; }
+  .settings h2{
+    font-size:13px; font-weight:600;
+    padding-bottom:11px; margin-bottom:6px; border-bottom:1px solid var(--line);
+  }
+  .row{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:14px; padding:9px 0; font-size:13px;
+  }
+  .row + .row{ border-top:1px solid var(--line); }
+  .note{
+    margin-top:10px; padding-top:10px; border-top:1px solid var(--line);
+    font-size:11.5px; color:var(--muted); line-height:1.45;
+  }
+
+  .switch{
+    position:relative; width:38px; height:22px; flex:none;
+    background:var(--key); border:1px solid var(--line-2); border-radius:11px;
+    cursor:pointer; transition:background .16s ease, border-color .16s ease;
+  }
+  .switch::after{
+    content:""; position:absolute; top:2px; left:2px;
+    width:16px; height:16px; border-radius:50%; background:var(--muted);
+    transition:transform .16s ease, background .16s ease;
+  }
+  .switch[aria-checked="true"]{ background:var(--accent); border-color:var(--accent); }
+  .switch[aria-checked="true"]::after{ transform:translateX(16px); background:#fff; }
+  .switch:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+
+  /* ── panels ── */
+
+  .veil{
+    position:fixed; inset:0; z-index:20;
+    display:grid; place-items:center; padding:24px;
+    background:var(--veil); backdrop-filter:blur(6px);
+  }
+  .veil[hidden]{ display:none; }
+
+  .card{
+    width:min(420px, 100%);
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:36px 34px 30px; box-shadow:var(--shadow);
+  }
+  .card h2{ font-size:32px; font-weight:600; letter-spacing:-.03em; line-height:1.05; }
+  .card p{ margin-top:12px; font-size:14px; line-height:1.65; color:var(--muted); max-width:54ch; }
+
+  .keys{ margin-top:24px; display:grid; gap:9px; font-size:13px; }
+  .keys div{ display:flex; align-items:center; gap:13px; }
+  .keys kbd{
+    font-family:inherit; font-size:11.5px; font-weight:600;
+    padding:4px 0; min-width:62px; text-align:center;
+    background:var(--key); border:1px solid var(--line-2); border-radius:4px;
+  }
+  .keys p{ margin:0; color:var(--muted); }
+
+  .final{ margin-top:22px; display:flex; align-items:baseline; gap:11px; }
+  .final b{
+    font-size:64px; font-weight:600; line-height:.84;
+    letter-spacing:-.045em; font-variant-numeric:tabular-nums;
+  }
+  .final span{ font-size:14px; color:var(--muted); }
+
+  .tally{ margin-top:18px; display:grid; gap:7px; font-size:13px; color:var(--muted); }
+  .tally div{ display:flex; justify-content:space-between; max-width:250px; }
+  .tally em{ font-style:normal; color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+
+  .card button{
+    margin-top:28px;
+    font-family:inherit; font-size:14px; font-weight:600;
+    color:var(--panel); background:var(--text);
+    border:none; border-radius:5px; padding:12px 22px;
+    cursor:pointer; transition:opacity .14s ease;
+  }
+  .card button:hover{ opacity:.84; }
+  .card button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+
+  /* ── touch ── */
+
+  .touch{ position:fixed; right:24px; bottom:28px; z-index:6; display:none; gap:10px; }
+  body.is-touch .touch{ display:flex; }
+  body.is-touch .board{ display:none; }
+  .touch button{
+    font-family:inherit; font-size:13px; font-weight:600;
+    width:72px; height:48px;
+    color:var(--text); background:var(--panel);
+    border:1px solid var(--line-2); border-radius:6px; cursor:pointer;
+  }
+
+  @media (max-width:640px){
+    .readout{ top:18px; left:18px; }
+    .count b{ font-size:46px; }
+    .board{ display:none; }
+    .corner{ left:18px; bottom:22px; gap:10px; }
+    .minimap{ width:96px; height:96px; }
+    .card{ padding:28px 24px 24px; }
+    .card h2{ font-size:27px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .count b.tick{ animation:none; }
+    *{ transition:none !important; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div class="readout" aria-live="polite">
+  <div class="count"><b id="orbCount">0</b><span>orbs absorbed</span></div>
+  <div class="stats">
+    <div><i>Mass</i><em id="statMass">20</em></div>
+    <div><i>Rank</i><em id="statRank">—</em></div>
+    <div><i>Cells eaten</i><em id="statCells">0</em></div>
+    <div><i>Time</i><em id="statTime">0:00</em></div>
+  </div>
+</div>
+
+<div class="board" id="board">
+  <h2>Largest cells</h2>
+  <ol id="boardList"></ol>
+</div>
+
+<div class="corner">
+  <div class="settings" id="settings" hidden>
+    <h2>Settings</h2>
+    <div class="row">
+      <label id="lblTheme" for="swTheme">Dark mode</label>
+      <button class="switch" id="swTheme" type="button" role="switch" aria-checked="false" aria-labelledby="lblTheme"></button>
+    </div>
+    <div class="row">
+      <label id="lblMap" for="swMap">Minimap</label>
+      <button class="switch" id="swMap" type="button" role="switch" aria-checked="true" aria-labelledby="lblMap"></button>
+    </div>
+    <div class="row">
+      <label id="lblBoard" for="swBoard">Leaderboard</label>
+      <button class="switch" id="swBoard" type="button" role="switch" aria-checked="true" aria-labelledby="lblBoard"></button>
+    </div>
+    <div class="row">
+      <label id="lblGrid" for="swGrid">Background grid</label>
+      <button class="switch" id="swGrid" type="button" role="switch" aria-checked="true" aria-labelledby="lblGrid"></button>
+    </div>
+    <div class="row">
+      <label id="lblNames" for="swNames">Cell names</label>
+      <button class="switch" id="swNames" type="button" role="switch" aria-checked="true" aria-labelledby="lblNames"></button>
+    </div>
+    <p class="note" id="modeNote">Offline</p>
+  </div>
+
+  <button class="gear" id="gearBtn" type="button" aria-label="Settings" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.1"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+
+  <canvas class="minimap" id="minimap" aria-hidden="true"></canvas>
+</div>
+
+<div class="touch">
+  <button id="btnSplit" type="button">Split</button>
+  <button id="btnFeed" type="button">Feed</button>
+</div>
+
+<div class="veil" id="startVeil">
+  <div class="card">
+    <h2>Petri</h2>
+    <p>You are one cell on a crowded plate. Absorb the orbs to grow, swallow anything smaller than you, and stay clear of anything larger. Green spores burst you apart if you swallow one.</p>
+    <div class="keys">
+      <div><kbd>Mouse</kbd><p>Drift toward the pointer</p></div>
+      <div><kbd>Space</kbd><p>Split forward</p></div>
+      <div><kbd>W</kbd><p>Eject a little mass</p></div>
+    </div>
+    <button id="btnStart" type="button">Start</button>
+  </div>
+</div>
+
+<div class="veil" id="overVeil" hidden>
+  <div class="card">
+    <h2>You were absorbed</h2>
+    <p id="overLine">Something larger reached you.</p>
+    <div class="final"><b id="finalOrbs">0</b><span>orbs absorbed</span></div>
+    <div class="tally">
+      <div>Peak mass <em id="finalMass">0</em></div>
+      <div>Cells eaten <em id="finalCells">0</em></div>
+      <div>Survived <em id="finalTime">0:00</em></div>
+      <div>Best run <em id="finalBest">0</em></div>
+    </div>
+    <button id="btnAgain" type="button">Play again</button>
+  </div>
+</div>
+
+<script type="module" src="./client/main.js"></script>
+</body>
+</html>

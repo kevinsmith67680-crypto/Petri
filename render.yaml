@@ -1,0 +1,25 @@
+# Render Blueprint. Commit this, then point Render at the repo.
+#
+# The free plan spins the service down after 15 minutes without inbound
+# traffic and takes roughly a minute to wake, which disconnects anyone
+# connected at the time. Fine for showing people; move to a paid instance
+# before you rely on it.
+services:
+  - type: web
+    name: petri
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: TRUST_PROXY
+        value: "1"
+      - key: BOTS
+        value: "14"
+      - key: MAX_CONN_PER_IP
+        value: "3"
+      # Set this once you know your client's origin, e.g.
+      # https://yourname.github.io
+      - key: ALLOWED_ORIGINS
+        sync: false
