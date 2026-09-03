@@ -27,6 +27,25 @@ export const STAKE_TIERS = [PRACTICE, STAKE_1_USDC];
 // operator takes a rake here, and it must be disclosed to players.
 export const DEFAULT_RAKE_BPS = 0;
 
+// ── mass valuation (DISPLAY ONLY) ───────────────────────────────────────────
+//
+// A readout showing what a player's mass is "worth" at a fixed rate. It is a
+// scoreboard figure, NOT a claim on funds, and nothing in server/ledger.js
+// reads it.
+//
+// At 0.005 USDC per mass point the figure tracks reality reasonably closely:
+// spawning shows 0.10 against a 1.00 stake, and a 100-player round with an
+// average mass of 200 carries about as much notional value as was staked into
+// it. It drifts above parity as players grow, so it still must not be settled
+// against — payouts remain bounded by what was actually staked: your pot,
+// settled on death, cash-out, or surviving the round.
+export const MICRO_PER_MASS = 5_000;     // 0.005 USDC per mass point
+
+export function valueOfMass(mass) {
+  if (!Number.isFinite(mass) || mass <= 0) return 0;
+  return Math.floor(mass) * MICRO_PER_MASS;
+}
+
 export function isValidStake(units) {
   return Number.isSafeInteger(units) && STAKE_TIERS.includes(units);
 }

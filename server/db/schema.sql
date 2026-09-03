@@ -260,8 +260,9 @@ create table if not exists petri.matches (
   -- 'eaten'      swallowed by another player
   -- 'bot'        swallowed by an NPC
   -- 'cashed_out' left voluntarily with the pot
+  -- 'survived'   still alive when the round timer expired
   -- 'abandoned'  disconnected and the linger window expired
-  outcome           text not null check (outcome in ('eaten','bot','cashed_out','abandoned')),
+  outcome           text not null check (outcome in ('eaten','bot','cashed_out','survived','abandoned')),
   killer_id         uuid references petri.accounts(id) on delete set null,
 
   stake             bigint not null default 0 check (stake >= 0),
@@ -364,57 +365,83 @@ end $$;
 
 -- Recompute every aggregate from the match log. Use after changing the `won`
 -- rule, or to repair drift. Streaks are replayed in chronological order.
+--
+-- Every identifier here is deliberately distinct: an earlier version used a
+-- variable `n` and a CTE column `n`, which Postgres rejected as ambiguous.
+
 create or replace function petri.rebuild_stats() returns int language plpgsql as $$
-declare n int := 0;
+declare v_rows int := 0;
 begin
   delete from petri.player_stats;
+
   insert into petri.player_stats (
     account_id, matches, wins, time_played, orbs_absorbed, players_eaten,
     best_peak_mass, best_position, first_places, current_streak, longest_streak,
     total_staked, total_won, last_played_at
   )
   select
-    account_id,
+    m.account_id,
     count(*),
-    count(*) filter (where won),
-    coalesce(sum(duration_seconds), 0),
-    coalesce(sum(orbs_absorbed), 0),
-    coalesce(sum(players_eaten), 0),
-    coalesce(max(peak_mass), 0),
-    min(finish_position),
-    count(*) filter (where finish_position = 1),
+    count(*) filter (where m.won),
+    coalesce(sum(m.duration_seconds), 0),
+    coalesce(sum(m.orbs_absorbed), 0),
+    coalesce(sum(m.players_eaten), 0),
+    coalesce(max(m.peak_mass), 0),
+    min(m.finish_position),
+    count(*) filter (where m.finish_position = 1),
     0, 0,
-    coalesce(sum(stake), 0),
-    coalesce(sum(payout), 0),
-    max(ended_at)
-  from petri.matches
-  group by account_id;
+    coalesce(sum(m.stake), 0),
+    coalesce(sum(m.payout), 0),
+    max(m.ended_at)
+  from petri.matches m
+  group by m.account_id;
 
-  -- Streaks need order, so they are replayed rather than aggregated.
-  with runs as (
-    select account_id, won,
-           row_number() over (partition by account_id order by ended_at) as n,
-           row_number() over (partition by account_id, won order by ended_at) as m
-      from petri.matches
+  -- Streaks depend on order, so they are replayed rather than aggregated.
+  -- Standard gaps-and-islands: consecutive wins share the same value of
+  -- (seq - seq_of_kind), so grouping on that difference yields one row per
+  -- unbroken run.
+  with ordered as (
+    select
+      o.account_id,
+      o.won,
+      row_number() over (partition by o.account_id order by o.ended_at, o.id) as seq,
+      row_number() over (partition by o.account_id, o.won order by o.ended_at, o.id) as seq_of_kind
+    from petri.matches o
   ),
-  grouped as (
-    select account_id, won, count(*) as len,
-           max(n) as last_n
-      from runs where won
-      group by account_id, won, (n - m)
+  islands as (
+    select
+      ordered.account_id,
+      count(*) as run_len,
+      max(ordered.seq) as run_end
+    from ordered
+    where ordered.won
+    group by ordered.account_id, (ordered.seq - ordered.seq_of_kind)
   ),
-  best as (
-    select account_id, max(len) as longest,
-           max(len) filter (where last_n = (select max(n) from runs r where r.account_id = grouped.account_id)) as current
-      from grouped group by account_id
+  totals as (
+    select ordered.account_id, max(ordered.seq) as last_seq
+    from ordered
+    group by ordered.account_id
+  ),
+  streaks as (
+    select
+      i.account_id,
+      max(i.run_len) as longest_run,
+      -- The current streak is a run that is still going, i.e. one that ends on
+      -- the player's most recent match. If their last match was a loss, no run
+      -- qualifies and this is NULL, which coalesces to zero below.
+      coalesce(max(i.run_len) filter (where i.run_end = t.last_seq), 0) as current_run
+    from islands i
+    join totals t on t.account_id = i.account_id
+    group by i.account_id
   )
   update petri.player_stats ps
-     set longest_streak = coalesce(b.longest, 0),
-         current_streak = coalesce(b.current, 0)
-    from best b where b.account_id = ps.account_id;
+     set longest_streak = coalesce(s.longest_run, 0),
+         current_streak = coalesce(s.current_run, 0)
+    from streaks s
+   where s.account_id = ps.account_id;
 
-  get diagnostics n = row_count;
-  return n;
+  get diagnostics v_rows = row_count;
+  return v_rows;
 end $$;
 
 -- Public-facing boards. Kept as views so the queries live with the schema.

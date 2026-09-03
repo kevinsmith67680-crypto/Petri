@@ -40,7 +40,10 @@ check("different seed diverges", JSON.stringify(a) !== JSON.stringify(c));
 
 const world = createWorld(42);
 const me = addPlayer(world, { id: "me", name: "Tester" });
-fillBots(world, 12);
+// Enough bots to match the arena's design density. With only a dozen in an
+// 8,800-unit world they never meet, and the combat assertions below never
+// get exercised.
+fillBots(world, 90);
 
 let orbEvents = 0;
 let deaths = 0;

@@ -33,13 +33,15 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 
 import {
-  createWorld, addPlayer, removePlayer, fillBots,
-  setAim, queueAction, stepWorld, TICK_HZ, DEFAULT_BOTS
+  createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnPlayer,
+  setAim, queueAction, stepWorld, totalMass, TICK_HZ
 } from "../shared/sim.js";
 import {
-  encodeSnapshot, decodeClientMessage, createClientState, MSG
+  encodeSnapshot, decodeClientMessage, createClientState, MSG,
+  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY
 } from "../shared/protocol.js";
-import { isValidStake, PRACTICE } from "../shared/wager.js";
+import { isValidStake, PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
+  from "../shared/wager.js";
 import { createRamp, InsufficientFunds } from "./ledger.js";
 import { createStore } from "./store.js";
 import { MemoryRepo } from "./db/memory.js";
@@ -49,16 +51,64 @@ import { handleApi } from "./api.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
+const envInt = (name, fallback) =>
+  process.env[name] !== undefined ? Number(process.env[name]) : fallback;
+
+// Real money is off unless explicitly demanded, and createRamp() refuses to
+// start if it is demanded without a real implementation behind it.
+const REAL_MONEY = process.env.REAL_MONEY === "1";
+
+// ── test mode ───────────────────────────────────────────────────────────────
+//
+// One switch that makes the live PvP mode playable alone: rounds start with a
+// single ready player, the arena is filled with bots, and rounds are short so
+// you can watch a whole cycle without waiting ten minutes.
+//
+// Money still moves, but only demo credits — MockRamp grants 5.00 on signup
+// and there is no ramp behind it. That is deliberate: staking, claiming,
+// forfeiting and paying the places are exactly the paths worth exercising,
+// and they are worthless to test if money never moves at all.
+const TEST_MODE = process.env.TEST_MODE === "1";
+
+// Hard interlock. Test mode exists to make things easy, and easy plus real
+// funds is how money goes missing.
+if (TEST_MODE && REAL_MONEY) {
+  throw new Error(
+    "TEST_MODE=1 and REAL_MONEY=1 are mutually exclusive. Test mode lowers the " +
+    "lobby to a single player and fills the arena with bots; it must never run " +
+    "against real funds."
+  );
+}
+
 const PORT = Number(process.env.PORT) || 8080;
-const BOTS = Number(process.env.BOTS) || DEFAULT_BOTS;
+// The live arena is player versus player, so no bots by default. Bots still
+// fill the guest experience, which runs locally in the browser. Set BOTS to a
+// number if you want to pad an empty server while testing.
+const BOTS = envInt("BOTS", TEST_MODE ? 60 : 0) || 0;
+
+// Rounds. Ten minutes of play, then a short intermission showing standings.
+const ROUND_SECONDS = envInt("ROUND_SECONDS", TEST_MODE ? 120 : 600);
+const INTERMISSION_SECONDS = envInt("INTERMISSION_SECONDS", TEST_MODE ? 8 : 15);
+
+// Lobby. A round starts only once this many players have marked themselves
+// ready, and the server refuses connections past the maximum.
+//
+// READ THIS BEFORE DEPLOYING: with LOBBY_MIN at 100, nothing starts until a
+// hundred real people are in the lobby at the same moment. On a new game that
+// is never, so set LOBBY_MIN=2 while testing or you will stare at a lobby
+// forever. It is an environment variable for exactly that reason.
+const LOBBY_MIN = envInt("LOBBY_MIN", TEST_MODE ? 1 : 100);
+const LOBBY_MAX = envInt("LOBBY_MAX", 150);
+
+// Only the top finishers are paid. There is no voluntary cash-out, so the
+// only way to realise a pot is to still be alive AND placed when the whistle
+// goes. Everyone else loses what they staked.
+const PAID_POSITIONS = Number(process.env.PAID_POSITIONS) || 5;
 const MAX_CONN_PER_IP = Number(process.env.MAX_CONN_PER_IP) || 3;
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
 
-// Real money is off unless explicitly demanded, and createRamp() refuses to
-// start if it is demanded without a real implementation behind it.
-const REAL_MONEY = process.env.REAL_MONEY === "1";
 
 // Unset keeps accounts in memory (lost on restart). Set a path to persist.
 // On Render the filesystem is ephemeral, so this survives restarts of the
@@ -132,7 +182,43 @@ const server = http.createServer(async (req, res) => {
 // ── room ────────────────────────────────────────────────────────────────────
 
 const world = createWorld(Date.now() & 0xffffffff);
-fillBots(world, BOTS);
+if (BOTS > 0) fillBots(world, BOTS);
+
+// All round timing runs off world.time, the same clock the simulation uses, so
+// a slow tick stretches the round rather than desynchronising it from play.
+const round = {
+  number: 0,
+  phase: PHASE_LOBBY,
+  endsAt: Infinity        // the lobby waits on people, not on the clock
+};
+
+const readyCount = () => {
+  let n = 0;
+  for (const meta of clients.values()) if (meta.ready) n++;
+  return n;
+};
+
+function lobbyState() {
+  return {
+    type: "lobby",
+    ready: readyCount(),
+    connected: clients.size,
+    min: LOBBY_MIN,
+    max: LOBBY_MAX,
+    phase: round.phase,
+    test: TEST_MODE
+  };
+}
+
+function pushLobby() { broadcast(lobbyState()); }
+
+const roundView = () => ({
+  phase: round.phase,
+  remaining: round.endsAt === Infinity
+    ? 0
+    : Math.max(0, round.endsAt - world.time),
+  number: round.number
+});
 
 // Backend selection. Both implementations expose the same surface, so nothing
 // below this line knows or cares which one is in use.
@@ -236,6 +322,8 @@ wss.on("connection", (ws, req) => {
     // per-socket id that owns nothing and cannot wager.
     accountId: null,   // uuid once signed in; guests never hold money
     joining: false,
+    ready: false,
+    spectateId: null,   // whose eyes this client is borrowing, if dead
     stake: PRACTICE,
     msgBucket: makeBucket(LIMITS.message),
     actBucket: makeBucket(LIMITS.action),
@@ -255,33 +343,23 @@ wss.on("connection", (ws, req) => {
       if (!msg) return;
 
       if (meta.joined) {
-        if (msg.type === "cashout") {
-          // You can only realise a pot while alive. Dying settles it to
-          // whoever ate you, so there is nothing left to claim afterwards.
-          const player = world.players.get(id);
-          if (!player || !player.alive || !meta.accountId) return;
-          if (await backend.potOf?.(meta.accountId) === 0) return;
-          // Snapshot the run before ending it: the player object is reset on
-          // respawn and these numbers would be gone.
-          const run = {
-            duration: world.time - (player.spawnedAt || world.time),
-            rank: player.rank, of: player.of,
-            orbs: player.orbs, eaten: player.eaten, peak: Math.round(player.peak)
-          };
-          const stake = meta.stake;
-
-          // End the run first, then settle. If the order were reversed a
-          // player could be eaten in the window between the two and have the
-          // same pot paid out twice.
-          player.alive = false;
-          player.cells = [];
-          meta.stake = PRACTICE;
-          setAim(world, id, 0, 0);
-          const { paid } = await backend.cashOut(meta.accountId, RAKE_BPS);
-          recordRun(meta, run, {
-            outcome: "cashed_out", killerId: null, stake, payout: paid
-          });
-          await pushAccount(ws, meta);
+        if (msg.type === "spectate") {
+          const self = world.players.get(id);
+          // Only the dead spectate. Watching while alive would be a free
+          // second camera on the arena.
+          if (self && self.alive) return;
+          if (msg.dir === "off") {
+            meta.spectateId = null;
+          } else {
+            cycleSpectate(meta, msg.dir === "prev" ? "prev" : "next");
+          }
+        } else if (msg.type === "ready") {
+          // Only meaningful in the lobby; readying mid-round would let a
+          // player spawn into a game already in progress.
+          if (round.phase !== PHASE_LOBBY) return;
+          meta.ready = msg.ready !== false;
+          pushLobby();
+          maybeStartRound();
         } else if (msg.type === "rename") {
           // The HTTP API is the only thing that can actually change a name.
           // This just re-reads it, so a rename shows on the cell without
@@ -313,29 +391,44 @@ wss.on("connection", (ws, req) => {
       if (!isValidStake(stake)) { ws.close(1008, "Bad stake"); return; }
 
       // Identity comes from the session token, never from anything else the
-      // client says. A guest may play, but only for free: a balance has to
-      // belong to an account, or it belongs to whoever opens a new socket.
+      // client says.
       const authed = await accounts.resolveSession(msg.token).catch(() => null);
-      let displayName;
-      if (authed) {
-        meta.accountId = authed.id;
-        // The name on the cell is the account's, not whatever was sent, so a
-        // client cannot impersonate another player by editing its join.
-        displayName = authed.displayName;
-        if (!ramp.isReal) await ramp.grant(meta.accountId);
-      } else {
-        displayName = cleanName(msg.name || "Guest");
-      }
 
-      if (stake > PRACTICE && !authed) {
+      // The shared arena is for signed-in players only. Guests play the same
+      // simulation locally in their own tab, against bots.
+      //
+      // Enforced here rather than merely hidden in the UI: the client routes
+      // guests to the local simulation, but a modified client would happily
+      // open a socket anyway. Requiring a session is also what makes every
+      // player in the arena attributable, which matters for stats, for bans,
+      // and for anything involving a balance.
+      if (!authed) {
         meta.joining = false;
         ws.send(JSON.stringify({
           type: "account_error",
-          reason: "Sign in to wager. Guest play is practice only."
+          reason: "Sign in to play against other people. Guests play against bots."
         }));
-        ws.close(1008, "Auth required to wager");
+        ws.close(1008, "Sign in required");
         return;
       }
+
+      // Capacity is a hard limit: past LOBBY_MAX the arena stops being the
+      // size it was tuned for, and the per-tick cost grows with every body.
+      if (clients.size >= LOBBY_MAX) {
+        meta.joining = false;
+        ws.send(JSON.stringify({
+          type: "account_error",
+          reason: `Server full (${LOBBY_MAX} players). Try again shortly.`
+        }));
+        ws.close(1013, "Server full");
+        return;
+      }
+
+      meta.accountId = authed.id;
+      // The name on the cell is the account's, not whatever was sent, so a
+      // client cannot impersonate another player by editing their join.
+      const displayName = authed.displayName;
+      if (!ramp.isReal) await ramp.grant(meta.accountId);
 
       if (stake > PRACTICE) {
         try {
@@ -360,12 +453,25 @@ wss.on("connection", (ws, req) => {
       meta.state = createClientState(nextClientId);   // staggers keyframes
       clients.set(ws, meta);
       trimBots();
+      pushLobby();
+      // Arrivals wait in the lobby rather than dropping into a live round.
+      const joinedPlayer = world.players.get(id);
+      if (joinedPlayer && round.phase !== PHASE_LIVE) {
+        joinedPlayer.alive = false;
+        joinedPlayer.cells = [];
+      }
+
       ws.send(JSON.stringify({
         type: MSG.WELCOME, id, nid: player.nid, tickHz: TICK_HZ,
+        round: round.number,
+        roundSeconds: ROUND_SECONDS,
+        lobbyMin: LOBBY_MIN,
+        lobbyMax: LOBBY_MAX,
+        test: TEST_MODE,
         demo: !ramp.isReal,
-        signedIn: !!authed,
+        signedIn: true,
         displayName,
-        ...(meta.accountId ? await backend.snapshot(meta.accountId) : { balance: 0, pot: 0, staked: false })
+        ...(await backend.snapshot(meta.accountId))
       }));
       return;
     }
@@ -389,12 +495,16 @@ wss.on("connection", (ws, req) => {
       setAim(world, id, msg.x, msg.y);
     } else if (msg.type === MSG.ACTION) {
       if (!allow(meta.actBucket)) return;
+      // Coming back into play ends spectating; otherwise the camera would
+      // stay locked on someone else while you are alive.
+      if (msg.action === "respawn") meta.spectateId = null;
       queueAction(world, id, msg.action);
     }
   });
 
   const cleanup = () => {
     clients.delete(ws);
+    if (meta.joined) pushLobby();
     const n = (connectionsByIp.get(ip) || 1) - 1;
     if (n <= 0) connectionsByIp.delete(ip); else connectionsByIp.set(ip, n);
 
@@ -415,10 +525,14 @@ wss.on("connection", (ws, req) => {
   ws.on("error", () => { try { ws.close(); } catch {} });
 });
 
+// Outside test mode bots only fill seats humans have not taken. In test mode
+// the count is fixed, because the whole point is a populated arena for one
+// person.
+const botTarget = () => (TEST_MODE ? BOTS : Math.max(0, BOTS - clients.size));
+
 function trimBots() {
-  const humans = clients.size;
   const bots = [...world.players.values()].filter(p => p.bot);
-  const excess = bots.length - Math.max(0, BOTS - humans);
+  const excess = bots.length - botTarget();
   for (let i = 0; i < excess; i++) removePlayer(world, bots[i].id);
 }
 
@@ -513,6 +627,146 @@ async function settle(events) {
   }
 }
 
+// ── spectating ──────────────────────────────────────────────────────────────
+
+const aliveTargets = () =>
+  [...world.players.values()].filter(p => p.alive && p.cells.length);
+
+// Cycle to the next living player. Sorted by mass so the order is stable and
+// meaningful rather than whatever the Map happens to hold.
+function cycleSpectate(meta, dir) {
+  const targets = aliveTargets().sort((a, b) => totalMass(b) - totalMass(a));
+  if (!targets.length) { meta.spectateId = null; return null; }
+  const i = targets.findIndex(p => p.id === meta.spectateId);
+  const next = i < 0
+    ? targets[0]
+    : dir === "prev"
+      ? targets[(i - 1 + targets.length) % targets.length]
+      : targets[(i + 1) % targets.length];
+  meta.spectateId = next.id;
+  return next;
+}
+
+// Called every tick before snapshots go out: the player being watched can be
+// eaten at any moment, and a spectator staring at a corpse sees nothing.
+function refreshSpectate(meta) {
+  if (!meta.spectateId) return;
+  const target = world.players.get(meta.spectateId);
+  if (!target || !target.alive || !target.cells.length) cycleSpectate(meta, "next");
+}
+
+// ── rounds ──────────────────────────────────────────────────────────────────
+
+function broadcast(payload) {
+  const text = JSON.stringify(payload);
+  for (const [ws] of clients) {
+    if (ws.readyState === ws.OPEN) ws.send(text);
+  }
+}
+
+// Time is up. Survivors are ranked by mass; the top PAID_POSITIONS realise
+// their pot and everyone else forfeits theirs. Surviving is necessary but no
+// longer sufficient — you have to place.
+async function endRound() {
+  round.phase = PHASE_INTERMISSION;
+  round.endsAt = world.time + INTERMISSION_SECONDS;
+
+  const survivors = [...world.players.values()]
+    .filter(p => p.alive && p.cells.length)
+    .sort((a, b) => totalMass(b) - totalMass(a));
+
+  const standings = survivors.map((p, i) => ({
+    name: p.name,
+    mass: Math.round(totalMass(p)),
+    position: i + 1,
+    paid: i + 1 <= PAID_POSITIONS
+  }));
+
+  broadcast({
+    type: "round_end",
+    number: round.number,
+    standings,
+    paidPositions: PAID_POSITIONS,
+    nextIn: INTERMISSION_SECONDS
+  });
+
+  for (const [ws, meta] of clients) {
+    const player = world.players.get(meta.id);
+    if (!player || !player.alive) continue;
+
+    const position = survivors.indexOf(player) + 1;
+    const stake = meta.stake;
+    meta.stake = PRACTICE;
+
+    const placed = position > 0 && position <= PAID_POSITIONS;
+    let payout = 0;
+    try {
+      if (stake > PRACTICE && meta.accountId) {
+        if (placed) {
+          ({ paid: payout } = await backend.cashOut(meta.accountId, RAKE_BPS));
+        } else {
+          // Survived but out of the places: the stake is gone.
+          await backend.forfeit(meta.accountId);
+        }
+      }
+    } catch (err) {
+      console.error("round settlement:", err.message);
+    }
+
+    recordRun(meta, {
+      duration: world.time - (player.spawnedAt || world.time),
+      rank: position || null,
+      of: survivors.length,
+      orbs: player.orbs,
+      eaten: player.eaten,
+      peak: Math.round(player.peak)
+    }, { outcome: "survived", killerId: null, stake, payout });
+
+    await pushAccount(ws, meta);
+  }
+}
+
+// Back to the lobby. Everyone is despawned and un-readied, so the next round
+// needs a fresh show of hands rather than inheriting the last one.
+function toLobby() {
+  round.phase = PHASE_LOBBY;
+  round.endsAt = Infinity;
+  for (const meta of clients.values()) meta.ready = false;
+  for (const p of world.players.values()) {
+    p.alive = false;
+    p.cells = [];
+  }
+  pushLobby();
+}
+
+function maybeStartRound() {
+  if (round.phase !== PHASE_LOBBY) return;
+  if (readyCount() < LOBBY_MIN) return;
+  startRound();
+}
+
+function startRound() {
+  round.number++;
+  round.phase = PHASE_LIVE;
+  round.endsAt = world.time + ROUND_SECONDS;
+  resetArena(world);
+
+  // Only players who marked themselves ready take the field. Anyone who
+  // connected without readying waits for the next one.
+  for (const meta of clients.values()) {
+    meta.spectateId = null;
+    const player = world.players.get(meta.id);
+    if (!player) continue;
+    if (meta.ready) spawnPlayer(world, player);
+    else { player.alive = false; player.cells = []; }
+  }
+
+  if (botTarget() > 0) fillBots(world, botTarget());
+  lastEater.clear();
+  broadcast({ type: "round_start", number: round.number, seconds: ROUND_SECONDS });
+  console.log(`round ${round.number} started with ${readyCount()} player(s)`);
+}
+
 // ── tick ────────────────────────────────────────────────────────────────────
 
 let lastTick = process.hrtime.bigint();
@@ -525,6 +779,14 @@ setInterval(() => {
   lastTick = now;
 
   const events = stepWorld(world, dt);
+
+  if (round.phase === PHASE_LIVE && world.time >= round.endsAt) {
+    // Not awaited: settlement talks to the database and the tick must not
+    // block on it. The phase flips synchronously, so this cannot run twice.
+    endRound().catch(err => console.error("endRound:", err.message));
+  } else if (round.phase === PHASE_INTERMISSION && world.time >= round.endsAt) {
+    toLobby();
+  }
   // Deliberately not awaited: the tick must not wait on the database. Events
   // are copied because stepWorld reuses its array next tick.
   if (events.length) {
@@ -542,7 +804,7 @@ setInterval(() => {
       removePlayer(world, goneId);
       lastEater.delete(goneId);
       lingering.splice(i, 1);
-      fillBots(world, Math.max(0, BOTS - clients.size));
+      fillBots(world, botTarget());
     }
   }
 
@@ -554,13 +816,41 @@ setInterval(() => {
     // Deltas are computed against meta.state, which lives here on the server.
     // The client never tells us what it already knows, so it cannot lie about
     // it to widen its own view.
-    ws.send(encodeSnapshot(world, player, meta.state));
+    refreshSpectate(meta);
+    const eye = meta.spectateId ? world.players.get(meta.spectateId) : null;
+    ws.send(encodeSnapshot(world, player, meta.state, roundView(), eye));
   }
 }, 1000 / TICK_HZ);
+
+// The mass readout is display-only, but if it is ever mistaken for a payout
+// rate the exposure is enormous. Say so loudly at startup rather than letting
+// someone discover it from their balance sheet.
+if (MICRO_PER_MASS > 0) {
+  const spawnValue = valueOfMass(20);
+  const roundNotional = valueOfMass(400) * LOBBY_MIN;
+  const roundStaked = UNIT * LOBBY_MIN;
+  console.log(
+    // 4 decimals: at 0.005 the default 2dp display rounds to "0.00".
+    `  mass    : displayed at ${formatUsdc(MICRO_PER_MASS, 4)} USDC/point ` +
+    `(spawn shows ${formatUsdc(spawnValue)}, display only)`
+  );
+  if (REAL_MONEY && roundNotional > roundStaked) {
+    console.warn(
+      `  WARNING : a full round would show ~${formatUsdc(roundNotional)} USDC of mass ` +
+      `against ${formatUsdc(roundStaked)} USDC staked. The readout is indicative; ` +
+      `never settle against it.`
+    );
+  }
+}
 
 server.listen(PORT, () => {
   console.log(`Petri server on port ${PORT}`);
   console.log(`  offline : http://localhost:${PORT}/`);
   console.log(`  online  : http://localhost:${PORT}/?mode=online`);
   console.log(`  origins : ${ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(", ") : "any (set ALLOWED_ORIGINS in production)"}`);
+  console.log(`  mode    : live PvP, ${ROUND_SECONDS}s rounds, ${BOTS} bots`);
+  console.log(`  lobby   : starts at ${LOBBY_MIN} ready, capacity ${LOBBY_MAX}`);
+  if (TEST_MODE) {
+    console.log("  TEST MODE: demo credits only, solo start, bot-filled arena");
+  }
 });

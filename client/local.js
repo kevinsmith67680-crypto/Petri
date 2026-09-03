@@ -16,13 +16,14 @@ import {
   createWorld, addPlayer, fillBots, setAim, queueAction,
   stepWorld, totalMass, centroid, leaderboard, rankOf
 } from "../shared/sim.js";
+import { PHASE_NONE } from "../shared/protocol.js";
 
 export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
   const world = createWorld(seed ?? (Math.random() * 1e9) | 0);
   const me = addPlayer(world, { id: "me", name, ci: -1 });
   fillBots(world, bots);
 
-  const listeners = { event: [], welcome: [], close: [] };
+  const listeners = { event: [], welcome: [], close: [], round: [] };
   const emit = (kind, payload) => listeners[kind].forEach(fn => fn(payload));
 
   return {
@@ -73,14 +74,21 @@ export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
           rank: rank.rank,
           of: rank.of
         },
-        board: leaderboard(world)
+        board: leaderboard(world),
+        // Practice has no timer. PHASE_NONE tells the HUD to hide the clock.
+        round: { phase: PHASE_NONE, remaining: 0, number: 0 },
+        spectating: false,
+        eyeName: ""
       };
     },
 
     // Offline play never wagers: a balance held in this tab is free money, so
     // the local adapter refuses money operations outright rather than
     // pretending to hold value.
-    sendCashOut() {},
+    // Guests play alone against bots, so there is nobody to wait for.
+    sendReady() {},
+    // Guests play alone against bots; there is nobody worth watching.
+    sendSpectate() {},
     sendRamp() {},
     sendRename() {},
 

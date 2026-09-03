@@ -3,12 +3,13 @@
 // Knows nothing about the simulation beyond the view shape.
 // ---------------------------------------------------------------------------
 
-import { formatUsdc, PRACTICE, STAKE_1_USDC } from "../shared/wager.js";
+import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC } from "../shared/wager.js";
+import { PHASE_LIVE, PHASE_LOBBY } from "../shared/protocol.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, auth }) {
+export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   const el = {
     orbs: $("orbCount"),
     mass: $("statMass"),
@@ -33,7 +34,17 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
     signedIn: $("authSignedIn"),
     whoName: $("whoName"),
     whoUser: $("whoUser"),
-    renameBox: $("renameBox")
+    renameBox: $("renameBox"),
+    wallet: $("walletBox"),
+    clock: $("roundClock"),
+    clockTime: $("clockTime"),
+    roundVeil: $("roundVeil"),
+    lobbyVeil: $("lobbyVeil"),
+    money: $("moneyRow"),
+    statValue: $("statValue"),
+    statStaked: $("statStaked"),
+    specBar: $("specBar"),
+    specName: $("specName")
   };
 
   // The client holds no authority over money. This is a read-only echo of the
@@ -54,12 +65,89 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
     tickTimer = setTimeout(() => el.orbs.classList.remove("tick"), 300);
   }
 
+  // The bar is the only affordance while dead, so it carries the whole
+  // spectator UI: who you are watching, how to change, how to stop.
+  function showSpectator(name) {
+    el.specBar.hidden = false;
+    el.specName.textContent = name || "…";
+    el.overVeil.hidden = true;
+  }
+
+  function hideSpectator() { el.specBar.hidden = true; }
+
+  function renderClock(round) {
+    // The lobby overlay owns the screen while waiting, so no clock there.
+    if (round && round.phase === PHASE_LOBBY) { el.clock.hidden = true; return; }
+    // PHASE_NONE means practice: no timer, so no clock.
+    if (!round || round.phase !== PHASE_LIVE) { el.clock.hidden = true; return; }
+    el.clock.hidden = false;
+    el.clockTime.textContent = mmss(round.remaining);
+    el.clock.classList.toggle("ending", round.remaining <= 30);
+  }
+
+  let iAmReady = false;
+
+  function showLobby(state) {
+    el.lobbyVeil.hidden = false;
+    el.roundVeil.hidden = true;
+    el.overVeil.hidden = true;
+
+    const { ready = 0, connected = 0, min = 0, max = 0 } = state || {};
+    $("lobbyReady").textContent = ready;
+    $("lobbyConnected").textContent = connected;
+    $("lobbyMin").textContent = min;
+    $("lobbyFill").style.width = `${Math.min(100, min ? (ready / min) * 100 : 0)}%`;
+
+    const short = Math.max(0, min - ready);
+    $("lobbyLine").textContent = short === 0
+      ? "Starting now."
+      : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`;
+    $("lobbyHint").textContent =
+      `The match begins as soon as ${min} players are ready. Capacity ${max}.`;
+
+    const btn = $("btnReady");
+    btn.textContent = iAmReady ? "Ready — waiting for others" : "I'm ready";
+    btn.setAttribute("aria-pressed", String(iAmReady));
+  }
+
+  function hideLobby() { el.lobbyVeil.hidden = true; }
+
+  function showRoundEnd({ number, standings, nextIn, myName }) {
+    // The round ending supersedes a death card: if you were eaten seconds
+    // before the whistle, the standings are the more useful thing to see.
+    el.overVeil.hidden = true;
+    $("roundTitle").textContent = `Round ${number} over`;
+    $("standingsList").innerHTML = standings.length
+      ? standings.map(r =>
+          `<div class="${r.name === myName ? "you" : ""}${r.paid ? " paid" : ""}">` +
+          `<span>${r.position}. ${escapeHtml(r.name)}</span>` +
+          `<em>${r.paid ? "paid &middot; " : ""}${r.mass}</em></div>`
+        ).join("")
+      : `<div><span>Nobody survived the round.</span><em></em></div>`;
+    $("nextRound").textContent = `Next round in ${nextIn}s`;
+    el.roundVeil.hidden = false;
+  }
+
+  function hideRoundEnd() { el.roundVeil.hidden = true; }
+
   function update(view, elapsed, now) {
     if (!view) return;
+    renderClock(view.round);
     el.orbs.textContent = view.me.orbs;
     el.cells.textContent = view.me.eaten;
     el.mass.textContent = Math.round(view.me.mass);
     el.time.textContent = mmss(elapsed);
+
+    // Live rounds only. In practice against bots there is no money involved,
+    // so a cash figure there would be actively misleading.
+    const live = view.round && view.round.phase === PHASE_LIVE;
+    el.money.hidden = !live;
+    if (live) {
+      // Derived from the mass in the snapshot, which the server owns. This is
+      // a rendering of authoritative state, not a balance the client keeps.
+      el.statValue.textContent = formatUsdc(valueOfMass(view.me.mass));
+      el.statStaked.textContent = formatUsdc(account.pot);
+    }
 
     if (now - hudAt < 400) return;
     hudAt = now;
@@ -170,6 +258,14 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
 
   function setMode(text) { if (el.mode) el.mode.textContent = text; }
 
+  // A banner rather than a quiet note: test mode changes the economics and
+  // the lobby rules, and mistaking it for production is the failure worth
+  // preventing.
+  function setTestMode(on) {
+    $("testFlag").hidden = !on;
+    document.body.classList.toggle("is-test", !!on);
+  }
+
   // ── wager menu ────────────────────────────────────────────────────────────
 
   function renderAccount() {
@@ -214,7 +310,6 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
     }
   }
 
-  $("btnCashOut").addEventListener("click", () => onCashOut?.());
 
   renderAccount();
 
@@ -231,7 +326,7 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
     $("btnAuth").textContent = next === "signup" ? "Create account" : "Sign in";
     $("authHint").textContent = next === "signup"
       ? "Password must be at least 8 characters. Your display name is what appears on your cell."
-      : "Play as a guest without an account, but wagering needs one.";
+      : "Play against bots without an account. Sign in to face other players.";
     $("authError").textContent = "";
   }
 
@@ -239,6 +334,9 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
     signedIn = !!account;
     el.signedOut.hidden = signedIn;
     el.signedIn.hidden = !signedIn;
+    // A balance means nothing before you have an account, and the block costs
+    // ~150px of a menu that already struggles to fit a laptop screen.
+    el.wallet.hidden = !signedIn;
     if (account) {
       el.whoName.textContent = account.displayName;
       el.whoUser.textContent = `@${account.username}`;
@@ -247,10 +345,7 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
     // Wagering requires identity: a guest balance belongs to whoever opens
     // the next socket, which is to say nobody.
     el.stake1.disabled = !signedIn || account?.canWager === false;
-    if (!signedIn) {
-      setStake(PRACTICE);
-      setRampNote("Sign in to wager. Guest play is practice only.");
-    }
+    if (!signedIn) setStake(PRACTICE);
   }
 
   $("tabSignIn").addEventListener("click", () => setAuthMode("login"));
@@ -312,6 +407,9 @@ export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, 
   return {
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
+    showRoundEnd, hideRoundEnd, showLobby, hideLobby,
+    showSpectator, hideSpectator, setTestMode,
+    setReady: v => { iAmReady = v; },
     getStake: () => stake,
     isSignedIn: () => signedIn
   };

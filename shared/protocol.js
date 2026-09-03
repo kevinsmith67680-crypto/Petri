@@ -27,7 +27,9 @@
 // ---------------------------------------------------------------------------
 
 import { Reader, Writer, clampU16 } from "./codec.js";
-import { radiusOf, totalMass, centroid, leaderboard, rankOf, WORLD } from "./sim.js";
+import {
+  radiusOf, totalMass, centroid, leaderboard, rankOf, WORLD, forEachPelletNear
+} from "./sim.js";
 
 // Positions travel as u16, so the arena must fit. Guard it here rather than
 // discovering the wrap-around as jitter in production.
@@ -45,6 +47,13 @@ export const ACTIONS = ["split", "eject", "respawn"];
 
 export const FLAG_KEYFRAME = 1 << 0;
 export const FLAG_BOARD = 1 << 1;
+
+// Round phases. Guests running the local simulation have no rounds and send
+// PHASE_NONE, which the client reads as "hide the clock".
+export const PHASE_NONE = 0;
+export const PHASE_LIVE = 1;
+export const PHASE_INTERMISSION = 2;
+export const PHASE_LOBBY = 3;
 
 const CELL_MINE = 1 << 0;
 const CELL_COOLDOWN = 1 << 1;
@@ -113,7 +122,14 @@ export function createClientState(stagger = 0) {
   };
 }
 
-export function encodeSnapshot(world, player, cs) {
+// `eye` is whose viewpoint the snapshot is built from. Normally that is the
+// player themselves; when spectating it is the player being watched. This has
+// to exist because area-of-interest culling keys off the viewer's position,
+// and a dead player has none — without an eye a spectator would be sent an
+// empty arena.
+export function encodeSnapshot(world, player, cs, round = null, eye = null) {
+  const view = eye && eye.alive && eye.cells.length ? eye : player;
+  const spectating = view !== player;
   const keyframe = cs.sinceKeyframe <= 0;
   if (keyframe) {
     // A keyframe restates everything, so forget what we thought they knew.
@@ -127,8 +143,8 @@ export function encodeSnapshot(world, player, cs) {
   if (withBoard) cs.sinceBoard = BOARD_TICKS;
   cs.sinceBoard--;
 
-  const me = centroid(player);
-  const R = viewRadius(player);
+  const me = centroid(view);
+  const R = viewRadius(view);
   const near = (x, y, pad = 0) => {
     const dx = x - me.x, dy = y - me.y;
     const reach = R + pad;
@@ -155,11 +171,14 @@ export function encodeSnapshot(world, player, cs) {
   // ── pellet delta, per the scoping rules at the top of this file ──
   const inView = new Set();
   const added = [];
-  for (const p of world.pellets) {
-    if (!near(p.x, p.y)) continue;
+  // Grid query rather than a full scan: with thousands of orbs in the arena,
+  // walking the whole list once per client per tick is the single most
+  // expensive thing the server does.
+  forEachPelletNear(world, me.x, me.y, R, p => {
+    if (p.dead || !near(p.x, p.y)) return;
     inView.add(p.id);
     if (!cs.knownPellets.has(p.id)) added.push(p);
-  }
+  });
   const removed = [];
   for (const id of cs.knownPellets) {
     // Covers both "eaten while I was watching" and "scrolled out of my view".
@@ -170,8 +189,10 @@ export function encodeSnapshot(world, player, cs) {
   cs.knownPellets = inView;
 
   const viruses = world.viruses.filter(v => near(v.x, v.y, 60));
-  const rank = rankOf(world, player.id);
-  const mass = totalMass(player);
+  // While spectating, every figure describes the player being watched — that
+  // is what a spectator wants to see, and the viewer's own stats are frozen.
+  const rank = rankOf(world, view.id);
+  const mass = totalMass(view);
 
   const w = new Writer(1024);
   w.u8(MSG.SNAPSHOT);
@@ -180,15 +201,26 @@ export function encodeSnapshot(world, player, cs) {
   w.f32(world.time);
 
   // me
-  w.u8(player.alive ? 1 : 0);
-  w.u32(player.orbs);
-  w.u32(player.eaten);
+  w.u8(view.alive ? 1 : 0);
+  w.u32(view.orbs);
+  w.u32(view.eaten);
   w.u32(Math.round(mass));
-  w.u32(Math.round(player.peak));
+  w.u32(Math.round(view.peak));
   w.u16(Math.round(me.x));
   w.u16(Math.round(me.y));
   w.u8(Math.min(255, rank.rank));
   w.u8(Math.min(255, rank.of));
+
+  // round: phase, seconds left, round number. Five bytes a tick is nothing
+  // next to the cell list, and it saves a separate message type.
+  w.u8(round ? round.phase : PHASE_NONE);
+  w.u16(round ? Math.max(0, Math.round(round.remaining)) : 0);
+  w.u16(round ? round.number : 0);
+
+  // spectating flag plus whose eyes we are borrowing, so the client can name
+  // them from the name table it already has.
+  w.u8(spectating ? 1 : 0);
+  w.u16(view.nid || 0);
 
   // names
   w.u16(newNames.length);
@@ -203,8 +235,8 @@ export function encodeSnapshot(world, player, cs) {
     w.u16(clampU16(Math.round(c.mass)));
     w.u16(p.nid);
     w.u8(
-      (p.id === player.id ? CELL_MINE : 0) |
-      (p.id === player.id && world.time < c.mergeAt ? CELL_COOLDOWN : 0)
+      (p.id === view.id ? CELL_MINE : 0) |
+      (p.id === view.id && world.time < c.mergeAt ? CELL_COOLDOWN : 0)
     );
   }
 
@@ -260,6 +292,10 @@ export function decodeSnapshot(buffer) {
     of: r.u8()
   };
 
+  const round = { phase: r.u8(), remaining: r.u16(), number: r.u16() };
+  const spectating = r.u8() === 1;
+  const eyeNid = r.u16();
+
   const names = [];
   // Strings are variable length, so a per-record byte cost is not meaningful;
   // bound the count by the pessimistic minimum of 3 bytes each instead.
@@ -305,6 +341,7 @@ export function decodeSnapshot(buffer) {
 
   return {
     keyframe: !!(flags & FLAG_KEYFRAME),
-    tick, time, me, names, cells, added, removed, viruses, board
+    tick, time, me, round, spectating, eyeNid,
+    names, cells, added, removed, viruses, board
   };
 }

@@ -30,7 +30,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   const socket = new WebSocket(url);
   socket.binaryType = "arraybuffer";
 
-  const listeners = { event: [], welcome: [], close: [], error: [], account: [] };
+  const listeners = { event: [], welcome: [], close: [], error: [], account: [], round: [] };
   const emit = (kind, payload) => listeners[kind].forEach(fn => fn(payload));
 
   const frames = [];              // recent snapshots for interpolation
@@ -59,6 +59,9 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       } else if (msg.type === "account" || msg.type === "account_error" ||
                  msg.type === "ramp_result") {
         emit("account", msg);
+      } else if (msg.type === "round_end" || msg.type === "round_start" ||
+                 msg.type === "lobby") {
+        emit("round", msg);
       }
       return;
     }
@@ -183,16 +186,26 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         cells: snap.cells.map(c => ({ ...c, n: names.get(c.o) || "" })),
         pellets: visible,
         viruses: snap.viruses,
-        me: { ...snap.me, id: myNid },
+        me: { ...snap.me, id: snap.spectating ? snap.eyeNid : myNid },
+        round: snap.round,
+        spectating: snap.spectating,
+        // Resolved from the name cache the snapshot already maintains.
+        eyeName: snap.spectating ? (names.get(snap.eyeNid) || "") : "",
         board: board.map((r, i) => ({ id: r.you ? myNid : `x${i}`, name: r.name, mass: r.mass }))
       };
     },
 
     // Money actions travel as text frames: they are rare, and keeping them off
     // the 20Hz binary path means the hot loop stays 5 bytes per message.
-    sendCashOut() {
+    sendSpectate(dir) {
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "cashout" }));
+        socket.send(JSON.stringify({ type: "spectate", dir }));
+      }
+    },
+
+    sendReady(ready) {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ready", ready }));
       }
     },
 

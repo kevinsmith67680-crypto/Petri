@@ -1,25 +1,18 @@
 -- ---------------------------------------------------------------------------
--- Migration 002: a win is now a top-5 finish, not a 1st place.
+-- Corrected petri.rebuild_stats().
 --
--- Run this ONLY if you already applied schema.sql with the old rule. A fresh
--- database created from the current schema.sql already has the new definition
--- and does not need this.
+-- The previous version declared a PL/pgSQL variable `n` and also aliased a CTE
+-- column `n`, so Postgres could not tell which one `max(n)` meant:
 --
--- Postgres cannot alter a generated expression in place, so the column is
--- dropped and re-added. Nothing is lost: `won` is derived, never written. The
--- re-add recomputes it for every historical row.
+--   ERROR: 42702: column reference "n" is ambiguous
 --
--- Safe to run inside a transaction. On a large matches table this rewrites the
--- whole table and takes an ACCESS EXCLUSIVE lock, so do it while nobody is
--- playing.
+-- Fixed by giving the variable a v_ prefix and every CTE column a distinctive
+-- name. The correlated subquery that compared against the last match has also
+-- been replaced with a plain join, which is clearer and cheaper.
+--
+-- Safe to run on its own. It only replaces the function definition.
 -- ---------------------------------------------------------------------------
 
-begin;
-
--- Ships with the migration because an earlier schema.sql defined this function
--- with an ambiguous `n` identifier, which made the rebuild below fail with
--- ERROR 42702. Replacing it first makes this file safe to run on either
--- version.
 create or replace function petri.rebuild_stats() returns int language plpgsql as $$
 declare v_rows int := 0;
 begin
@@ -94,28 +87,3 @@ begin
   get diagnostics v_rows = row_count;
   return v_rows;
 end $$;
-
-alter table petri.matches drop column if exists won;
-
-alter table petri.matches
-  add column won boolean generated always as (
-    finish_position <= 5 or (outcome = 'cashed_out' and payout > stake)
-  ) stored;
-
--- Stored `won` values are now correct, but wins / current_streak /
--- longest_streak in player_stats were accumulated under the old rule and are
--- stale. Replay them from the match log.
-select petri.rebuild_stats();
-
-commit;
-
--- Sanity check: these two numbers should agree for every player.
---
---   select s.account_id, s.wins,
---          (select count(*) from petri.matches m
---            where m.account_id = s.account_id and m.won) as recount
---     from petri.player_stats s
---    where s.wins <> (select count(*) from petri.matches m
---                      where m.account_id = s.account_id and m.won);
---
--- An empty result means the rebuild worked.

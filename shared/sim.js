@@ -15,10 +15,12 @@
 
 // ── tuning ──────────────────────────────────────────────────────────────────
 
-export const WORLD = 3400;          // square arena, world units
-export const PELLETS = 620;         // orbs kept in play at all times
-export const VIRUSES = 14;
-export const DEFAULT_BOTS = 14;
+// Sized for a 100-player lobby at the same per-player density the small arena
+// had (~770k units^2 each). Must stay under 65535: positions travel as u16.
+export const WORLD = 8800;          // square arena, world units
+export const PELLETS = 4100;        // orbs kept in play at all times
+export const VIRUSES = 90;
+export const DEFAULT_BOTS = 14;     // guests only; the live arena runs botless
 
 export const START_MASS = 20;
 export const PELLET_MASS = 3.375;   // mass gained per orb
@@ -43,6 +45,50 @@ export const BOT_NAMES = [
 ];
 
 export const radiusOf = m => Math.sqrt(m) * 4;
+
+// ── pellet spatial index ────────────────────────────────────────────────────
+//
+// With 4,100 orbs in an 8,800-unit arena, scanning the whole list once per
+// cell per tick dominates the frame. A uniform grid turns "which orbs are near
+// this cell" into a handful of bucket lookups.
+//
+// Rebuilt wholesale each tick rather than maintained incrementally: 4,100
+// inserts costs a fraction of a millisecond and removes an entire class of
+// stale-index bug.
+
+const GRID = 220;                       // ~half the view radius of a small cell
+const key = (gx, gy) => gx * 100003 + gy;   // prime stride, coords are >= 0
+
+export function buildPelletGrid(world) {
+  const g = world.grid || (world.grid = new Map());
+  g.clear();
+  for (const p of world.pellets) {
+    const k = key((p.x / GRID) | 0, (p.y / GRID) | 0);
+    const bucket = g.get(k);
+    if (bucket) bucket.push(p);
+    else g.set(k, [p]);
+  }
+}
+
+// Visits every pellet in the buckets overlapping the box around (x, y, r).
+// Callers still do their own circle test; this only narrows the candidates.
+export function forEachPelletNear(world, x, y, r, fn) {
+  // Lazily build rather than silently returning nothing: encodeSnapshot can be
+  // called before the first tick, and an empty result there would look like
+  // "no orbs in view" rather than "index not ready".
+  if (!world.grid) buildPelletGrid(world);
+  const x0 = Math.max(0, ((x - r) / GRID) | 0);
+  const x1 = ((x + r) / GRID) | 0;
+  const y0 = Math.max(0, ((y - r) / GRID) | 0);
+  const y1 = ((y + r) / GRID) | 0;
+  for (let gx = x0; gx <= x1; gx++) {
+    for (let gy = y0; gy <= y1; gy++) {
+      const bucket = world.grid.get(key(gx, gy));
+      if (!bucket) continue;
+      for (let i = 0; i < bucket.length; i++) fn(bucket[i]);
+    }
+  }
+}
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 // ── deterministic randomness ────────────────────────────────────────────────
@@ -70,6 +116,8 @@ export function createWorld(seed = 1) {
     nextId: 1,
     nextNid: 1,       // compact numeric player id, used on the wire
     pellets: [],
+    pelletsDirty: false,
+    grid: null,
     viruses: [],
     players: new Map(),
     events: []        // drained by the host each tick
@@ -315,20 +363,24 @@ function burst(world, ent, cell) {
   }
 }
 
+// Eaten pellets are flagged rather than spliced out, so the grid built at the
+// start of the tick stays valid for everyone else. They are swept once at the
+// end of the tick.
 function eatPellets(world, ent) {
   for (const c of ent.cells) {
     const r = radiusOf(c.mass);
-    for (let i = world.pellets.length - 1; i >= 0; i--) {
-      const p = world.pellets[i];
+    const r2 = r * r;
+    forEachPelletNear(world, c.x, c.y, r, p => {
+      if (p.dead) return;
       const dx = p.x - c.x, dy = p.y - c.y;
-      if (dx * dx + dy * dy < r * r) {
+      if (dx * dx + dy * dy < r2) {
         c.mass += p.mass;
-        world.pellets.splice(i, 1);
-        world.pellets.push(makePellet(world));
+        p.dead = true;
+        world.pelletsDirty = true;
         ent.orbs++;
         world.events.push({ t: "orb", id: ent.id });
       }
-    }
+    });
   }
 }
 
@@ -507,7 +559,39 @@ export function stepWorld(world, dt) {
     }
   }
 
+  // Sweep eaten pellets and top the arena back up. One pass, once a tick.
+  if (world.pelletsDirty) {
+    world.pellets = world.pellets.filter(p => !p.dead);
+    while (world.pellets.length < PELLETS) world.pellets.push(makePellet(world));
+    world.pelletsDirty = false;
+  }
+
+  // Rebuilt at the END of the tick, not the start. Pellets are created during
+  // a tick (ejected mass, respawns) and ejected ones drift between buckets, so
+  // an index built at the start is already wrong by the time snapshots are
+  // encoded — which showed up as orbs flickering in and out of view.
+  buildPelletGrid(world);
+
   return world.events;
+}
+
+// Wipe the arena for a fresh round: new orbs, new spores, everyone respawned
+// at starting mass with their per-round counters cleared. The player set is
+// kept, so connected clients roll straight into the next round.
+export function resetArena(world) {
+  world.pellets.length = 0;
+  for (let i = 0; i < PELLETS; i++) world.pellets.push(makePellet(world));
+
+  world.viruses.length = 0;
+  for (let i = 0; i < VIRUSES; i++) world.viruses.push(makeVirus(world));
+
+  for (const p of world.players.values()) {
+    spawnPlayer(world, p);
+    p.orbs = 0;
+    p.eaten = 0;
+    p.peak = START_MASS;
+  }
+  world.events.length = 0;
 }
 
 // ── read models ─────────────────────────────────────────────────────────────

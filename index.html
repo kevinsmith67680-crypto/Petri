@@ -66,6 +66,22 @@
     gap:6px 22px; font-size:12.5px; max-width:280px;
   }
   .stats div{ display:flex; gap:7px; }
+
+  .money{
+    margin-top:14px; padding-top:12px;
+    border-top:1px solid var(--line);
+    max-width:280px; font-size:12.5px;
+  }
+  .money[hidden]{ display:none; }
+  .money div{ display:flex; gap:7px; margin-bottom:4px; }
+  .money i{ font-style:normal; color:var(--muted); }
+  .money em{
+    font-style:normal; font-weight:600; font-variant-numeric:tabular-nums;
+  }
+  .money em::after{ content:" USDC"; font-weight:400; font-size:10.5px; color:var(--muted); }
+  .money p{
+    margin-top:7px; font-size:10.5px; line-height:1.45; color:var(--muted);
+  }
   .stats i{ font-style:normal; color:var(--muted); }
   .stats em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
 
@@ -84,6 +100,99 @@
   }
   .board li span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .board li.you{ color:var(--text); font-weight:600; }
+
+  .testflag{
+    position:fixed; top:0; left:0; right:0; z-index:30;
+    padding:5px 12px; text-align:center;
+    font-size:11px; font-weight:600; letter-spacing:.04em;
+    background:#f0e3b8; color:#4a3b0d;
+    border-bottom:1px solid #d8c47e;
+  }
+  html[data-theme="dark"] .testflag{ background:#3a3216; color:#f0dfa4; border-color:#5c4f22; }
+  .testflag[hidden]{ display:none; }
+  /* Nudge the top-anchored HUD clear of the banner. */
+  body.is-test .readout{ top:44px; }
+  body.is-test .board{ top:46px; }
+  body.is-test .clock{ top:44px; }
+  body.is-test .pot{ top:92px; }
+
+  /* ── spectator bar ── */
+
+  .spec{
+    position:fixed; left:50%; bottom:28px; transform:translateX(-50%);
+    z-index:6; display:flex; align-items:center; gap:12px;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:8px; padding:9px 10px 9px 16px;
+    box-shadow:var(--shadow); font-size:13px;
+  }
+  .spec[hidden]{ display:none; }
+  .spec .who{ display:flex; align-items:baseline; gap:8px; }
+  .spec .who i{ font-style:normal; font-size:11.5px; color:var(--muted); }
+  .spec .who b{ font-weight:600; }
+  .spec button{
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:6px 11px; border-radius:4px; cursor:pointer;
+    background:transparent; color:var(--text);
+    border:1px solid var(--line-2);
+  }
+  .spec button:hover{ border-color:var(--text); }
+  .spec button.leave{ background:var(--text); color:var(--panel); border-color:var(--text); }
+  .spec .arrows{ display:flex; gap:6px; }
+
+  /* ── round clock ── */
+
+  .clock{
+    position:fixed; top:26px; left:50%; transform:translateX(-50%);
+    z-index:5; text-align:center; pointer-events:none;
+  }
+  .clock[hidden]{ display:none; }
+  .clock b{
+    display:block; font-size:26px; font-weight:600;
+    letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1;
+  }
+  /* Last 30 seconds: the only motion in the HUD, so it reads as urgency
+     rather than decoration. */
+  .clock.ending b{ color:#c4453b; animation:pulse 1s ease-in-out infinite; }
+  html[data-theme="dark"] .clock.ending b{ color:#f08a80; }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.55} }
+  @media (prefers-reduced-motion: reduce){ .clock.ending b{ animation:none; } }
+
+  /* the pot bar shares the top centre, so shift it down when both show */
+  .pot{ top:76px; }
+
+  .meter{
+    margin-top:20px; height:6px; border-radius:3px;
+    background:var(--key); border:1px solid var(--line); overflow:hidden;
+  }
+  .meter-fill{
+    height:100%; width:0%; background:var(--accent);
+    transition:width .3s ease;
+  }
+  @media (prefers-reduced-motion: reduce){ .meter-fill{ transition:none; } }
+
+  .lobby-nums{
+    margin-top:16px; display:grid; grid-template-columns:repeat(3, 1fr);
+    gap:10px; font-size:12.5px;
+  }
+  .lobby-nums div{ display:grid; gap:3px; }
+  .lobby-nums i{ font-style:normal; color:var(--muted); }
+  .lobby-nums em{
+    font-style:normal; font-weight:600; font-size:20px;
+    font-variant-numeric:tabular-nums;
+  }
+  #btnReady[aria-pressed="true"]{ background:var(--accent); }
+
+  .standings{ margin-top:20px; display:grid; gap:6px; font-size:13.5px; }
+  .standings div{
+    display:flex; justify-content:space-between; gap:12px;
+    padding:7px 0; border-bottom:1px solid var(--line);
+    font-variant-numeric:tabular-nums;
+  }
+  .standings div.you{ font-weight:600; }
+  .standings div.paid em{ color:var(--accent); font-weight:600; }
+  .standings div.you span:first-child{ color:var(--accent); }
+  .standings em{ font-style:normal; color:var(--muted); }
+  .next{ margin-top:18px; font-size:13px; color:var(--muted); }
 
   /* ── bottom-left corner stack ── */
 
@@ -148,18 +257,37 @@
 
   .veil{
     position:fixed; inset:0; z-index:20;
-    display:grid; place-items:center; padding:24px;
+    display:flex; padding:24px;
     background:var(--veil); backdrop-filter:blur(6px);
+    /* The card is taller than a laptop viewport once you are signed out, so
+       the overlay has to scroll. html/body set touch-action:none for the game,
+       which would block dragging here, hence pan-y. */
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    touch-action:pan-y;
+    -webkit-overflow-scrolling:touch;
   }
   .veil[hidden]{ display:none; }
 
   .card{
     width:min(420px, 100%);
+    /* auto margins centre a flex item without clipping it when it overflows */
+    margin:auto;
+    flex:0 0 auto;
     background:var(--panel); border:1px solid var(--line); border-radius:8px;
     padding:36px 34px 30px; box-shadow:var(--shadow);
   }
   .card h2{ font-size:32px; font-weight:600; letter-spacing:-.03em; line-height:1.05; }
   .card p{ margin-top:12px; font-size:14px; line-height:1.65; color:var(--muted); max-width:54ch; }
+
+  .controls{
+    margin-top:18px; font-size:12.5px; color:var(--muted); line-height:1.7;
+  }
+  .controls kbd{
+    font-family:inherit; font-size:11px; font-weight:600;
+    padding:2px 6px; background:var(--key);
+    border:1px solid var(--line-2); border-radius:3px;
+  }
 
   .keys{ margin-top:24px; display:grid; gap:9px; font-size:13px; }
   .keys div{ display:flex; align-items:center; gap:13px; }
@@ -189,6 +317,12 @@
     cursor:pointer; transition:opacity .14s ease;
   }
   .card button:hover{ opacity:.84; }
+  .after{ display:flex; gap:10px; align-items:center; }
+  .card button.ghost{
+    background:transparent; color:var(--text);
+    border:1px solid var(--line-2);
+  }
+  .card button.ghost:hover{ opacity:1; border-color:var(--text); }
   .card button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
 
   /* ── account panel ── */
@@ -256,6 +390,7 @@
   }
   html[data-theme="dark"] .badge{ background:#3a3216; color:#f0dfa4; border-color:#5c4f22; }
 
+  .wallet[hidden]{ display:none; }
   .wallet{
     margin-top:22px;
     border:1px solid var(--line); border-radius:6px;
@@ -305,18 +440,16 @@
     position:fixed; top:26px; left:50%; transform:translateX(-50%);
     z-index:6; display:flex; align-items:center; gap:14px;
     background:var(--panel); border:1px solid var(--line);
-    border-radius:6px; padding:9px 10px 9px 15px;
+    border-radius:6px; padding:9px 15px;
     box-shadow:var(--shadow);
   }
   .pot[hidden]{ display:none; }
   .pot i{ font-style:normal; font-size:12px; color:var(--muted); }
   .pot b{ font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; }
-  .pot button{
-    font-family:inherit; font-size:12.5px; font-weight:600;
-    padding:7px 13px; border-radius:4px; cursor:pointer;
-    background:var(--text); color:var(--panel); border:none;
+  .pot-note{
+    font-size:11px; color:var(--muted);
+    padding-left:12px; border-left:1px solid var(--line);
   }
-  .pot button:hover{ opacity:.85; }
 
   /* ── touch ── */
 
@@ -328,6 +461,22 @@
     width:72px; height:48px;
     color:var(--text); background:var(--panel);
     border:1px solid var(--line-2); border-radius:6px; cursor:pointer;
+  }
+
+  /* Short viewports: tighten the rhythm so Start stays above the fold. */
+  @media (max-height:900px){
+    .card{ padding:24px 28px 22px; }
+    .card h2{ font-size:26px; }
+    .card p{ margin-top:8px; font-size:13.5px; line-height:1.55; }
+    .auth{ margin-top:14px; }
+    .field{ margin-bottom:8px; }
+    .field input{ padding:8px 11px; }
+    .wallet{ margin-top:14px; padding:11px 13px; }
+    .stakes{ margin-top:14px; }
+    .stake{ padding:9px 12px; }
+    .keys{ margin-top:14px; }
+    .card button{ margin-top:18px; }
+    .badge{ margin-bottom:10px; }
   }
 
   @media (max-width:640px){
@@ -357,6 +506,11 @@
     <div><i>Rank</i><em id="statRank">—</em></div>
     <div><i>Cells eaten</i><em id="statCells">0</em></div>
     <div><i>Time</i><em id="statTime">0:00</em></div>
+  </div>
+  <div class="money" id="moneyRow" hidden>
+    <div><i>Mass value</i><em id="statValue">0.00</em></div>
+    <div><i>Staked</i><em id="statStaked">0.00</em></div>
+    <p>Indicative only. Payouts are your stake and anything you take from other players.</p>
   </div>
 </div>
 
@@ -401,10 +555,25 @@
   <canvas class="minimap" id="minimap" aria-hidden="true"></canvas>
 </div>
 
+<div class="testflag" id="testFlag" hidden>Test mode &mdash; demo credits, bot-filled arena</div>
+
+<div class="spec" id="specBar" hidden>
+  <div class="who"><i>Spectating</i><b id="specName">—</b></div>
+  <div class="arrows">
+    <button id="specPrev" type="button" aria-label="Previous player">&lsaquo;</button>
+    <button id="specNext" type="button" aria-label="Next player">&rsaquo;</button>
+  </div>
+  <button class="leave" id="specLeave" type="button">Leave</button>
+</div>
+
+<div class="clock" id="roundClock" hidden>
+  <b id="clockTime">10:00</b>
+</div>
+
 <div class="pot" id="potBar" hidden>
   <i>At risk</i>
   <b id="potValue">0.00</b>
-  <button id="btnCashOut" type="button">Cash out</button>
+  <span class="pot-note">Top 5 are paid</span>
 </div>
 
 <div class="touch">
@@ -435,7 +604,7 @@
         <label for="fPass">Password</label>
         <input id="fPass" type="password" autocomplete="current-password" maxlength="128">
       </div>
-      <p class="hint" id="authHint">Play as a guest without an account, but wagering needs one.</p>
+      <p class="hint" id="authHint">Play against bots without an account. Sign in to face other players.</p>
       <p class="err" id="authError"></p>
       <button class="go" id="btnAuth" type="button">Sign in</button>
     </div>
@@ -469,7 +638,7 @@
       </div>
     </div>
 
-    <div class="wallet">
+    <div class="wallet" id="walletBox" hidden>
       <div class="bal">
         <i>Balance</i>
         <b id="balValue">—<span>USDC</span></b>
@@ -485,17 +654,37 @@
         <em>0.00</em>
       </button>
       <button class="stake" id="stake1" type="button" role="radio" aria-checked="false">
-        <span>Wager<small>Winner takes the pot. Lose and it is gone.</small></span>
+        <span>Wager<small>Finish top 5 to be paid. Otherwise it is gone.</small></span>
         <em>1.00</em>
       </button>
     </div>
 
-    <div class="keys">
-      <div><kbd>Mouse</kbd><p>Drift toward the pointer</p></div>
-      <div><kbd>Space</kbd><p>Split forward</p></div>
-      <div><kbd>W</kbd><p>Eject a little mass</p></div>
-    </div>
+    <p class="controls">Move with the mouse, <kbd>Space</kbd> to split, <kbd>W</kbd> to eject mass.</p>
     <button id="btnStart" type="button">Start</button>
+  </div>
+</div>
+
+<div class="veil" id="lobbyVeil" hidden>
+  <div class="card">
+    <h2>Lobby</h2>
+    <p id="lobbyLine">Waiting for players.</p>
+    <div class="meter"><div class="meter-fill" id="lobbyFill"></div></div>
+    <div class="lobby-nums">
+      <div><i>Ready</i><em id="lobbyReady">0</em></div>
+      <div><i>Connected</i><em id="lobbyConnected">0</em></div>
+      <div><i>Needed to start</i><em id="lobbyMin">100</em></div>
+    </div>
+    <button id="btnReady" type="button">I'm ready</button>
+    <p class="next" id="lobbyHint">The match begins as soon as enough players are ready.</p>
+  </div>
+</div>
+
+<div class="veil" id="roundVeil" hidden>
+  <div class="card">
+    <h2 id="roundTitle">Round over</h2>
+    <p id="roundBlurb">Ten minutes are up. The top five are paid; everyone else loses their stake.</p>
+    <div class="standings" id="standingsList"></div>
+    <p class="next" id="nextRound">Next round starting…</p>
   </div>
 </div>
 
@@ -511,7 +700,10 @@
       <div>Survived <em id="finalTime">0:00</em></div>
       <div>Best run <em id="finalBest">0</em></div>
     </div>
-    <button id="btnAgain" type="button">Play again</button>
+    <div class="after">
+      <button id="btnAgain" type="button">Play again</button>
+      <button id="btnSpectate" type="button" class="ghost">Spectate</button>
+    </div>
   </div>
 </div>
 

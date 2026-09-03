@@ -38,12 +38,21 @@ let best = 0;
 let wasAlive = true;
 let lastRank = 0;
 let lastOf = 0;
+let spectating = false;
+let lastRunOrbs = 0, lastRunPeak = 0, lastRunEaten = 0;
 
 // Accounts only exist server-side, so offline play is always a guest.
 const api = MODE === "online" ? createAccountClient() : null;
 
+function reconnect() {
+  conn?.close?.();
+  conn = connect(ui.getStake());
+}
+
 function applyAuth(payload) {
   ui.renderAuth(api?.account || null);
+  // Signing in or out changes which transport is correct, so rebuild it.
+  reconnect();
   // Career totals live server-side; refresh them whenever identity changes.
   if (api?.signedIn) {
     api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
@@ -64,7 +73,6 @@ const ui = createUI({
   settings,
   onStart: start,
   onThemeChange: () => {},
-  onCashOut: () => conn?.sendCashOut(),
   onRamp: action => conn?.sendRamp(action),
   auth: {
     async login(username, password) { applyAuth(await api.login(username, password)); },
@@ -73,10 +81,8 @@ const ui = createUI({
     },
     async signOut() {
       await api?.logout();
-      // Drop the socket too: identity is bound at join time, so a stale
-      // connection would keep playing as the old account.
-      conn?.close?.();
-      conn = null;
+      // Identity is bound at join time, so the socket has to go with it.
+      // applyAuth reconnects, dropping the player back to local bot play.
       applyAuth(null);
     },
     async rename(displayName) {
@@ -98,7 +104,10 @@ function serverUrl() {
 }
 
 function connect(stake = PRACTICE) {
-  if (MODE === "online") {
+  // Signed-in players join the shared arena. Everyone else runs the same
+  // simulation locally against bots. The server enforces this too — this
+  // routing is so guests get a working game rather than a rejection.
+  if (MODE === "online" && api?.signedIn) {
     const url = serverUrl();
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
@@ -109,15 +118,21 @@ function connect(stake = PRACTICE) {
     });
     socket.on("event", onEvent);
     socket.on("account", onAccount);
+    socket.on("round", onRound);
+    socket.on("welcome", w => ui.setTestMode(w.test));
     socket.on("close", () => ui.setMode("Disconnected"));
     socket.on("error", () => ui.setMode(`Could not reach ${url}`));
     ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     return socket;
   }
-  const local = createLocalConnection({ name: NAME });
+  const local = createLocalConnection({ name: api?.account?.displayName || NAME });
   local.on("event", onEvent);
-  ui.setWagerAvailable(false, "Wagering needs the server. Offline play is practice only.");
-  ui.setMode("Offline, simulation running in this tab");
+  ui.setWagerAvailable(false, MODE === "online"
+    ? "Sign in to play against other people and to wager."
+    : "Wagering needs the server. Offline play is practice only.");
+  ui.setMode(MODE === "online"
+    ? "Practice against bots. Sign in to face other players."
+    : "Offline, simulation running in this tab");
   return local;
 }
 
@@ -131,6 +146,47 @@ function syncCounter(view) {
 }
 
 function onEvent() { /* reserved for future server-pushed events */ }
+
+// The round ended for everyone at once, so the death card would be wrong here:
+// surviving to the whistle is not being eaten.
+let ready = false;
+
+function onRound(msg) {
+  if (msg.type === "lobby") {
+    if (spectating) { spectating = false; ui.hideSpectator(); }
+    ui.setTestMode(msg.test);
+    // The lobby overlay replaces the start card: in live mode you do not
+    // press Start, you declare yourself ready and wait for the room.
+    running = false;
+    ui.setReady(ready);
+    ui.showLobby(msg);
+    return;
+  }
+  if (msg.type === "round_end") {
+    running = false;
+    wasAlive = false;
+    ui.showRoundEnd({
+      number: msg.number,
+      standings: msg.standings,
+      nextIn: msg.nextIn,
+      myName: api?.account?.displayName
+    });
+    if (api?.signedIn) api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
+  } else if (msg.type === "round_start") {
+    if (spectating) { spectating = false; ui.hideSpectator(); }
+    ready = false;
+    ui.setReady(false);
+    ui.hideLobby();
+    ui.hideRoundEnd();
+    // The server has already respawned us into the fresh arena; just start
+    // counting again locally.
+    running = true;
+    wasAlive = true;
+    lastOrbs = 0;
+    startedAt = performance.now();
+    elapsed = 0;
+  }
+}
 
 // Every figure shown to the player originates here, from the server ledger.
 // Nothing about the balance is computed client-side.
@@ -146,10 +202,11 @@ function onAccount(msg) {
 }
 
 function start() {
+  if (spectating) stopSpectating();
   const stake = ui.getStake();
-  // A stake is locked at join time, so changing it means a fresh connection.
-  // Reusing the socket would let a client re-enter a paid run for free.
-  if (!conn || (MODE === "online" && stake !== PRACTICE)) {
+  // A stake is locked at join time, so a wagered run needs a fresh socket.
+  // Reusing the old one would let a client re-enter a paid run for free.
+  if (!conn || (MODE === "online" && api?.signedIn && stake !== PRACTICE)) {
     conn?.close?.();
     conn = connect(stake);
   } else {
@@ -192,6 +249,35 @@ window.addEventListener("keydown", e => {
   else if (e.code === "KeyW") { e.preventDefault(); conn.sendAction("eject"); }
 });
 
+function startSpectating() {
+  spectating = true;
+  conn?.sendSpectate?.("next");
+  ui.showSpectator("");
+}
+
+function stopSpectating() {
+  spectating = false;
+  conn?.sendSpectate?.("off");
+  ui.hideSpectator();
+}
+
+document.getElementById("btnSpectate").addEventListener("click", startSpectating);
+document.getElementById("specNext").addEventListener("click", () => conn?.sendSpectate?.("next"));
+document.getElementById("specPrev").addEventListener("click", () => conn?.sendSpectate?.("prev"));
+document.getElementById("specLeave").addEventListener("click", () => {
+  stopSpectating();
+  ui.showDeath({
+    orbs: lastRunOrbs, peak: lastRunPeak, eaten: lastRunEaten,
+    elapsed, best, rank: lastRank, of: lastOf
+  });
+});
+
+document.getElementById("btnReady").addEventListener("click", () => {
+  ready = !ready;
+  ui.setReady(ready);
+  conn?.sendReady?.(ready);
+});
+
 document.getElementById("btnSplit")
   .addEventListener("click", () => running && conn?.sendAction("split"));
 document.getElementById("btnFeed")
@@ -231,7 +317,19 @@ function frame(now) {
       syncCounter(fresh);
       ui.update(fresh, elapsed, now);
 
-      if (running && wasAlive && !fresh.me.alive) {
+      // Track the run so Leave can restore the death card without asking the
+      // server, whose `me` block now describes whoever we are watching.
+      if (!spectating && fresh.me.alive) {
+        lastRunOrbs = fresh.me.orbs;
+        lastRunPeak = fresh.me.peak;
+        lastRunEaten = fresh.me.eaten;
+      }
+
+      if (spectating) {
+        ui.showSpectator(fresh.eyeName);
+      }
+
+      if (running && wasAlive && !fresh.me.alive && !spectating) {
         wasAlive = false;
         running = false;
         best = Math.max(best, fresh.me.orbs);

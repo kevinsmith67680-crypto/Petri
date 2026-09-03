@@ -54,7 +54,11 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | 8080 | Listen port |
-| `BOTS` | 14 | Bots filling empty seats |
+| `BOTS` | 0 | Bots in the live arena. Off: signed-in play is PvP only |
+| `ROUND_SECONDS` | 600 | Length of a live round |
+| `INTERMISSION_SECONDS` | 15 | Gap between rounds |
+| `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
+| `LOBBY_MAX` | 150 | Hard connection cap |
 | `ALLOWED_ORIGINS` | *(unset)* | Comma-separated origin allowlist. Unset means allow anything — dev only |
 | `MAX_CONN_PER_IP` | 3 | Connection cap per address |
 | `TRUST_PROXY` | *(unset)* | Set to `1` behind Render, Fly, or any reverse proxy, so client IPs come from `X-Forwarded-For` |
@@ -203,7 +207,11 @@ The server treats any decode failure as "close the socket", since a client that 
 
 ## Accounts
 
-Players can create an account, sign in, and change the display name shown on their cell and in the leaderboard. Guests can still play, but only Practice: a balance has to belong to a person, and a guest "account" belongs to whoever opens the next socket.
+Players can create an account, sign in, and change the display name shown on their cell and in the leaderboard.
+
+**The shared arena requires an account.** Guests play the same simulation locally in their own browser tab, against bots only — they never join the multiplayer world. The client routes them there automatically, and `server/index.js` rejects any join without a valid session, so a modified client cannot slip in either.
+
+Three reasons it works this way. A balance has to belong to a person; a guest "account" would belong to whoever opens the next socket. Every player in the arena being attributable is the prerequisite for stats and for bans meaning anything. And guests cost the server nothing at all — no socket, no snapshots, no bandwidth — which matters given the egress numbers above.
 
 ### Endpoints
 
@@ -289,6 +297,83 @@ This is the real reason for a database rather than a JSON file. Every money oper
 
 `petri.money_total` is a view comparing money held against deposits minus withdrawals. Query it, or wire it to a monitor.
 
+### Spectating
+
+Absorbed players get a **Spectate** button on the death card alongside Play again. The spectator bar at the bottom lets you cycle through living players with ‹ ›, or leave and return to the death card.
+
+**This could not be a camera change on the client.** Area-of-interest culling keys off the viewer's own position, and a dead player has no cells — a spectator with no viewpoint is sent an empty arena. `encodeSnapshot` therefore takes an `eye`: whose position the culling is centred on. Normally that is the player themselves; when spectating it is the player being watched, and the entire `me` block describes the target, since their mass and rank are what a spectator wants to see.
+
+The scoping rules survive intact. **A spectator inherits the target's view radius, not a free view of the arena** — the tests assert that no cell and no pellet outside the target's own radius reaches them. Spectating is also refused while alive, which would otherwise be a second camera on the board.
+
+Loose ends handled: the watched player can be eaten at any moment, so targets are re-checked every tick and the view cycles on automatically. Respawning, a new round, and returning to the lobby all end spectating.
+
+**One thing to think about.** Mid-round respawning is still allowed, so a player can die, watch the leader, and rejoin. Spawn points are random, so the intel is of limited use — but if that bothers you, the fix is to make death final for the round and spectating the only option after it.
+
+### The mass readout
+
+During a live round the top-left corner shows what your mass is "worth" at **0.005 USDC per mass point**, alongside what you currently have staked. It is hidden in practice mode, where no money is involved.
+
+**This is a scoreboard figure, not a claim on funds.** Nothing in `server/ledger.js` reads it, and no settlement path touches it.
+
+| | at 0.005/point |
+|---|---|
+| Spawning (mass 20) | 0.10 USDC |
+| One orb (3.375 mass) | 0.015 USDC |
+| Mid-game (mass 500) | 2.50 USDC |
+| Large player (mass 2,000) | 10.00 USDC |
+| Round leader (mass 6,000) | 30.00 USDC |
+
+The rate gives the readout a natural break-even: **mass 200 is worth exactly a 1.00 USDC stake**, so a player spawns showing less than they put in and has to grow to get back to level. That reads well.
+
+It still is not a payout rate, though it is far closer than it was. A full 100-player round with an average mass of 400 shows 200 USDC of notional value against 100 USDC staked — 2×, down from 200× at the original 0.5 rate. Above an average mass of 200 the arena still displays more value than exists, so settling against it would over-pay.
+
+Payouts stay bounded by what was actually staked — your pot, settled on death, cash-out, or surviving to the whistle. The server logs the rate at startup and warns if `REAL_MONEY` is on.
+
+If you want mass to genuinely determine payouts, the rate has to be **derived from the pot rather than fixed**: your share of the round's real prize pool, proportional to your mass. That keeps total payouts equal to total stakes by construction. `MICRO_PER_MASS` in `shared/wager.js` adjusts the display; making it real is a different and larger change.
+
+### Lobby and arena size
+
+The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
+
+A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and the server refuses connections past **`LOBBY_MAX`** (default 150) with a "server full" close. The cycle is lobby → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
+
+**Set `LOBBY_MIN=2` while testing.** At 100, nothing starts until a hundred real people are in the lobby simultaneously — which on a new game is never. This is the single most likely way to end up staring at a screen that never does anything.
+
+**Performance.** Scaling the arena 6.7× made `eatPellets` and the area-of-interest query scan 4,100 orbs per cell per client per tick, so pellets now go through a uniform spatial grid. Measured at 100 players with a realistic mass spread:
+
+| | Before grid | After grid |
+|---|---|---|
+| Simulation | 6.27 ms/tick | **3.84 ms** |
+| Snapshot encoding | 7.77 ms/tick | **6.53 ms** |
+| Total | 14.04 ms (28%) | **10.37 ms (21%)** |
+
+Egress actually fell to 0.43 MB/s, because a bigger arena spreads players out and puts fewer cells in each view.
+
+The grid is rebuilt at the **end** of each tick, not the start. Pellets are created mid-tick (ejected mass, respawns) and ejected ones drift between buckets, so an index built at the start is already stale by the time snapshots are encoded — which showed up as orbs flickering in and out of view, and as the scoping test reporting phantom adds.
+
+**Hardware.** At 100 players this needs roughly 13 ms/tick on one core. Render's free instance (0.1 CPU) fails outright at 260% of the tick budget; Starter (0.5 CPU) runs at 52%, which works but is tight; Standard (1 CPU, $25/mo) sits at 26% and is the realistic floor for a full lobby. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
+
+### Live rounds
+
+The shared arena is **player versus player with no bots**, running in **ten-minute rounds**.
+
+| | Guest | Signed in |
+|---|---|---|
+| Where it runs | Locally, in the browser tab | Shared server arena |
+| Opponents | Bots | Real players only |
+| Rounds | None, play indefinitely | 10 minutes, then 15s intermission |
+| Wagering | No | Yes |
+
+When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
+
+The clock sits top centre: a large countdown, the round number, and the **wall-clock time the round finishes** ("ends 16:10"). The finish time is formatted to the minute and stays fixed for the whole round, because `now` and `remaining` move together — verified across a full ten minutes, one distinct value. The countdown turns red and pulses in the last 30 seconds, which is the only motion in the HUD so it reads as urgency rather than decoration.
+
+Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
+
+Tune with `ROUND_SECONDS` and `INTERMISSION_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
+
+**Requires migration 004.** The `survived` outcome is new and the original check constraint rejects it, so run `server/db/migrations/004_survived_outcome.sql` before deploying or every end-of-round write fails.
+
 ### Match history and career stats
 
 Every life is recorded as a row in `petri.matches` — one per life, not per session, so dying and pressing Play again starts a new match. Career totals are folded into `petri.player_stats` in the same statement, so a crash cannot log a match but leave the streak un-updated.
@@ -298,6 +383,8 @@ Per match: duration, finishing position, players in the arena, orbs absorbed, pl
 Career: matches, wins, total time played, lifetime orbs and players eaten, best peak mass, best finish, 1st places, current and longest streak, total staked and won.
 
 **What counts as a win.** Agar.io has no win condition, so one had to be chosen rather than discovered. A match is won if you **finished in the top 5**, or you **cashed out a wagered run for more than you staked**. It is a generated column, so the rule lives in one place and old rows cannot disagree with new ones.
+
+If `rebuild_stats()` fails with `ERROR: 42702 column reference "n" is ambiguous`, you have the first schema version; `migrations/002_win_top5.sql` now redefines the function before calling it, so re-running it fixes itself. `migrations/003_fix_rebuild_stats.sql` applies the same fix on its own.
 
 Changing the threshold means dropping and re-adding the column — Postgres cannot alter a generated expression in place. `server/db/migrations/002_win_top5.sql` does that, and follows it with `select petri.rebuild_stats();` because stored `won` values recompute on re-add but the streak columns do not.
 
@@ -336,6 +423,36 @@ The memory backend scans every account on each signup, which is fine for the han
 `Accounts` now takes a repository rather than a store, and its methods are async. That made the WebSocket join handler async too, which introduced a race worth knowing about: a second `join` frame arriving mid-`await` would create two players for one socket. There is a `meta.joining` guard for it.
 
 Settlement is fired from the tick without being awaited — **the game loop must never wait on the database**. Events are copied first because `stepWorld` reuses its array next tick, and stakes are cleared before the await so a second death event cannot settle the same pot twice.
+
+## Test mode
+
+Playing the live PvP mode normally needs 100 signed-in strangers. `TEST_MODE=1` makes it playable alone:
+
+```bash
+npm run dev          # test mode, 60 bots, 2-minute rounds
+npm run dev:solo     # 100 bots at full density, 1-minute rounds
+```
+
+Then open `http://localhost:8080/?mode=online`, create an account, mark yourself ready, and the round starts immediately.
+
+| | Normal | Test mode |
+|---|---|---|
+| `LOBBY_MIN` | 100 ready | **1 ready** |
+| `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
+| `ROUND_SECONDS` | 600 | **120** |
+| `INTERMISSION_SECONDS` | 15 | **8** |
+
+Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=100 npm start` works.
+
+**Money still moves — but only demo credits.** MockRamp grants 5.00 on signup and there is no ramp behind it. That is deliberate: staking, having a pot claimed by a killer, forfeiting outside the places, and being paid for a top-5 finish are precisely the paths worth exercising, and they are worthless to test if money never moves. Watch a balance change across a round and you have tested the settlement path end to end.
+
+**`TEST_MODE=1` and `REAL_MONEY=1` refuse to start together.** Test mode drops the lobby to one player and fills the arena with bots; easy plus real funds is how money goes missing. The server throws rather than picking one.
+
+A banner across the top of the screen says test mode is on, and the HUD shifts down to clear it. It is deliberately hard to miss — mistaking test mode for production is the failure worth preventing.
+
+### What it does not cover
+
+Bots do not aimbot, collude, or exploit, so this tests mechanics rather than adversaries. Bots also hold no account, so a bot killing you forfeits your pot to the house rather than transferring it — testing a real player-to-player claim needs a second browser and a second account, which works fine at `LOBBY_MIN=1` since the round is already running when the second player readies.
 
 ## Wagering (demo only)
 

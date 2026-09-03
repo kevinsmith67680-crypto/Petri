@@ -188,5 +188,56 @@ const farSnap = decodeSnapshot(encodeSnapshot(quiet, observer, qcs));
 const leakedName = farSnap.names.some(n => n.name === "Eater");
 check("out-of-view player names are not sent", !leakedName);
 
+console.log("\n-- spectating --");
+
+// A dead player has no cells, so without an eye the area-of-interest query has
+// nothing to centre on and the snapshot comes back empty. These assertions are
+// the whole reason encodeSnapshot takes an eye.
+const spec = createWorld(101);
+const ghost = addPlayer(spec, { id: "ghost", name: "Ghost" });
+const star = addPlayer(spec, { id: "star", name: "Star" });
+fillBots(spec, 4);
+
+star.cells[0].x = 6000; star.cells[0].y = 6000; star.cells[0].mass = 300;
+ghost.cells[0].x = 500; ghost.cells[0].y = 500;
+stepWorld(spec, 1 / TICK_HZ);
+
+// Kill the ghost the way the simulation would.
+ghost.cells = [];
+ghost.alive = false;
+
+const blind = decodeSnapshot(encodeSnapshot(spec, ghost, createClientState(0), null, null));
+check("a dead player with no eye sees nothing", blind.cells.length === 0, `${blind.cells.length} cells`);
+check("and is not marked as spectating", blind.spectating === false);
+
+const watching = decodeSnapshot(encodeSnapshot(spec, ghost, createClientState(0), null, star));
+check("with an eye they see the watched player", watching.cells.some(c => c.mine),
+  `${watching.cells.length} cells`);
+check("the snapshot is flagged as spectating", watching.spectating === true);
+check("it names whose eyes are borrowed", watching.eyeNid === star.nid);
+check("the view is centred on the target",
+  Math.abs(watching.me.x - 6000) < 200 && Math.abs(watching.me.y - 6000) < 200,
+  `${watching.me.x},${watching.me.y}`);
+check("stats describe the target, not the corpse",
+  watching.me.mass >= 300 && watching.me.alive === true, `mass ${watching.me.mass}`);
+
+// Scoping still applies: a spectator inherits the target's view radius, not a
+// free view of the whole arena.
+const starR = viewRadius(star);
+const outside = watching.cells.filter(c =>
+  Math.hypot(c.x - 6000, c.y - 6000) > starR * 1.3);
+check("a spectator sees no further than the target does", outside.length === 0,
+  `${outside.length} cells beyond the radius`);
+check("pellets are culled to the target too",
+  watching.added.every(p => Math.hypot(p.x - 6000, p.y - 6000) <= starR * 1.1),
+  `${watching.added.length} pellets`);
+
+// Watching a dead target must fall back rather than showing an empty world.
+const deadStar = addPlayer(spec, { id: "dead", name: "Dead" });
+deadStar.cells = [];
+deadStar.alive = false;
+const fallback = decodeSnapshot(encodeSnapshot(spec, ghost, createClientState(0), null, deadStar));
+check("watching a dead target falls back to self", fallback.spectating === false);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
