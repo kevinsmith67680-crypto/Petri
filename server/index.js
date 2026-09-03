@@ -39,6 +39,12 @@ import {
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG
 } from "../shared/protocol.js";
+import { isValidStake, PRACTICE } from "../shared/wager.js";
+import { createRamp, InsufficientFunds } from "./ledger.js";
+import { createStore } from "./store.js";
+import { MemoryRepo } from "./db/memory.js";
+import { Accounts } from "./accounts.js";
+import { handleApi } from "./api.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -49,6 +55,19 @@ const MAX_CONN_PER_IP = Number(process.env.MAX_CONN_PER_IP) || 3;
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
+
+// Real money is off unless explicitly demanded, and createRamp() refuses to
+// start if it is demanded without a real implementation behind it.
+const REAL_MONEY = process.env.REAL_MONEY === "1";
+
+// Unset keeps accounts in memory (lost on restart). Set a path to persist.
+// On Render the filesystem is ephemeral, so this survives restarts of the
+// process but NOT deploys — see README before relying on it.
+const DATA_FILE = process.env.DATA_FILE || "";
+
+// Set to a Supabase / Postgres connection string to persist accounts and
+// balances. Unset falls back to the in-memory backend.
+const DATABASE_URL = process.env.DATABASE_URL || "";
 
 // Message budgets. A well-behaved client sends aim at 20Hz plus the occasional
 // action, so these are generous; they exist to stop floods, not to police play.
@@ -72,12 +91,23 @@ const MIME = {
   ".svg": "image/svg+xml"
 };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname.startsWith("/api/")) {
+    await handleApi(req, res, { accounts, backend, ramp, url, ip: ipOf(req) });
+    return;
+  }
 
   if (url.pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, players: clients.size, tick: world.tick }));
+    res.end(JSON.stringify({
+      ok: true,
+      players: clients.size,
+      tick: world.tick,
+      demo: !ramp.isReal,
+      storage: DATABASE_URL ? "postgres" : "memory"
+    }));
     return;
   }
 
@@ -103,6 +133,36 @@ const server = http.createServer((req, res) => {
 
 const world = createWorld(Date.now() & 0xffffffff);
 fillBots(world, BOTS);
+
+// Backend selection. Both implementations expose the same surface, so nothing
+// below this line knows or cares which one is in use.
+let backend;
+if (DATABASE_URL) {
+  const { createPool, PgRepo } = await import("./db/pg.js");
+  backend = new PgRepo(await createPool(DATABASE_URL));
+  console.log("storage: postgres");
+} else {
+  backend = new MemoryRepo(createStore(DATA_FILE));
+  console.log(`storage: memory${DATA_FILE ? ` (mirrored to ${DATA_FILE})` : ""}`);
+}
+
+const ramp = createRamp({ backend, real: REAL_MONEY });
+const accounts = new Accounts(backend);
+
+setInterval(() => {
+  accounts.sweepSessions().catch(err => console.error("session sweep:", err.message));
+}, 3600_000).unref?.();
+
+// Who last ate whom, so a death can be settled to the right winner. Keyed by
+// victim player id, cleared as soon as it is consumed.
+const lastEater = new Map();
+
+async function pushAccount(ws, meta) {
+  if (ws.readyState !== ws.OPEN || !meta.accountId) return;
+  const snap = await backend.snapshot(meta.accountId);
+  if (ws.readyState !== ws.OPEN) return;
+  ws.send(JSON.stringify({ type: "account", demo: !ramp.isReal, ...snap }));
+}
 
 const clients = new Map();        // ws -> meta
 const connectionsByIp = new Map(); // ip -> count
@@ -170,6 +230,13 @@ wss.on("connection", (ws, req) => {
   const id = `p:${nextClientId++}`;
   const meta = {
     id, ip, joined: false, state: null,
+    // Stand-in for a real account id. A production build attaches this to an
+    // authenticated user, not to a socket — see README.
+    // Set on join: a resolved session gives `acct:<uuid>`, a guest gets a
+    // per-socket id that owns nothing and cannot wager.
+    accountId: null,   // uuid once signed in; guests never hold money
+    joining: false,
+    stake: PRACTICE,
     msgBucket: makeBucket(LIMITS.message),
     actBucket: makeBucket(LIMITS.action),
     alive: true
@@ -178,23 +245,127 @@ wss.on("connection", (ws, req) => {
   // Drop sockets that stop responding, so ghosts do not hold a slot.
   ws.on("pong", () => { meta.alive = true; });
 
-  ws.on("message", (raw, isBinary) => {
+  ws.on("message", async (raw, isBinary) => {
     if (!allow(meta.msgBucket)) { ws.close(1008, "Rate limit"); return; }
 
-    // Text frames are control messages. Only "join" is accepted, once.
+    // Text frames are control messages: join once, then money actions.
     if (!isBinary) {
-      if (meta.joined) return;
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
-      if (!msg || msg.type !== MSG.JOIN) return;
+      if (!msg) return;
+
+      if (meta.joined) {
+        if (msg.type === "cashout") {
+          // You can only realise a pot while alive. Dying settles it to
+          // whoever ate you, so there is nothing left to claim afterwards.
+          const player = world.players.get(id);
+          if (!player || !player.alive || !meta.accountId) return;
+          if (await backend.potOf?.(meta.accountId) === 0) return;
+          // Snapshot the run before ending it: the player object is reset on
+          // respawn and these numbers would be gone.
+          const run = {
+            duration: world.time - (player.spawnedAt || world.time),
+            rank: player.rank, of: player.of,
+            orbs: player.orbs, eaten: player.eaten, peak: Math.round(player.peak)
+          };
+          const stake = meta.stake;
+
+          // End the run first, then settle. If the order were reversed a
+          // player could be eaten in the window between the two and have the
+          // same pot paid out twice.
+          player.alive = false;
+          player.cells = [];
+          meta.stake = PRACTICE;
+          setAim(world, id, 0, 0);
+          const { paid } = await backend.cashOut(meta.accountId, RAKE_BPS);
+          recordRun(meta, run, {
+            outcome: "cashed_out", killerId: null, stake, payout: paid
+          });
+          await pushAccount(ws, meta);
+        } else if (msg.type === "rename") {
+          // The HTTP API is the only thing that can actually change a name.
+          // This just re-reads it, so a rename shows on the cell without
+          // needing a reconnect.
+          if (!meta.accountId) return;
+          const fresh = await backend.getAccount(meta.accountId);
+          const player = world.players.get(id);
+          if (fresh && player) player.name = fresh.displayName;
+        } else if (msg.type === "ramp") {
+          // Placeholder endpoint. Always refuses while MockRamp is in place.
+          const result = msg.action === "withdraw"
+            ? ramp.requestWithdrawal(meta.accountId, 0, null)
+            : ramp.openDeposit(meta.accountId);
+          Promise.resolve(result).then(r => {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify({ type: "ramp_result", ...r }));
+            }
+          });
+        }
+        return;
+      }
+
+      if (msg.type !== MSG.JOIN || meta.joining) return;
+      // Resolving a session is a database round trip, so a second JOIN could
+      // arrive mid-await and create two players for one socket.
+      meta.joining = true;
+
+      const stake = Number(msg.stake) || PRACTICE;
+      if (!isValidStake(stake)) { ws.close(1008, "Bad stake"); return; }
+
+      // Identity comes from the session token, never from anything else the
+      // client says. A guest may play, but only for free: a balance has to
+      // belong to an account, or it belongs to whoever opens a new socket.
+      const authed = await accounts.resolveSession(msg.token).catch(() => null);
+      let displayName;
+      if (authed) {
+        meta.accountId = authed.id;
+        // The name on the cell is the account's, not whatever was sent, so a
+        // client cannot impersonate another player by editing its join.
+        displayName = authed.displayName;
+        if (!ramp.isReal) await ramp.grant(meta.accountId);
+      } else {
+        displayName = cleanName(msg.name || "Guest");
+      }
+
+      if (stake > PRACTICE && !authed) {
+        meta.joining = false;
+        ws.send(JSON.stringify({
+          type: "account_error",
+          reason: "Sign in to wager. Guest play is practice only."
+        }));
+        ws.close(1008, "Auth required to wager");
+        return;
+      }
+
+      if (stake > PRACTICE) {
+        try {
+          await backend.lockStake(meta.accountId, stake);
+        } catch (err) {
+          meta.joining = false;
+          // Postgres raises a check-constraint violation (23514) when the
+          // balance would go negative; the memory backend throws its own type.
+          if (err instanceof InsufficientFunds || err.code === "23514") {
+            ws.send(JSON.stringify({ type: "account_error", reason: "Not enough balance for that stake." }));
+            ws.close(1008, "Insufficient funds");
+            return;
+          }
+          throw err;
+        }
+      }
 
       meta.joined = true;
-      const player = addPlayer(world, { id, name: cleanName(msg.name) });
+      meta.joining = false;
+      meta.stake = stake;
+      const player = addPlayer(world, { id, name: displayName });
       meta.state = createClientState(nextClientId);   // staggers keyframes
       clients.set(ws, meta);
       trimBots();
       ws.send(JSON.stringify({
-        type: MSG.WELCOME, id, nid: player.nid, tickHz: TICK_HZ
+        type: MSG.WELCOME, id, nid: player.nid, tickHz: TICK_HZ,
+        demo: !ramp.isReal,
+        signedIn: !!authed,
+        displayName,
+        ...(meta.accountId ? await backend.snapshot(meta.accountId) : { balance: 0, pot: 0, staked: false })
       }));
       return;
     }
@@ -230,8 +401,13 @@ wss.on("connection", (ws, req) => {
     if (meta.joined) {
       // Do not delete the player immediately. Vanishing on demand is a free
       // escape from any losing fight, so cells linger, motionless and edible.
+      // The pot stays in escrow for that window and settles normally if
+      // something eats the abandoned cells.
       setAim(world, id, 0, 0);
-      lingering.push({ id, until: world.time + LINGER_SEC });
+      lingering.push({
+        id, until: world.time + LINGER_SEC,
+        accountId: meta.stake === PRACTICE ? null : meta.accountId
+      });
     }
   };
 
@@ -255,6 +431,88 @@ setInterval(() => {
   }
 }, 30000);
 
+// ── match history ───────────────────────────────────────────────────────────
+
+// Fire-and-forget: a failed write must not interrupt play, and a match record
+// is not worth blocking the tick for.
+function recordRun(meta, event, extra) {
+  if (!meta.accountId) return;
+  backend.recordMatch({
+    accountId: meta.accountId,
+    startedAt: Date.now() - Math.round((event.duration || 0) * 1000),
+    duration: Number((event.duration || 0).toFixed(2)),
+    finishPosition: event.rank || null,
+    playersInArena: event.of || null,
+    orbs: event.orbs || 0,
+    playersEaten: event.eaten || 0,
+    peakMass: event.peak || 0,
+    ...extra
+  }).catch(err => console.error("recordMatch:", err.message));
+}
+
+// ── settlement ──────────────────────────────────────────────────────────────
+
+const RAKE_BPS = Number(process.env.RAKE_BPS) || 0;
+
+const accountOfPlayer = id => {
+  for (const meta of clients.values()) if (meta.id === id) return meta;
+  return null;
+};
+
+// Money moves only in response to simulation events, never in response to
+// anything a client asserts.
+async function settle(events) {
+  for (const e of events) {
+    if (e.t === "eat") lastEater.set(e.victim, e.id);
+  }
+
+  for (const e of events) {
+    if (e.t !== "death") continue;
+    const victim = accountOfPlayer(e.id);
+    const killerId = lastEater.get(e.id);
+    lastEater.delete(e.id);
+
+    if (!victim || !victim.accountId) continue;
+
+    const killer = killerId ? accountOfPlayer(killerId) : null;
+    const killerStaked = killer && killer.accountId && killer.stake !== PRACTICE;
+    const wasStaked = victim.stake !== PRACTICE;
+
+    // Clear the stake before awaiting, so a second death event for the same
+    // player cannot settle the same pot twice while the first is in flight.
+    const stake = victim.stake;
+    victim.stake = PRACTICE;
+
+    // Every run is recorded, wagered or not. `killer` being absent means an
+    // NPC got them, which is a different outcome from losing to a person.
+    recordRun(victim, e, {
+      outcome: killer ? "eaten" : "bot",
+      killerId: killer?.accountId || null,
+      stake: wasStaked ? stake : 0,
+      payout: 0
+    });
+
+    if (!wasStaked) continue;
+
+    try {
+      if (killerStaked) {
+        // Staked player beat another staked player: the pot changes hands.
+        await backend.claim(killer.accountId, victim.accountId);
+      } else {
+        // Killed by a bot, or by someone with nothing at risk. Nobody won it.
+        // See the note on Ledger.forfeit: this is why wagered players should
+        // never share a world with bots.
+        await backend.forfeit(victim.accountId);
+      }
+      for (const [ws, meta] of clients) {
+        if (meta === killer || meta === victim) await pushAccount(ws, meta);
+      }
+    } catch (err) {
+      console.error("settlement failed:", err.message);
+    }
+  }
+}
+
 // ── tick ────────────────────────────────────────────────────────────────────
 
 let lastTick = process.hrtime.bigint();
@@ -266,11 +524,23 @@ setInterval(() => {
   const dt = Math.min(Number(now - lastTick) / 1e9, 0.25);
   lastTick = now;
 
-  stepWorld(world, dt);
+  const events = stepWorld(world, dt);
+  // Deliberately not awaited: the tick must not wait on the database. Events
+  // are copied because stepWorld reuses its array next tick.
+  if (events.length) {
+    settle(events.slice()).catch(err => console.error("settle:", err.message));
+  }
 
   for (let i = lingering.length - 1; i >= 0; i--) {
     if (world.time >= lingering[i].until) {
-      removePlayer(world, lingering[i].id);
+      const { id: goneId, accountId } = lingering[i];
+      // Survived the linger window unclaimed, so the run is void rather than
+      // lost. Refunding is the only defensible outcome: nobody beat them.
+      if (accountId) {
+        backend.refund(accountId).catch(err => console.error("refund:", err.message));
+      }
+      removePlayer(world, goneId);
+      lastEater.delete(goneId);
       lingering.splice(i, 1);
       fillBots(world, Math.max(0, BOTS - clients.size));
     }

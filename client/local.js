@@ -77,6 +77,13 @@ export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
       };
     },
 
+    // Offline play never wagers: a balance held in this tab is free money, so
+    // the local adapter refuses money operations outright rather than
+    // pretending to hold value.
+    sendCashOut() {},
+    sendRamp() {},
+    sendRename() {},
+
     close() { emit("close"); }
   };
 }

@@ -38,7 +38,7 @@ There is also a `Dockerfile`, so Fly.io, Railway, or any VPS work the same way. 
 
 Useful if you want the offline game on a free static URL and only pay for the multiplayer box.
 
-1. Push to GitHub. `.github/workflows/pages.yml` publishes `index.html`, `client/` and `shared/` to Pages on every push to `main`. Enable Pages in the repo settings with "GitHub Actions" as the source.
+1. Push to GitHub. Copy `docs/pages-workflow.yml.example` to `.github/workflows/pages.yml` — it is shipped outside `.github/` because a classic access token cannot push workflow files unless it also carries the `workflow` scope, and the push fails outright if it does. Add that scope first. Then enable Pages in the repo settings with "GitHub Actions" as the source.
 2. Deploy the server separately (Option A's host).
 3. Set `SERVER_URL` in `client/config.js` to the server's address, e.g. `wss://petri.onrender.com`, and push again.
 
@@ -58,6 +58,10 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `ALLOWED_ORIGINS` | *(unset)* | Comma-separated origin allowlist. Unset means allow anything — dev only |
 | `MAX_CONN_PER_IP` | 3 | Connection cap per address |
 | `TRUST_PROXY` | *(unset)* | Set to `1` behind Render, Fly, or any reverse proxy, so client IPs come from `X-Forwarded-For` |
+| `REAL_MONEY` | *(unset)* | `1` demands a real payment ramp. Startup **fails** unless one is implemented — see the wagering section |
+| `DATA_FILE` | *(unset)* | JSON file for the memory backend. Ignored when `DATABASE_URL` is set |
+| `DATABASE_URL` | *(unset)* | Supabase/Postgres connection string. Use the session pooler on port 5432 |
+| `RAKE_BPS` | `0` | House cut on winnings, basis points |
 
 `GET /health` returns player count and tick number, for uptime checks.
 
@@ -67,8 +71,18 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 shared/     sim.js         all game rules; runs in Node and the browser
             codec.js       binary reader/writer with bounds checks
             protocol.js    wire format, AOI culling, pellet delta scoping
+            wager.js       integer money primitives and stake tiers
 server/     index.js       authoritative tick loop + static file serving
+            ledger.js      in-memory ledger + ramp placeholder
+            accounts.js    signup, login, sessions, display names
+            api.js         HTTP routes for the account endpoints
+            store.js       JSON file persistence for the memory backend
+            db/schema.sql  Postgres schema + atomic settlement functions
+            db/pg.js       Supabase/Postgres backend
+            db/memory.js   in-memory backend, same interface
+            db/migrations/ schema changes for databases already deployed
 client/     main.js        entry point: transport choice, input, render loop
+            account.js     /api client and session token storage
             config.js      SERVER_URL for statically-hosted clients
             local.js       offline connection (simulation in-tab)
             net.js         networked connection (WebSocket + interpolation)
@@ -76,6 +90,9 @@ client/     main.js        entry point: transport choice, input, render loop
             ui.js          HUD, settings, start/death cards
 test/       sim.test.js       headless simulation checks
             protocol.test.js  codec, delta and scoping-rule checks
+            wager.test.js     ledger conservation and ramp interlock
+            accounts.test.js  hashing, sessions, name rules, throttling
+            backend.test.js   same contract run against memory and Postgres
 index.html  markup and CSS
 ```
 
@@ -183,6 +200,192 @@ The server treats any decode failure as "close the socket", since a client that 
 - The 100-player figures assume one world. Past roughly one CPU core you shard into rooms and processes; a single-threaded game loop cannot use a bigger instance.
 - Client-side prediction of your own cells, so movement does not wait a round trip. `moveCells` is pure, so it can be re-run locally against unacknowledged input.
 - WebTransport instead of WebSocket, with WebSocket as fallback. It reached Baseline in March 2026, and its unreliable datagrams suit positional updates you would discard on arrival anyway. Keyframes already exist, which is what makes lossy transport survivable.
+
+## Accounts
+
+Players can create an account, sign in, and change the display name shown on their cell and in the leaderboard. Guests can still play, but only Practice: a balance has to belong to a person, and a guest "account" belongs to whoever opens the next socket.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/signup` | Create an account, returns a session token |
+| POST | `/api/login` | Sign in, returns a session token |
+| POST | `/api/logout` | Destroy the current session |
+| GET | `/api/me` | Current account plus balance |
+| POST | `/api/name` | Change display name |
+
+Auth is on HTTP rather than the WebSocket because it happens before the socket exists, and a password exchange has no business sharing a path with the 20Hz gameplay loop. The join message then carries the session token, and the server resolves identity from that alone — **the display name on your cell comes from the account, never from the join payload**, so a modified client cannot impersonate anyone.
+
+### What it gets right
+
+- **Async scrypt, always.** `scryptSync` takes around 100ms and this process runs the game loop on the same thread, so a synchronous hash would drop two ticks per login. Every password operation yields.
+- **Per-user salts**, with the KDF parameters recorded in the hash string so they can be raised later without invalidating existing passwords.
+- **`timingSafeEqual`** for hash comparison. A plain `===` leaks how much of the hash matched.
+- **Session tokens are stored hashed.** The raw 256-bit token goes to the client once and never to disk, so a leaked store does not hand over live sessions.
+- **Uniform login errors.** "Incorrect username or password" for both a missing account and a wrong password, and a dummy hash is computed for missing accounts so response timing does not reveal which usernames exist.
+- **Throttling on both username and IP**, backing off geometrically to a five-minute cap, so neither spraying one password across many accounts nor hammering one account gets far.
+- **Name rules that resist impersonation**: 3–16 characters from a conservative set, case-insensitive uniqueness, a reserved list, and a 60-second cooldown between changes.
+
+### What it is not
+
+This is credible scaffolding, **not audited authentication**. Before it guards anything of value, replace it with a managed identity provider or have it reviewed by someone who does this professionally.
+
+Two specific weaknesses worth naming:
+
+**The session token lives in `localStorage`**, which means any XSS on the page can read it. An HttpOnly cookie would not be readable, but the WebSocket join needs to carry the token in its payload, and cookies would add CSRF handling for no gain there. It is a deliberate trade-off, not an oversight — but revisit it rather than inherit it if real funds are ever involved.
+
+**`FileStore` is a JSON file, not a database.** It has no transactions, so concurrent writes to related records can interleave. It exists so accounts survive a process restart in development.
+
+### Persistence
+
+Set `DATA_FILE` to enable it, e.g. `DATA_FILE=./data/petri.json npm start`. Writes are debounced every 2 seconds and go through a temp file plus `rename`, which is atomic on POSIX, so a crash mid-write leaves the previous file intact rather than a truncated one. Unset, everything is in memory and lost on restart.
+
+**On Render the filesystem is ephemeral.** `DATA_FILE` survives a process restart but not a deploy — every push wipes every account. Move to Postgres before anyone has anything to lose. `server/store.js` is the seam: implement the same five methods against a real database and nothing else changes.
+
+## Storage: Supabase / Postgres
+
+Accounts **and balances** persist to Postgres when `DATABASE_URL` is set. Unset, everything runs in memory as before.
+
+### Setting it up
+
+1. Create a Supabase project.
+2. Open the SQL Editor and run `server/db/schema.sql` once.
+3. `npm install pg` (it is an optional dependency, only needed for this path).
+4. Set `DATABASE_URL` — see the connection warning below.
+5. Start the server. It logs `storage: postgres` and probes the schema before claiming to be up, so a misconfiguration fails immediately rather than at the first signup.
+
+### The connection string will catch you out
+
+Supabase's **direct** connection (`db.<ref>.supabase.co`) resolves to **IPv6 only**, and Render is IPv4. A direct string fails with `ENETUNREACH` or "Address family not supported by protocol". Use the Shared Pooler (Supavisor), which is IPv4 on every tier:
+
+| Mode | Port | Use it? |
+|---|---|---|
+| Session | **5432** | **Yes.** Behaves like a direct connection, supports prepared statements. Correct for a long-lived server |
+| Transaction | 6543 | No. For serverless and autoscaling deployments |
+
+```
+postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+```
+
+Dashboard → Connect → Session pooler. `.env.example` has the shape.
+
+### Why a `petri` schema rather than `public`
+
+Supabase exposes every table in `public` through PostgREST, meaning **anyone holding your anon key can query them over HTTP**. Password hashes and balances must never be reachable that way. The schema puts everything in `petri`, which PostgREST does not expose unless you explicitly add it to the exposed-schemas list — don't. RLS is enabled with no policies as a second layer, so even if the schema were exposed, no anon request could read a row. The server connects as `postgres`, which bypasses RLS; that is correct, because the server is the trusted party here exactly as it is for movement.
+
+### Settlement is atomic now
+
+This is the real reason for a database rather than a JSON file. Every money operation is a Postgres function that moves the money **and** writes its audit row in a single statement:
+
+| Function | Does |
+|---|---|
+| `petri.lock_stake` | balance → escrow |
+| `petri.claim_pot` | loser's escrow → winner's escrow |
+| `petri.cash_out` | escrow → balance, less rake |
+| `petri.forfeit_pot` / `petri.refund_pot` | escrow → house / balance |
+
+"Credit the winner, then crash before debiting the loser" is not a state this can reach. `claim_pot` locks both rows in account-id order so two players eating each other in the same tick cannot deadlock. `balances` carries `check (balance >= 0)` and `check (escrow >= 0)`, which makes "no account goes negative" a guarantee of the database rather than a property of the application code — an overdraft raises a constraint violation instead of silently succeeding.
+
+`petri.money_total` is a view comparing money held against deposits minus withdrawals. Query it, or wire it to a monitor.
+
+### Match history and career stats
+
+Every life is recorded as a row in `petri.matches` — one per life, not per session, so dying and pressing Play again starts a new match. Career totals are folded into `petri.player_stats` in the same statement, so a crash cannot log a match but leave the streak un-updated.
+
+Per match: duration, finishing position, players in the arena, orbs absorbed, players eaten, peak mass, outcome, who killed you, stake and payout.
+
+Career: matches, wins, total time played, lifetime orbs and players eaten, best peak mass, best finish, 1st places, current and longest streak, total staked and won.
+
+**What counts as a win.** Agar.io has no win condition, so one had to be chosen rather than discovered. A match is won if you **finished in the top 5**, or you **cashed out a wagered run for more than you staked**. It is a generated column, so the rule lives in one place and old rows cannot disagree with new ones.
+
+Changing the threshold means dropping and re-adding the column — Postgres cannot alter a generated expression in place. `server/db/migrations/002_win_top5.sql` does that, and follows it with `select petri.rebuild_stats();` because stored `won` values recompute on re-add but the streak columns do not.
+
+One caveat: **top 5 only means something when the arena holds more than 5.** With the default 14 bots it does, but if you run `BOTS=3` every finish is a win. Add `and players_in_arena > 5` to the expression if you ever run small arenas.
+
+`first_places` is still tracked separately, so finishing 1st remains distinguishable from merely placing.
+
+**Finishing position is captured before the fatal bite.** A player whose cells are eaten has zero mass by the time the death is detected, so standings are refreshed each tick *before* combat resolves. Reading the rank afterwards would record everyone as finishing last.
+
+The streak rule exists twice — as SQL and as `MemoryRepo.isWin` — and `test/backend.test.js` asserts both against the same expectations. That is the only thing keeping them equal.
+
+New endpoints:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/stats` | Career totals plus the last 10 matches (needs a session) |
+| GET | `/api/board?kind=mass\|streak\|orbs` | Public all-time boards, display names only |
+
+The menu shows career totals under your account when signed in, and the death card now reports your finishing position.
+
+### The repository seam
+
+`server/db/pg.js` and `server/db/memory.js` implement the same surface, and `test/backend.test.js` runs **the same assertions against both**. That is what stops them drifting: it is very easy to fix a bug in one and leave the other wrong.
+
+```bash
+npm test                                  # memory backend
+DATABASE_URL=postgres://... npm run test:db   # same suite against Supabase
+```
+
+Point it at a scratch project — it creates and deletes accounts.
+
+The memory backend scans every account on each signup, which is fine for the handful a local run creates and quadratic misery at scale. The Postgres one uses unique indexes on `lower(username)` and a generated `display_name_key` column, so uniqueness is enforced by the database rather than by an application check that can race two simultaneous signups.
+
+### What changed in the server
+
+`Accounts` now takes a repository rather than a store, and its methods are async. That made the WebSocket join handler async too, which introduced a race worth knowing about: a second `join` frame arriving mid-`await` would create two players for one socket. There is a `meta.joining` guard for it.
+
+Settlement is fired from the tick without being awaited — **the game loop must never wait on the database**. Events are copied first because `stepWorld` reuses its array next tick, and stakes are cleared before the await so a second death event cannot settle the same pot twice.
+
+## Wagering (demo only)
+
+The pregame menu offers a Practice run or a 1.00 USDC wager, shows a balance, and has a **Connect wallet** button that is a deliberate placeholder. No payment ramp is connected, no value moves, and balances are demo credits with no cash value.
+
+### How it is built
+
+Money is an **integer count of micro-USDC** (1 USDC = 1,000,000 units), matching USDC's on-chain 6 decimals. There are no floats anywhere near a balance. `shared/wager.js` holds the primitives; the client formats amounts with the same code the server settles them with.
+
+The **ledger is server-authoritative**, exactly like movement. The client holds no balance, is never asked what it thinks it has, and cannot spend what the server has not credited. What the menu displays is a read-only echo of `server/ledger.js`.
+
+Value moves only in response to simulation events:
+
+| Event | Effect |
+|---|---|
+| Join a wagered run | Stake moves from balance into escrow |
+| Eat another staked player | Their whole pot moves to your escrow |
+| Cash out while alive | Escrow moves to balance, less rake (currently 0) |
+| Die to a staked player | Your pot is already theirs |
+| Die to a bot | Pot is forfeited to the house — see the flaw below |
+| Disconnect and stay uneaten | Pot is refunded after the 6-second linger window |
+
+**The invariant is conservation**: `Ledger.total()` changes only through `deposit()` and `withdraw()`. Every other operation moves value sideways. `test/wager.test.js` fuzzes 20,000 randomised operations and asserts the total never drifts and no account goes negative, because a settlement bug that mints or destroys money is not something you want to discover from a user.
+
+`GET /health` reports `ledgerTotal` so you can watch this in production.
+
+### The safety interlock
+
+`REAL_MONEY=1` **refuses to start** unless a real `Ramp` implementation exists. It does not silently fall back to play money. Turning this on is a deliberate code change, not a config toggle.
+
+### Known flaws, deliberately left visible
+
+**Wagered players share a world with bots.** If a bot eats you, your stake is forfeited to the house, which means the operator profits when a machine kills a paying player. That is indefensible in a real product. The fix is separate bot-free rooms for wagered play, which is a matchmaking change this codebase does not have.
+
+**The ledger is an in-memory Map.** Every balance is lost on restart, and Render restarts services routinely. This needs a real database with real transactions before it holds anything.
+
+**An account is `demo:<ip>`.** That is not identity. Two people behind one router share an account; one person with a phone has two.
+
+### Before real money
+
+Nothing here is production-ready for handling funds. At minimum, all of these need to be true first:
+
+1. **Legal clearance.** Real-money wagering on game outcomes is regulated in most jurisdictions, and skill-based does not reliably exempt you. Whether you need a licence depends on where you and your players are. This needs a gaming-regulation lawyer, not a search engine.
+2. ~~**Identity and accounts**~~ — scaffolded, see the Accounts section. Still needs a security review before it counts as done.
+3. ~~**A real database** with transactional settlement and an immutable audit trail~~ — done via Supabase, see the Storage section. The Postgres path is **written but untested against a live database**; run `npm run test:db` before trusting it.
+4. **Age and jurisdiction gating**, plus whatever KYC and AML obligations follow from (1).
+5. **Bot detection with teeth.** This is the one that decides whether the product survives. Aimbotting is unpreventable by architecture, and once there is money on the table a scripted client is simply the rational way to play. Without detection and clawback, the game gets drained.
+6. **Bot-free wagered rooms**, so no staked player can lose to an NPC.
+7. **Responsible-gambling controls**: deposit limits, self-exclusion, session limits, and visible odds. These are legal requirements in many places and the right thing to do everywhere.
+8. **A security audit** of the settlement path by someone who was not involved in writing it.
 
 ## Behaviour notes
 

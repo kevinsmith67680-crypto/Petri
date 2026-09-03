@@ -14,6 +14,8 @@ import { createSocketConnection } from "./net.js";
 import { createRenderer, THEMES } from "./render.js";
 import { createUI } from "./ui.js";
 import { SERVER_URL } from "./config.js";
+import { PRACTICE } from "../shared/wager.js";
+import { createAccountClient } from "./account.js";
 
 const params = new URLSearchParams(location.search);
 const MODE = params.get("mode") === "online" ? "online" : "local";
@@ -34,11 +36,57 @@ let startedAt = 0;
 let elapsed = 0;
 let best = 0;
 let wasAlive = true;
+let lastRank = 0;
+let lastOf = 0;
+
+// Accounts only exist server-side, so offline play is always a guest.
+const api = MODE === "online" ? createAccountClient() : null;
+
+function applyAuth(payload) {
+  ui.renderAuth(api?.account || null);
+  // Career totals live server-side; refresh them whenever identity changes.
+  if (api?.signedIn) {
+    api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
+  } else {
+    ui.renderCareer(null);
+  }
+  if (payload) {
+    onAccount({
+      balance: payload.balance,
+      pot: payload.pot,
+      staked: payload.staked,
+      demo: payload.demo
+    });
+  }
+}
 
 const ui = createUI({
   settings,
   onStart: start,
-  onThemeChange: () => {}
+  onThemeChange: () => {},
+  onCashOut: () => conn?.sendCashOut(),
+  onRamp: action => conn?.sendRamp(action),
+  auth: {
+    async login(username, password) { applyAuth(await api.login(username, password)); },
+    async signup(username, password, displayName) {
+      applyAuth(await api.signup(username, password, displayName));
+    },
+    async signOut() {
+      await api?.logout();
+      // Drop the socket too: identity is bound at join time, so a stale
+      // connection would keep playing as the old account.
+      conn?.close?.();
+      conn = null;
+      applyAuth(null);
+    },
+    async rename(displayName) {
+      const payload = await api.setDisplayName(displayName);
+      applyAuth(payload);
+      // Tell the server to re-read the name so it updates on the live cell
+      // without needing a reconnect.
+      conn?.sendRename?.();
+    }
+  }
 });
 
 function serverUrl() {
@@ -49,15 +97,18 @@ function serverUrl() {
   return (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 }
 
-function connect() {
+function connect(stake = PRACTICE) {
   if (MODE === "online") {
     const url = serverUrl();
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
       return createLocalConnection({ name: NAME });
     }
-    const socket = createSocketConnection({ url, name: NAME });
+    const socket = createSocketConnection({
+      url, name: NAME, stake, token: api?.token || null
+    });
     socket.on("event", onEvent);
+    socket.on("account", onAccount);
     socket.on("close", () => ui.setMode("Disconnected"));
     socket.on("error", () => ui.setMode(`Could not reach ${url}`));
     ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
@@ -65,6 +116,7 @@ function connect() {
   }
   const local = createLocalConnection({ name: NAME });
   local.on("event", onEvent);
+  ui.setWagerAvailable(false, "Wagering needs the server. Offline play is practice only.");
   ui.setMode("Offline, simulation running in this tab");
   return local;
 }
@@ -80,9 +132,29 @@ function syncCounter(view) {
 
 function onEvent() { /* reserved for future server-pushed events */ }
 
+// Every figure shown to the player originates here, from the server ledger.
+// Nothing about the balance is computed client-side.
+function onAccount(msg) {
+  if (msg.type === "account_error") { ui.setRampNote(msg.reason); return; }
+  if (msg.type === "ramp_result") { ui.setRampNote(msg.reason || "Ramp unavailable."); return; }
+  ui.setAccount({
+    balance: msg.balance ?? 0,
+    pot: msg.pot ?? 0,
+    staked: !!msg.staked,
+    demo: msg.demo !== false
+  });
+}
+
 function start() {
-  if (!conn) conn = connect();
-  else conn.sendAction("respawn");
+  const stake = ui.getStake();
+  // A stake is locked at join time, so changing it means a fresh connection.
+  // Reusing the socket would let a client re-enter a paid run for free.
+  if (!conn || (MODE === "online" && stake !== PRACTICE)) {
+    conn?.close?.();
+    conn = connect(stake);
+  } else {
+    conn.sendAction("respawn");
+  }
   running = true;
   wasAlive = true;
   lastOrbs = 0;
@@ -154,6 +226,8 @@ function frame(now) {
     if (fresh) {
       if (running) elapsed = (now - startedAt) / 1000;
       renderer.follow(camera, fresh, dt);
+      // Captured while alive: once you are eaten the snapshot has no standing.
+      if (fresh.me.alive && fresh.me.rank) { lastRank = fresh.me.rank; lastOf = fresh.me.of; }
       syncCounter(fresh);
       ui.update(fresh, elapsed, now);
 
@@ -166,8 +240,14 @@ function frame(now) {
           peak: fresh.me.peak,
           eaten: fresh.me.eaten,
           elapsed,
-          best
+          best,
+          rank: lastRank,
+          of: lastOf
         });
+        // The match has just been written server-side, so re-read the totals.
+        if (api?.signedIn) {
+          api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
+        }
       }
 
       renderer.draw(fresh, camera, th, settings);
@@ -177,6 +257,12 @@ function frame(now) {
   }
 
   renderer.draw(null, camera, th, settings);
+}
+
+// Validate any stored session before the menu renders, so a returning player
+// sees their name rather than a sign-in form that briefly flashes.
+if (api) {
+  api.restore().then(payload => applyAuth(payload)).catch(() => applyAuth(null));
 }
 
 // Connect immediately so the arena is visible behind the start card.

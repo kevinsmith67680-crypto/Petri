@@ -3,10 +3,12 @@
 // Knows nothing about the simulation beyond the view shape.
 // ---------------------------------------------------------------------------
 
+import { formatUsdc, PRACTICE, STAKE_1_USDC } from "../shared/wager.js";
+
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-export function createUI({ settings, onStart, onThemeChange }) {
+export function createUI({ settings, onStart, onThemeChange, onCashOut, onRamp, auth }) {
   const el = {
     orbs: $("orbCount"),
     mass: $("statMass"),
@@ -18,8 +20,28 @@ export function createUI({ settings, onStart, onThemeChange }) {
     minimap: $("minimap"),
     startVeil: $("startVeil"),
     overVeil: $("overVeil"),
-    mode: $("modeNote")
+    mode: $("modeNote"),
+    badge: $("demoBadge"),
+    bal: $("balValue"),
+    ramp: $("btnRamp"),
+    rampNote: $("rampNote"),
+    stakeFree: $("stakeFree"),
+    stake1: $("stake1"),
+    potBar: $("potBar"),
+    potValue: $("potValue"),
+    signedOut: $("authSignedOut"),
+    signedIn: $("authSignedIn"),
+    whoName: $("whoName"),
+    whoUser: $("whoUser"),
+    renameBox: $("renameBox")
   };
+
+  // The client holds no authority over money. This is a read-only echo of the
+  // server ledger; every value here arrives from the server and is never
+  // computed locally.
+  let account = { balance: 0, pot: 0, staked: false, demo: true };
+  let stake = PRACTICE;
+  let signedIn = false;
 
   let tickTimer = null;
   let hudAt = 0;
@@ -111,10 +133,32 @@ export function createUI({ settings, onStart, onThemeChange }) {
     onStart();
   });
 
-  function showDeath({ orbs, peak, eaten, elapsed, best }) {
+  const ordinal = n => {
+    if (!n) return "—";
+    const s = ["th", "st", "nd", "rd"], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  };
+
+  function renderCareer(stats) {
+    const box = $("careerBox");
+    if (!stats || !stats.matches) { box.classList.remove("on"); return; }
+    box.classList.add("on");
+    $("stMatches").textContent = stats.matches;
+    const mins = Math.round(stats.timePlayed / 60);
+    $("stTime").textContent = mins >= 60
+      ? `${Math.floor(mins / 60)}h ${mins % 60}m`
+      : `${mins}m`;
+    $("stBest").textContent = ordinal(stats.bestPosition);
+    $("stFirsts").textContent = stats.firstPlaces;
+    $("stEaten").textContent = stats.playersEaten;
+    $("stStreak").textContent = stats.longestStreak;
+  }
+
+  function showDeath({ orbs, peak, eaten, elapsed, best, rank, of }) {
     $("finalOrbs").textContent = orbs;
     $("finalMass").textContent = Math.round(peak);
     $("finalCells").textContent = eaten;
+    $("finalPos").textContent = rank ? `${ordinal(rank)} of ${of}` : "—";
     $("finalTime").textContent = mmss(elapsed);
     $("finalBest").textContent = `${best} orbs`;
     $("overLine").textContent = orbs === 0
@@ -126,5 +170,149 @@ export function createUI({ settings, onStart, onThemeChange }) {
 
   function setMode(text) { if (el.mode) el.mode.textContent = text; }
 
-  return { update, bumpCounter, showDeath, setMode, el };
+  // ── wager menu ────────────────────────────────────────────────────────────
+
+  function renderAccount() {
+    el.bal.innerHTML = `${formatUsdc(account.balance)}<span>USDC</span>`;
+    el.potValue.textContent = formatUsdc(account.pot);
+    el.potBar.hidden = !(account.pot > 0);
+
+    // Cannot stake what you do not have, and cannot stake at all as a guest.
+    const affordable = account.balance >= STAKE_1_USDC;
+    el.stake1.disabled = !affordable || !signedIn;
+    if (!affordable && stake !== PRACTICE) setStake(PRACTICE);
+
+    el.badge.hidden = !account.demo;
+  }
+
+  function setAccount(next) {
+    account = { ...account, ...next };
+    renderAccount();
+  }
+
+  function setStake(units) {
+    stake = units;
+    el.stakeFree.setAttribute("aria-checked", String(units === PRACTICE));
+    el.stake1.setAttribute("aria-checked", String(units === STAKE_1_USDC));
+  }
+
+  el.stakeFree.addEventListener("click", () => setStake(PRACTICE));
+  el.stake1.addEventListener("click", () => { if (!el.stake1.disabled) setStake(STAKE_1_USDC); });
+
+  el.ramp.addEventListener("click", () => onRamp?.("deposit"));
+
+  function setRampNote(text) { el.rampNote.textContent = text; }
+
+  // Offline play has no server ledger, so wagering is meaningless there:
+  // a client-side balance is just free money.
+  function setWagerAvailable(available, reason) {
+    el.stake1.disabled = !available;
+    el.ramp.disabled = !available;
+    if (!available) {
+      setStake(PRACTICE);
+      if (reason) setRampNote(reason);
+    }
+  }
+
+  $("btnCashOut").addEventListener("click", () => onCashOut?.());
+
+  renderAccount();
+
+  // ── accounts ──────────────────────────────────────────────────────────────
+
+  let mode = "login";   // or "signup"
+
+  function setAuthMode(next) {
+    mode = next;
+    $("tabSignIn").setAttribute("aria-selected", String(next === "login"));
+    $("tabSignUp").setAttribute("aria-selected", String(next === "signup"));
+    $("fNameWrap").hidden = next !== "signup";
+    $("fPass").setAttribute("autocomplete", next === "signup" ? "new-password" : "current-password");
+    $("btnAuth").textContent = next === "signup" ? "Create account" : "Sign in";
+    $("authHint").textContent = next === "signup"
+      ? "Password must be at least 8 characters. Your display name is what appears on your cell."
+      : "Play as a guest without an account, but wagering needs one.";
+    $("authError").textContent = "";
+  }
+
+  function renderAuth(account) {
+    signedIn = !!account;
+    el.signedOut.hidden = signedIn;
+    el.signedIn.hidden = !signedIn;
+    if (account) {
+      el.whoName.textContent = account.displayName;
+      el.whoUser.textContent = `@${account.username}`;
+      $("fPass").value = "";
+    }
+    // Wagering requires identity: a guest balance belongs to whoever opens
+    // the next socket, which is to say nobody.
+    el.stake1.disabled = !signedIn || account?.canWager === false;
+    if (!signedIn) {
+      setStake(PRACTICE);
+      setRampNote("Sign in to wager. Guest play is practice only.");
+    }
+  }
+
+  $("tabSignIn").addEventListener("click", () => setAuthMode("login"));
+  $("tabSignUp").addEventListener("click", () => setAuthMode("signup"));
+
+  async function submitAuth() {
+    const btn = $("btnAuth");
+    const err = $("authError");
+    err.textContent = "";
+    btn.disabled = true;
+    btn.textContent = mode === "signup" ? "Creating…" : "Signing in…";
+    try {
+      await auth?.[mode === "signup" ? "signup" : "login"](
+        $("fUser").value,
+        $("fPass").value,
+        $("fName").value
+      );
+    } catch (e) {
+      err.textContent = e.message || "Something went wrong.";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = mode === "signup" ? "Create account" : "Sign in";
+    }
+  }
+
+  $("btnAuth").addEventListener("click", submitAuth);
+  for (const id of ["fUser", "fPass", "fName"]) {
+    $(id).addEventListener("keydown", e => { if (e.key === "Enter") submitAuth(); });
+  }
+
+  $("btnSignOut").addEventListener("click", () => auth?.signOut());
+
+  $("btnRename").addEventListener("click", () => {
+    el.renameBox.hidden = !el.renameBox.hidden;
+    if (!el.renameBox.hidden) {
+      $("fNewName").value = el.whoName.textContent;
+      $("fNewName").focus();
+    }
+  });
+
+  async function submitRename() {
+    const err = $("renameError");
+    err.textContent = "";
+    try {
+      await auth?.rename($("fNewName").value);
+      el.renameBox.hidden = true;
+    } catch (e) {
+      err.textContent = e.message || "Could not change name.";
+    }
+  }
+
+  $("btnSaveName").addEventListener("click", submitRename);
+  $("fNewName").addEventListener("keydown", e => { if (e.key === "Enter") submitRename(); });
+
+  setAuthMode("login");
+  renderAuth(null);
+  renderAccount();
+
+  return {
+    update, bumpCounter, showDeath, setMode, el,
+    setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
+    getStake: () => stake,
+    isSignedIn: () => signedIn
+  };
 }

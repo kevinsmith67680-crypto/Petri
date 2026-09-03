@@ -1,0 +1,58 @@
+# GitHub Pages workflow (OPTIONAL, not active).
+#
+# This is NOT in .github/workflows/ on purpose. A classic personal access
+# token cannot push files under .github/workflows/ unless it also carries the
+# 'workflow' scope, and the push fails with:
+#
+#   refusing to allow a Personal Access Token to create or update workflow
+#
+# You only need this if you want to host the CLIENT on GitHub Pages
+# separately from the server. If Render serves both (the usual setup), skip it.
+#
+# To enable: add the 'workflow' scope to your token, then
+#   mkdir -p .github/workflows && cp docs/pages-workflow.yml.example .github/workflows/pages.yml
+
+# Publishes the client to GitHub Pages.
+#
+# Pages is static hosting: it serves index.html, client/ and shared/, so the
+# offline game works perfectly. It cannot run server/index.js, so for player
+# vs player you also need a host that runs Node — set SERVER_URL in
+# client/config.js to point at it.
+name: Deploy client to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the static client
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -r client _site/
+          cp -r shared _site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

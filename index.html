@@ -191,6 +191,133 @@
   .card button:hover{ opacity:.84; }
   .card button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
 
+  /* ── account panel ── */
+
+  .auth{ margin-top:20px; }
+  .auth[hidden]{ display:none; }
+  .tabs{ display:flex; gap:18px; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  .tabs button{
+    margin:0; padding:0 0 9px; background:none; border:none;
+    font-family:inherit; font-size:13px; font-weight:600;
+    color:var(--muted); cursor:pointer;
+    border-bottom:2px solid transparent; border-radius:0;
+    transition:color .14s ease, border-color .14s ease;
+  }
+  .tabs button:hover{ color:var(--text); opacity:1; }
+  .tabs button[aria-selected="true"]{ color:var(--text); border-bottom-color:var(--accent); }
+
+  .field{ display:grid; gap:5px; margin-bottom:11px; }
+  .field label{ font-size:12px; color:var(--muted); }
+  .field input{
+    font-family:inherit; font-size:13.5px;
+    padding:10px 12px; border-radius:5px;
+    background:var(--bg); color:var(--text);
+    border:1px solid var(--line-2);
+  }
+  .field input:focus{ outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent; }
+  .hint{ font-size:11.5px; color:var(--muted); margin-top:-4px; margin-bottom:11px; }
+  .err{ font-size:12.5px; color:#c4453b; margin-top:2px; min-height:1em; }
+  html[data-theme="dark"] .err{ color:#f08a80; }
+  .auth .go{ margin-top:4px; width:100%; }
+
+  .who{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:12px 0; border-bottom:1px solid var(--line);
+  }
+  .who .name{ display:grid; gap:2px; }
+  .who .name b{ font-size:15px; font-weight:600; }
+  .who .name i{ font-style:normal; font-size:11.5px; color:var(--muted); }
+  .who button{
+    margin:0; padding:7px 12px; font-size:12px;
+    background:transparent; color:var(--text); border:1px solid var(--line-2);
+    border-radius:4px; cursor:pointer; font-family:inherit; font-weight:600;
+  }
+  .who button:hover{ opacity:1; border-color:var(--text); }
+  .rename{ margin-top:12px; }
+  .rename[hidden]{ display:none; }
+  .rename .row2{ display:flex; gap:8px; }
+  .rename input{ flex:1; }
+  .rename button{ margin:0; padding:0 14px; font-size:12.5px; }
+
+  .career{ margin-top:12px; display:none; grid-template-columns:1fr 1fr; gap:7px 16px; font-size:12.5px; }
+  .career.on{ display:grid; }
+  .career div{ display:flex; justify-content:space-between; gap:10px; }
+  .career i{ font-style:normal; color:var(--muted); }
+  .career em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
+
+  /* ── pregame menu ── */
+
+  .badge{
+    display:inline-block;
+    font-size:10.5px; font-weight:700; letter-spacing:.06em;
+    padding:4px 9px; border-radius:3px;
+    background:#f0e3b8; color:#4a3b0d; border:1px solid #d8c47e;
+    margin-bottom:14px;
+  }
+  html[data-theme="dark"] .badge{ background:#3a3216; color:#f0dfa4; border-color:#5c4f22; }
+
+  .wallet{
+    margin-top:22px;
+    border:1px solid var(--line); border-radius:6px;
+    padding:14px 16px;
+  }
+  .wallet .bal{
+    display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+  }
+  .wallet .bal i{ font-style:normal; font-size:12.5px; color:var(--muted); }
+  .wallet .bal b{
+    font-size:26px; font-weight:600; letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;
+  }
+  .wallet .bal b span{ font-size:13px; font-weight:500; color:var(--muted); margin-left:4px; }
+  .ramp{
+    margin-top:12px; width:100%;
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:9px 12px; border-radius:4px; cursor:pointer;
+    background:transparent; color:var(--text);
+    border:1px dashed var(--line-2);
+    transition:border-color .14s ease;
+  }
+  .ramp:hover{ border-color:var(--text); }
+  .ramp:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .ramp-note{ margin-top:8px; font-size:11.5px; line-height:1.45; color:var(--muted); }
+
+  .stakes{ margin-top:20px; display:grid; gap:8px; }
+  .stakes > i{ font-style:normal; font-size:12.5px; color:var(--muted); }
+  .stake{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    width:100%; text-align:left;
+    font-family:inherit; font-size:13.5px;
+    padding:12px 14px; border-radius:5px; cursor:pointer;
+    background:transparent; color:var(--text);
+    border:1px solid var(--line-2);
+    transition:border-color .14s ease, background .14s ease;
+  }
+  .stake:hover{ border-color:var(--text); }
+  .stake[aria-checked="true"]{ border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+  .stake[disabled]{ opacity:.45; cursor:not-allowed; }
+  .stake em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
+  .stake small{ display:block; font-size:11.5px; color:var(--muted); margin-top:2px; }
+  .stake:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* pot readout + cash out, shown only during a wagered run */
+  .pot{
+    position:fixed; top:26px; left:50%; transform:translateX(-50%);
+    z-index:6; display:flex; align-items:center; gap:14px;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:6px; padding:9px 10px 9px 15px;
+    box-shadow:var(--shadow);
+  }
+  .pot[hidden]{ display:none; }
+  .pot i{ font-style:normal; font-size:12px; color:var(--muted); }
+  .pot b{ font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .pot button{
+    font-family:inherit; font-size:12.5px; font-weight:600;
+    padding:7px 13px; border-radius:4px; cursor:pointer;
+    background:var(--text); color:var(--panel); border:none;
+  }
+  .pot button:hover{ opacity:.85; }
+
   /* ── touch ── */
 
   .touch{ position:fixed; right:24px; bottom:28px; z-index:6; display:none; gap:10px; }
@@ -274,6 +401,12 @@
   <canvas class="minimap" id="minimap" aria-hidden="true"></canvas>
 </div>
 
+<div class="pot" id="potBar" hidden>
+  <i>At risk</i>
+  <b id="potValue">0.00</b>
+  <button id="btnCashOut" type="button">Cash out</button>
+</div>
+
 <div class="touch">
   <button id="btnSplit" type="button">Split</button>
   <button id="btnFeed" type="button">Feed</button>
@@ -281,8 +414,82 @@
 
 <div class="veil" id="startVeil">
   <div class="card">
+    <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
     <h2>Petri</h2>
     <p>You are one cell on a crowded plate. Absorb the orbs to grow, swallow anything smaller than you, and stay clear of anything larger. Green spores burst you apart if you swallow one.</p>
+
+    <div class="auth" id="authSignedOut">
+      <div class="tabs" role="tablist">
+        <button id="tabSignIn" type="button" role="tab" aria-selected="true">Sign in</button>
+        <button id="tabSignUp" type="button" role="tab" aria-selected="false">Create account</button>
+      </div>
+      <div class="field">
+        <label for="fUser">Username</label>
+        <input id="fUser" type="text" autocomplete="username" spellcheck="false" maxlength="20">
+      </div>
+      <div class="field" id="fNameWrap" hidden>
+        <label for="fName">Display name</label>
+        <input id="fName" type="text" autocomplete="nickname" maxlength="16">
+      </div>
+      <div class="field">
+        <label for="fPass">Password</label>
+        <input id="fPass" type="password" autocomplete="current-password" maxlength="128">
+      </div>
+      <p class="hint" id="authHint">Play as a guest without an account, but wagering needs one.</p>
+      <p class="err" id="authError"></p>
+      <button class="go" id="btnAuth" type="button">Sign in</button>
+    </div>
+
+    <div class="auth" id="authSignedIn" hidden>
+      <div class="who">
+        <div class="name">
+          <b id="whoName">—</b>
+          <i id="whoUser">—</i>
+        </div>
+        <div>
+          <button id="btnRename" type="button">Rename</button>
+          <button id="btnSignOut" type="button">Sign out</button>
+        </div>
+      </div>
+      <div class="career" id="careerBox">
+        <div><i>Matches</i><em id="stMatches">0</em></div>
+        <div><i>Time played</i><em id="stTime">0m</em></div>
+        <div><i>Best finish</i><em id="stBest">—</em></div>
+        <div><i>1st places</i><em id="stFirsts">0</em></div>
+        <div><i>Players eaten</i><em id="stEaten">0</em></div>
+        <div><i>Longest streak</i><em id="stStreak">0</em></div>
+      </div>
+
+      <div class="rename" id="renameBox" hidden>
+        <div class="row2">
+          <input id="fNewName" type="text" maxlength="16" placeholder="New display name">
+          <button id="btnSaveName" type="button">Save</button>
+        </div>
+        <p class="err" id="renameError"></p>
+      </div>
+    </div>
+
+    <div class="wallet">
+      <div class="bal">
+        <i>Balance</i>
+        <b id="balValue">—<span>USDC</span></b>
+      </div>
+      <button class="ramp" id="btnRamp" type="button">Connect wallet</button>
+      <p class="ramp-note" id="rampNote">No payment ramp is connected. Balances are demo credits with no cash value.</p>
+    </div>
+
+    <div class="stakes" role="radiogroup" aria-label="Stake">
+      <i>Stake</i>
+      <button class="stake" id="stakeFree" type="button" role="radio" aria-checked="true">
+        <span>Practice<small>Free. Nothing at risk.</small></span>
+        <em>0.00</em>
+      </button>
+      <button class="stake" id="stake1" type="button" role="radio" aria-checked="false">
+        <span>Wager<small>Winner takes the pot. Lose and it is gone.</small></span>
+        <em>1.00</em>
+      </button>
+    </div>
+
     <div class="keys">
       <div><kbd>Mouse</kbd><p>Drift toward the pointer</p></div>
       <div><kbd>Space</kbd><p>Split forward</p></div>
@@ -300,6 +507,7 @@
     <div class="tally">
       <div>Peak mass <em id="finalMass">0</em></div>
       <div>Cells eaten <em id="finalCells">0</em></div>
+      <div>Finished <em id="finalPos">—</em></div>
       <div>Survived <em id="finalTime">0:00</em></div>
       <div>Best run <em id="finalBest">0</em></div>
     </div>

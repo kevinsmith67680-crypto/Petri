@@ -26,11 +26,11 @@ const INTERP_MS = (1000 / TICK_HZ) * 2;   // render ~100ms behind the server
 const AIM_HZ = 20;                         // no point sending faster than the tick
 const TOMBSTONE_SEC = 1.0;                 // keep eaten pellets this long past death
 
-export function createSocketConnection({ url, name = "You" } = {}) {
+export function createSocketConnection({ url, name = "You", stake = 0, token = null } = {}) {
   const socket = new WebSocket(url);
   socket.binaryType = "arraybuffer";
 
-  const listeners = { event: [], welcome: [], close: [], error: [] };
+  const listeners = { event: [], welcome: [], close: [], error: [], account: [] };
   const emit = (kind, payload) => listeners[kind].forEach(fn => fn(payload));
 
   const frames = [];              // recent snapshots for interpolation
@@ -44,7 +44,7 @@ export function createSocketConnection({ url, name = "You" } = {}) {
   let decodeErrors = 0;
 
   socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: MSG.JOIN, name }));
+    socket.send(JSON.stringify({ type: MSG.JOIN, name, stake, token }));
   });
 
   socket.addEventListener("message", ev => {
@@ -55,6 +55,10 @@ export function createSocketConnection({ url, name = "You" } = {}) {
       if (msg.type === MSG.WELCOME) {
         myNid = msg.nid;
         emit("welcome", msg);
+        emit("account", msg);
+      } else if (msg.type === "account" || msg.type === "account_error" ||
+                 msg.type === "ramp_result") {
+        emit("account", msg);
       }
       return;
     }
@@ -182,6 +186,26 @@ export function createSocketConnection({ url, name = "You" } = {}) {
         me: { ...snap.me, id: myNid },
         board: board.map((r, i) => ({ id: r.you ? myNid : `x${i}`, name: r.name, mass: r.mass }))
       };
+    },
+
+    // Money actions travel as text frames: they are rare, and keeping them off
+    // the 20Hz binary path means the hot loop stays 5 bytes per message.
+    sendCashOut() {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "cashout" }));
+      }
+    },
+
+    sendRename() {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "rename" }));
+      }
+    },
+
+    sendRamp(action) {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ramp", action }));
+      }
     },
 
     close() { socket.close(); }

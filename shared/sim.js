@@ -123,6 +123,9 @@ export function addPlayer(world, { id, name, bot = false, ci = null }) {
     actions: [],             // queued "split" / "eject" this tick
     alive: false,
     respawnAt: 0,
+    spawnedAt: 0,
+    rank: 0,          // live leaderboard position, refreshed each tick
+    of: 0,
     orbs: 0,
     eaten: 0,
     peak: START_MASS,
@@ -141,6 +144,9 @@ export function spawnPlayer(world, player, mass = START_MASS) {
   const p = spawnPoint(world);
   player.cells = [makeCell(world, p.x, p.y, mass, player.ci)];
   player.alive = true;
+  player.spawnedAt = world.time;
+  player.rank = 0;
+  player.of = 0;
   player.input.x = 0;
   player.input.y = 0;
   player.actions.length = 0;
@@ -472,13 +478,32 @@ export function stepWorld(world, dt) {
     ent.peak = Math.max(ent.peak, totalMass(ent));
   }
 
+  // Refresh standings before combat. A player whose cells are eaten this tick
+  // has zero mass by the time the death is detected, so their finishing
+  // position has to be read from the moment before the fatal bite.
+  const standings = [...world.players.values()]
+    .filter(p => p.alive && p.cells.length)
+    .sort((a, b) => totalMass(b) - totalMass(a));
+  standings.forEach((p, i) => { p.rank = i + 1; p.of = standings.length; });
+
   cellCombat(world);
 
   for (const ent of world.players.values()) {
     if (ent.alive && ent.cells.length === 0) {
       ent.alive = false;
       ent.respawnAt = world.time + rand(world, 2.5, 5);
-      world.events.push({ t: "death", id: ent.id });
+      // Everything a match record needs travels with the event, because the
+      // player object is reset the moment they respawn.
+      world.events.push({
+        t: "death",
+        id: ent.id,
+        rank: ent.rank,
+        of: ent.of,
+        orbs: ent.orbs,
+        eaten: ent.eaten,
+        peak: Math.round(ent.peak),
+        duration: Math.max(0, world.time - ent.spawnedAt)
+      });
     }
   }
 

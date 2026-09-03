@@ -6,12 +6,16 @@
   "description": "An agar.io-style game with a shared simulation, an authoritative server, and a thin client.",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node test/sim.test.js && node test/protocol.test.js"
+    "test": "node test/sim.test.js && node test/protocol.test.js && node test/wager.test.js && node test/accounts.test.js && node test/backend.test.js",
+    "test:db": "node test/backend.test.js"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
   "engines": {
     "node": ">=18"
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.0"
   }
 }
