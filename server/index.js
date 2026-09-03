@@ -154,9 +154,16 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       ok: true,
       players: clients.size,
-      tick: world.tick,
+      worldTick: world.tick,
       demo: !ramp.isReal,
-      storage: DATABASE_URL ? "postgres" : "memory"
+      storage: DATABASE_URL ? "postgres" : "memory",
+      tick: {
+        hz: TICK_HZ,
+        budgetMs: +(1000 / TICK_HZ).toFixed(1),
+        avgMs: +tickCost.avgMs.toFixed(2),
+        worstMs: +tickCost.worstMs.toFixed(2),
+        overruns: tickCost.behind
+      }
     }));
     return;
   }
@@ -771,8 +778,14 @@ function startRound() {
 
 let lastTick = process.hrtime.bigint();
 
+// Rolling tick cost, exposed on /health. A server that cannot hold its tick
+// feels exactly like bad netcode from the player's side, so it needs to be
+// possible to tell the two apart without guessing.
+const tickCost = { avgMs: 0, worstMs: 0, behind: 0 };
+
 setInterval(() => {
-  const now = process.hrtime.bigint();
+  const tickStart = process.hrtime.bigint();
+  const now = tickStart;
   // Measured elapsed time, not the nominal interval, so a busy event loop
   // slows the tick rather than silently changing game speed.
   const dt = Math.min(Number(now - lastTick) / 1e9, 0.25);
@@ -820,6 +833,11 @@ setInterval(() => {
     const eye = meta.spectateId ? world.players.get(meta.spectateId) : null;
     ws.send(encodeSnapshot(world, player, meta.state, roundView(), eye));
   }
+
+  const cost = Number(process.hrtime.bigint() - tickStart) / 1e6;
+  tickCost.avgMs = tickCost.avgMs * 0.95 + cost * 0.05;
+  tickCost.worstMs = Math.max(tickCost.worstMs * 0.999, cost);
+  if (cost > 1000 / TICK_HZ) tickCost.behind++;
 }, 1000 / TICK_HZ);
 
 // The mass readout is display-only, but if it is ever mistaken for a payout
@@ -845,8 +863,8 @@ if (MICRO_PER_MASS > 0) {
 
 server.listen(PORT, () => {
   console.log(`Petri server on port ${PORT}`);
-  console.log(`  offline : http://localhost:${PORT}/`);
-  console.log(`  online  : http://localhost:${PORT}/?mode=online`);
+  console.log(`  online  : http://localhost:${PORT}/?mode=online   <- accounts + live play`);
+  console.log(`  offline : http://localhost:${PORT}/                 guest, bots, no accounts`);
   console.log(`  origins : ${ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(", ") : "any (set ALLOWED_ORIGINS in production)"}`);
   console.log(`  mode    : live PvP, ${ROUND_SECONDS}s rounds, ${BOTS} bots`);
   console.log(`  lobby   : starts at ${LOBBY_MIN} ready, capacity ${LOBBY_MAX}`);

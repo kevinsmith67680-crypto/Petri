@@ -24,8 +24,9 @@ export const DEFAULT_BOTS = 14;     // guests only; the live arena runs botless
 
 export const START_MASS = 20;
 export const PELLET_MASS = 3.375;   // mass gained per orb
-export const EJECT_MASS = 14;       // mass spent ejecting
-export const EJECT_KEEP = 10;       // mass the ejected blob carries
+export const EJECT_MASS = 16;       // mass spent ejecting
+export const EJECT_KEEP = 13;       // mass the ejected blob carries
+export const ORB_RADIUS = 6;        // a plain orb, fixed size regardless of mass
 export const VIRUS_MASS = 110;
 export const VIRUS_EAT_RATIO = 1.15; // how much bigger you must be to pop one
 export const VIRUS_PIECES = 9;       // fragments a virus scatters you into
@@ -45,6 +46,12 @@ export const BOT_NAMES = [
 ];
 
 export const radiusOf = m => Math.sqrt(m) * 4;
+
+// Plain orbs are drawn at a fixed size; ejected mass is a real blob whose
+// radius follows its mass, like a small cell. One function so the drawn size
+// and the size you can actually eat are never allowed to disagree.
+export const pelletRadius = p =>
+  p.mass > PELLET_MASS ? radiusOf(p.mass) : ORB_RADIUS;
 
 // ── pellet spatial index ────────────────────────────────────────────────────
 //
@@ -241,30 +248,40 @@ export function centroid(ent) {
 
 // ── mechanics ───────────────────────────────────────────────────────────────
 
+// Movement for a single cell, exported so the CLIENT can run exactly this
+// code to predict its own motion instead of waiting for a round trip. If the
+// two ever diverge, prediction drifts and the correction becomes visible — so
+// there must only be one copy of this maths, and this is it.
+export function advanceCell(c, tx, ty, dt) {
+  const dx = tx - c.x, dy = ty - c.y;
+  const d = Math.hypot(dx, dy);
+  const r = radiusOf(c.mass);
+  if (d > 1) {
+    const speed = 10.2 * Math.pow(c.mass, -0.24) * 60;
+    // Ease off as the aim point enters the cell so it settles instead of
+    // jittering around the target.
+    const throttle = clamp(d / (r * 0.9), 0, 1);
+    c.x += (dx / d) * speed * throttle * dt;
+    c.y += (dy / d) * speed * throttle * dt;
+  }
+  c.x += (c.vx || 0) * 60 * dt;
+  c.y += (c.vy || 0) * 60 * dt;
+  const friction = Math.pow(0.86, dt * 60);
+  c.vx = (c.vx || 0) * friction;
+  c.vy = (c.vy || 0) * friction;
+  if (Math.abs(c.vx) < 0.02) c.vx = 0;
+  if (Math.abs(c.vy) < 0.02) c.vy = 0;
+
+  c.x = clamp(c.x, r, WORLD - r);
+  c.y = clamp(c.y, r, WORLD - r);
+}
+
 function moveCells(world, ent, tx, ty, dt) {
   for (const c of ent.cells) {
-    const dx = tx - c.x, dy = ty - c.y;
-    const d = Math.hypot(dx, dy);
-    const r = radiusOf(c.mass);
-    if (d > 1) {
-      const speed = 10.2 * Math.pow(c.mass, -0.24) * 60;
-      // Ease off as the aim point enters the cell so it settles instead of
-      // jittering around the target.
-      const throttle = clamp(d / (r * 0.9), 0, 1);
-      c.x += (dx / d) * speed * throttle * dt;
-      c.y += (dy / d) * speed * throttle * dt;
-    }
-    c.x += c.vx * 60 * dt;
-    c.y += c.vy * 60 * dt;
-    const friction = Math.pow(0.86, dt * 60);
-    c.vx *= friction; c.vy *= friction;
-    if (Math.abs(c.vx) < 0.02) c.vx = 0;
-    if (Math.abs(c.vy) < 0.02) c.vy = 0;
-
+    advanceCell(c, tx, ty, dt);
+    // Decay stays server-side: it is a rule, not motion, and predicting it
+    // would have the client quietly disagreeing about mass.
     if (c.mass > DECAY_ABOVE) c.mass -= c.mass * 0.0022 * dt;
-
-    c.x = clamp(c.x, r, WORLD - r);
-    c.y = clamp(c.y, r, WORLD - r);
   }
 }
 
@@ -338,14 +355,27 @@ function doSplit(world, ent, tx, ty) {
 
 function doEject(world, ent, tx, ty) {
   for (const c of ent.cells) {
-    if (c.mass < 32) continue;
+    // Ejecting must cost more than it yields, or it becomes a mass printer.
+    if (c.mass < EJECT_MASS * 2) continue;
     const a = aimFor(c, tx, ty);
     c.mass -= EJECT_MASS;
     const r = radiusOf(c.mass);
-    world.pellets.push(makePellet(
-      world, c.x + a.x * (r + 6), c.y + a.y * (r + 6),
+    const blobR = radiusOf(EJECT_KEEP);
+
+    // Spawn clear of the owner's own eating reach. Placed any closer and the
+    // blob is swallowed again the instant it appears, which made ejecting a
+    // no-op that quietly returned most of the mass.
+    const gap = r + blobR + 8;
+    const blob = makePellet(
+      world, c.x + a.x * gap, c.y + a.y * gap,
       EJECT_KEEP, a.x * 22, a.y * 22, c.ci
-    ));
+    );
+
+    // Belt and braces: even a cell that turns and chases its own blob cannot
+    // reclaim it for a moment. Anyone else may take it immediately.
+    blob.owner = ent.id;
+    blob.immuneUntil = world.time + 0.4;
+    world.pellets.push(blob);
   }
 }
 
@@ -369,11 +399,14 @@ function burst(world, ent, cell) {
 function eatPellets(world, ent) {
   for (const c of ent.cells) {
     const r = radiusOf(c.mass);
-    const r2 = r * r;
-    forEachPelletNear(world, c.x, c.y, r, p => {
+    forEachPelletNear(world, c.x, c.y, r + ORB_RADIUS * 3, p => {
       if (p.dead) return;
+      if (p.owner === ent.id && world.time < p.immuneUntil) return;
       const dx = p.x - c.x, dy = p.y - c.y;
-      if (dx * dx + dy * dy < r2) {
+      // An ejected blob is large enough that ignoring its radius would mean
+      // visibly overlapping it without eating it.
+      const reach = r + pelletRadius(p) * 0.6;
+      if (dx * dx + dy * dy < reach * reach) {
         c.mass += p.mass;
         p.dead = true;
         world.pelletsDirty = true;

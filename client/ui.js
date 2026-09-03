@@ -348,6 +348,15 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     if (!signedIn) setStake(PRACTICE);
   }
 
+  // Guest mode has no account API. Replace the form with an explanation
+  // instead of leaving controls that throw when clicked.
+  function setAuthAvailable(available, reason) {
+    if (available) return;
+    el.signedOut.innerHTML =
+      `<p class="hint" style="margin:0">${escapeHtml(reason || "Accounts are unavailable.")}</p>`;
+    el.signedOut.hidden = false;
+  }
+
   $("tabSignIn").addEventListener("click", () => setAuthMode("login"));
   $("tabSignUp").addEventListener("click", () => setAuthMode("signup"));
 
@@ -407,6 +416,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   return {
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
+    setAuthAvailable,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode,
     setReady: v => { iAmReady = v; },

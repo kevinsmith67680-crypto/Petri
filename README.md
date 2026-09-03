@@ -331,6 +331,44 @@ Payouts stay bounded by what was actually staked — your pot, settled on death,
 
 If you want mass to genuinely determine payouts, the rate has to be **derived from the pot rather than fixed**: your share of the round's real prize pool, proportional to your mass. That keeps total payouts equal to total stakes by construction. `MICRO_PER_MASS` in `shared/wager.js` adjusts the display; making it real is a different and larger change.
 
+### Ejecting mass
+
+Pressing W throws a blob forward at the cost of a little mass. Three things were wrong with it:
+
+**The blob rendered as an ordinary orb.** `EJECT_KEEP` was exactly 10, and both the wire encoder and the offline adapter flagged a pellet as large with `p.mass > 10` — strictly greater. So ejected mass failed its own threshold and drew at orb size. The comparison is now against `PELLET_MASS` rather than a literal that happened to equal the thing it was testing.
+
+**The owner ate it back instantly.** Blobs spawned at `radius + 6`, inside the cell's own eating reach, so most of the mass came straight back — a mass-200 cell ejecting ended up at 197 instead of 184. Blobs now spawn clear of that reach, and carry a 0.4-second immunity from their owner specifically. Anyone else can take them immediately.
+
+**Collision ignored the blob's size.** `eatPellets` only used the eater's radius, so you could visibly overlap a 14-unit blob without picking it up. `pelletRadius` is now a single exported function used by both the collision check and the renderer, so the size you see and the size you can eat cannot drift apart.
+
+Ejecting now costs 16 mass and yields a 13-mass blob at radius 14.4, against an orb's fixed 6 — a 2.4× size difference, and a net 3-mass loss so it can't be used to print mass. Blobs are drawn with a membrane and gloss like small cells rather than as flat dots, which is what they behave like.
+
+### Responsiveness
+
+Without prediction, every movement waits for a full round trip and is then rendered in the past. Measured against a 80ms RTT connection, that was roughly **230ms from input to pixel** — well past the ~120ms where controls start feeling sluggish, and worse if Render's region is far from the player.
+
+**Your own cells are now predicted locally.** `advanceCell` is exported from `shared/sim.js` and the client runs *exactly that function* against your current aim every frame, so your cell moves the instant you do. There is deliberately only one copy of the movement maths: if the client and server versions ever diverged, prediction would drift and every correction would become a visible twitch.
+
+The server still decides everything. Prediction only removes the wait before you see your own input; if the server disagrees, the server wins.
+
+**Reconciliation is age-compensated.** A snapshot describes where you were when it was sent, not where you are. Correcting straight onto it would drag your cell backwards by the flight time and undo the prediction entirely. So the server position is first replayed forward by the packet's age, and the correction targets that. In a 20-second test at 120ms RTT with the aim changing constantly, this halved the steady-state error from 28 world units to 13 — under half a cell radius, which is invisible.
+
+Errors beyond 220 units snap rather than slide. That size of gap is not a wrong guess but stale state — a split, a virus pop, a respawn — and sliding across the arena to catch up would look far worse than a jump.
+
+Also changed: aim now sends at 30Hz rather than 20 (5 bytes a message, so ~50 B/s for up to half a tick less lag), and the interpolation buffer for *other* players dropped from 2 ticks to 1.5. **The camera follows the predicted centroid**, which matters more than it sounds — a camera lagging your input makes everything else feel sluggish too.
+
+Prediction is disabled while spectating, where `mine` marks somebody else's cells and predicting them from your aim would send them wandering off.
+
+### Is it the netcode or the server?
+
+A server that cannot hold its tick feels identical to bad netcode from the player's side. `GET /health` now reports:
+
+```json
+"tick": { "hz": 20, "budgetMs": 50, "avgMs": 1.51, "worstMs": 57.78, "overruns": 1 }
+```
+
+`avgMs` well under `budgetMs` means the server is fine and any remaining lag is network. `avgMs` approaching or exceeding the budget, or `overruns` climbing steadily, means the instance is starved — on Render's free 0.1 CPU that happens quickly with bots in the arena. Lower `BOTS` or move up an instance size.
+
 ### Lobby and arena size
 
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
@@ -433,7 +471,7 @@ npm run dev          # test mode, 60 bots, 2-minute rounds
 npm run dev:solo     # 100 bots at full density, 1-minute rounds
 ```
 
-Then open `http://localhost:8080/?mode=online`, create an account, mark yourself ready, and the round starts immediately.
+Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matters. Without it you are a guest playing locally against bots, with no server and therefore no accounts; the sign-in panel is replaced by a note saying so. Create an account, mark yourself ready, and the round starts immediately.
 
 | | Normal | Test mode |
 |---|---|---|

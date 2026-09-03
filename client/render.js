@@ -6,7 +6,7 @@
 // care whether those numbers came from a local simulation or a socket.
 // ---------------------------------------------------------------------------
 
-import { WORLD, radiusOf } from "../shared/sim.js";
+import { WORLD, radiusOf, EJECT_KEEP, ORB_RADIUS } from "../shared/sim.js";
 
 export const CAMERA_ZOOM = 1.5;   // 1 = original framing, 1.5 = 50% closer in
 
@@ -157,11 +157,26 @@ export function createRenderer(canvas, mapCanvas) {
     ctx.strokeStyle = th.edge;
     ctx.strokeRect(0, 0, WORLD, WORLD);
 
+    // Plain orbs are flat dots. Ejected mass is drawn like a small cell —
+    // membrane and gloss — so it reads as projected mass rather than a big
+    // orb, which is what it behaves like.
+    const ejectR = radiusOf(EJECT_KEEP);
     for (const p of view.pellets) {
+      const big = !!p[3];
+      const r = big ? ejectR : ORB_RADIUS;
       ctx.beginPath();
-      ctx.arc(p[0], p[1], p[3] ? 11 : 6, 0, Math.PI * 2);
+      ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
       ctx.fillStyle = colorOf(th, p[2]);
       ctx.fill();
+      if (big) {
+        ctx.lineWidth = Math.max(1, r * 0.09);
+        ctx.strokeStyle = th.membrane;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p[0] - r * 0.19, p[1] - r * 0.21, r * 0.26, 0, Math.PI * 2);
+        ctx.fillStyle = th.gloss;
+        ctx.fill();
+      }
     }
 
     for (const v of view.viruses) drawVirus(th, v, view.time);

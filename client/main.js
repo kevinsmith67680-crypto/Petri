@@ -44,6 +44,9 @@ let lastRunOrbs = 0, lastRunPeak = 0, lastRunEaten = 0;
 // Accounts only exist server-side, so offline play is always a guest.
 const api = MODE === "online" ? createAccountClient() : null;
 
+const OFFLINE_AUTH_MSG =
+  "Accounts need the server. Open this page with ?mode=online to sign in.";
+
 function reconnect() {
   conn?.close?.();
   conn = connect(ui.getStake());
@@ -75,8 +78,15 @@ const ui = createUI({
   onThemeChange: () => {},
   onRamp: action => conn?.sendRamp(action),
   auth: {
-    async login(username, password) { applyAuth(await api.login(username, password)); },
+    // Every one of these guards `api`, which is null in guest mode. Without
+    // the check the click throws "null is not an object" into the console and
+    // the user sees nothing at all.
+    async login(username, password) {
+      if (!api) throw new Error(OFFLINE_AUTH_MSG);
+      applyAuth(await api.login(username, password));
+    },
     async signup(username, password, displayName) {
+      if (!api) throw new Error(OFFLINE_AUTH_MSG);
       applyAuth(await api.signup(username, password, displayName));
     },
     async signOut() {
@@ -86,6 +96,7 @@ const ui = createUI({
       applyAuth(null);
     },
     async rename(displayName) {
+      if (!api) throw new Error(OFFLINE_AUTH_MSG);
       const payload = await api.setDisplayName(displayName);
       applyAuth(payload);
       // Tell the server to re-read the name so it updates on the live cell
@@ -132,7 +143,7 @@ function connect(stake = PRACTICE) {
     : "Wagering needs the server. Offline play is practice only.");
   ui.setMode(MODE === "online"
     ? "Practice against bots. Sign in to face other players."
-    : "Offline, simulation running in this tab");
+    : "Offline. Add ?mode=online to the URL for accounts and live play.");
   return local;
 }
 
@@ -300,6 +311,9 @@ function frame(now) {
     // Aim is sent as an offset from our own centroid in world units, which is
     // viewport-independent — the server can read it without knowing anything
     // about this client's screen size or zoom.
+    // Aim is recomputed every frame against the predicted centroid, so it
+    // reflects where the cell actually is on screen rather than where the
+    // server last said it was.
     const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
     const view = conn.getView();
     if (view && running) conn.sendAim(target.x - view.me.x, target.y - view.me.y);
@@ -361,6 +375,10 @@ function frame(now) {
 // sees their name rather than a sign-in form that briefly flashes.
 if (api) {
   api.restore().then(payload => applyAuth(payload)).catch(() => applyAuth(null));
+} else {
+  // No server, no accounts: hide the form rather than leaving a button that
+  // cannot work.
+  ui.setAuthAvailable(false, OFFLINE_AUTH_MSG);
 }
 
 // Connect immediately so the arena is visible behind the start card.

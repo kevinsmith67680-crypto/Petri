@@ -20,11 +20,27 @@
 import {
   MSG, decodeSnapshot, encodeAim, encodeAction, KEYFRAME_TICKS
 } from "../shared/protocol.js";
-import { TICK_HZ } from "../shared/sim.js";
+import { TICK_HZ, advanceCell } from "../shared/sim.js";
 
-const INTERP_MS = (1000 / TICK_HZ) * 2;   // render ~100ms behind the server
-const AIM_HZ = 20;                         // no point sending faster than the tick
+// Other players are still rendered slightly in the past so their motion is
+// smooth between ticks. 1.5 ticks rather than 2: enough of a buffer to absorb
+// normal jitter, 25ms less lag than before.
+const INTERP_MS = (1000 / TICK_HZ) * 1.5;
+
+// Aim is 5 bytes. Sending it faster than the tick is not wasted — it means
+// the server acts on a fresher vector the moment its tick comes round, which
+// removes up to half a tick of input lag for 50 bytes a second.
+const AIM_HZ = 30;
+
 const TOMBSTONE_SEC = 1.0;                 // keep eaten pellets this long past death
+
+// How hard a wrong prediction is pulled back toward the server. Too low and
+// the client drifts; too high and every correction is a visible twitch.
+const CORRECT_PER_SEC = 6;
+
+// Past this the client is not wrong, it is out of date — a split, a virus
+// pop, or a teleport after respawn. Snap rather than slide across the arena.
+const SNAP_ERROR = 220;
 
 export function createSocketConnection({ url, name = "You", stake = 0, token = null } = {}) {
   const socket = new WebSocket(url);
@@ -42,6 +58,11 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   const pendingAim = { x: 0, y: 0 };
   let myNid = null;
   let decodeErrors = 0;
+
+  // Locally predicted positions for our own cells, keyed by cell id. This is
+  // what removes the round trip from the feel of the controls: we move now,
+  // and reconcile against the server as its snapshots arrive.
+  const predicted = new Map();
 
   socket.addEventListener("open", () => {
     socket.send(JSON.stringify({ type: MSG.JOIN, name, stake, token }));
@@ -114,6 +135,71 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
   const lerp = (a, b, k) => a + (b - a) * k;
 
+  // Reconcile against the NEWEST snapshot, not the interpolated one. Our own
+  // cells should track the freshest truth the server has sent; only other
+  // players are worth rendering in the past.
+  function predict(dt) {
+    const newest = frames[frames.length - 1];
+    if (!newest) return;
+
+    // Spectating means `mine` marks somebody else's cells. Predicting those
+    // from our aim would send them wandering off on their own.
+    if (newest.spectating) { predicted.clear(); return; }
+
+    const authoritative = new Map();
+    for (const c of newest.cells) if (c.mine) authoritative.set(c.i, c);
+
+    for (const id of [...predicted.keys()]) {
+      if (!authoritative.has(id)) predicted.delete(id);
+    }
+
+    // A snapshot describes where we were when it was sent, not where we are.
+    // Correcting straight onto it would drag the cell back by the flight
+    // time and undo the prediction. So the server position is first replayed
+    // forward by the packet's age, and we correct onto THAT. Halves the
+    // steady-state error in testing.
+    const age = clockOffset === null
+      ? 0
+      : Math.max(0, Math.min(0.5, performance.now() / 1000 + clockOffset - newest.time));
+
+    let ax = 0, ay = 0, am = 0;
+    for (const c of authoritative.values()) { ax += c.x * c.m; ay += c.y * c.m; am += c.m; }
+    const atx = (am ? ax / am : 0) + pendingAim.x;
+    const aty = (am ? ay / am : 0) + pendingAim.y;
+
+    for (const [id, c] of authoritative) {
+      let p = predicted.get(id);
+      if (!p) {
+        predicted.set(id, { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 });
+        continue;
+      }
+      p.mass = c.m;
+
+      const ghost = { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 };
+      if (age > 0) advanceCell(ghost, atx, aty, age);
+
+      const ex = ghost.x - p.x, ey = ghost.y - p.y;
+      if (Math.hypot(ex, ey) > SNAP_ERROR) {
+        // Not a wrong guess but stale state: a split, a virus pop, a respawn.
+        p.x = ghost.x; p.y = ghost.y; p.vx = 0; p.vy = 0;
+      } else {
+        const k = Math.min(1, dt * CORRECT_PER_SEC);
+        p.x += ex * k;
+        p.y += ey * k;
+      }
+    }
+
+    if (!predicted.size) return;
+
+    // Aim is an offset from our own centroid, exactly as the server reads it.
+    let sx = 0, sy = 0, sm = 0;
+    for (const p of predicted.values()) { sx += p.x * p.mass; sy += p.y * p.mass; sm += p.mass; }
+    const cx = sm ? sx / sm : 0, cy = sm ? sy / sm : 0;
+    const tx = cx + pendingAim.x, ty = cy + pendingAim.y;
+
+    for (const p of predicted.values()) advanceCell(p, tx, ty, dt);
+  }
+
   // Blend the two frames straddling the render time. Cells are matched by id;
   // anything that appears or vanishes between them is taken as-is, since cells
   // are eaten instantly rather than fading.
@@ -159,12 +245,13 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       if (frame) socket.send(frame);
     },
 
-    update() {
+    update(dt) {
       const now = performance.now();
       if (now - lastAimSent >= 1000 / AIM_HZ && socket.readyState === WebSocket.OPEN) {
         lastAimSent = now;
         socket.send(encodeAim(Math.round(pendingAim.x), Math.round(pendingAim.y)));
       }
+      if (dt) predict(dt);
     },
 
     getView() {
@@ -181,12 +268,30 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         visible.push([p.x, p.y, p.ci, p.big ? 1 : 0]);
       }
 
+      // Our own cells come from prediction; everyone else from interpolation.
+      const cells = snap.cells.map(c => {
+        const p = c.mine ? predicted.get(c.i) : null;
+        return p
+          ? { ...c, x: p.x, y: p.y, m: p.mass, n: names.get(c.o) || "" }
+          : { ...c, n: names.get(c.o) || "" };
+      });
+
+      // The camera must follow the predicted centroid, not the server's. This
+      // is the single biggest part of the feel: a camera lagging behind your
+      // input makes everything else seem sluggish too.
+      let mx = snap.me.x, my = snap.me.y;
+      if (predicted.size && !snap.spectating) {
+        let sx = 0, sy = 0, sm = 0;
+        for (const p of predicted.values()) { sx += p.x * p.mass; sy += p.y * p.mass; sm += p.mass; }
+        if (sm) { mx = sx / sm; my = sy / sm; }
+      }
+
       return {
         time: snap.time,
-        cells: snap.cells.map(c => ({ ...c, n: names.get(c.o) || "" })),
+        cells,
         pellets: visible,
         viruses: snap.viruses,
-        me: { ...snap.me, id: snap.spectating ? snap.eyeNid : myNid },
+        me: { ...snap.me, x: mx, y: my, id: snap.spectating ? snap.eyeNid : myNid },
         round: snap.round,
         spectating: snap.spectating,
         // Resolved from the name cache the snapshot already maintains.

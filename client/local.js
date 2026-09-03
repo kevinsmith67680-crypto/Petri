@@ -17,6 +17,7 @@ import {
   stepWorld, totalMass, centroid, leaderboard, rankOf
 } from "../shared/sim.js";
 import { PHASE_NONE } from "../shared/protocol.js";
+import { PELLET_MASS } from "../shared/sim.js";
 
 export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
   const world = createWorld(seed ?? (Math.random() * 1e9) | 0);
@@ -55,7 +56,7 @@ export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
         }
       }
 
-      const pellets = world.pellets.map(p => [p.x, p.y, p.ci, p.mass > 10 ? 1 : 0]);
+      const pellets = world.pellets.map(p => [p.x, p.y, p.ci, p.mass > PELLET_MASS ? 1 : 0]);
       const viruses = world.viruses.map(v => [v.x, v.y]);
       const c = centroid(me);
       const rank = rankOf(world, "me");

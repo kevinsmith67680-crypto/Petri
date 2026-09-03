@@ -28,7 +28,8 @@
 
 import { Reader, Writer, clampU16 } from "./codec.js";
 import {
-  radiusOf, totalMass, centroid, leaderboard, rankOf, WORLD, forEachPelletNear
+  radiusOf, totalMass, centroid, leaderboard, rankOf, WORLD, forEachPelletNear,
+  PELLET_MASS
 } from "./sim.js";
 
 // Positions travel as u16, so the arena must fit. Guard it here rather than
@@ -247,7 +248,10 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
     w.u16(Math.round(p.x));
     w.u16(Math.round(p.y));
     w.u8(p.ci);
-    w.u8(p.mass > 10 ? 1 : 0);
+    // Compared against the orb mass itself, not a literal. The previous
+    // magic 10 exactly equalled EJECT_KEEP, so ejected blobs failed their own
+    // strictly-greater test and drew as ordinary orbs.
+    w.u8(p.mass > PELLET_MASS ? 1 : 0);
   }
   w.u16(removed.length);
   for (const id of removed) w.u32(id);
