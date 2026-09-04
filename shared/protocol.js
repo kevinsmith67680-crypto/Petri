@@ -59,6 +59,12 @@ export const PHASE_LOBBY = 3;
 const CELL_MINE = 1 << 0;
 const CELL_COOLDOWN = 1 << 1;
 
+// Pellet flags. Velocity is only carried when there is any, so a static orb
+// still costs the same bytes it always did.
+const PELLET_BIG = 1 << 0;
+const PELLET_MINE = 1 << 1;
+const PELLET_MOVING = 1 << 2;
+
 export const KEYFRAME_TICKS = 100;  // 5s at 20Hz
 export const BOARD_TICKS = 10;      // leaderboard at 2Hz; it changes slowly
 
@@ -244,14 +250,27 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   // pellets added / removed
   w.u16(added.length);
   for (const p of added) {
+    const moving = !!(p.vx || p.vy);
     w.u32(p.id);
     w.u16(Math.round(p.x));
     w.u16(Math.round(p.y));
     w.u8(p.ci);
-    // Compared against the orb mass itself, not a literal. The previous
-    // magic 10 exactly equalled EJECT_KEEP, so ejected blobs failed their own
-    // strictly-greater test and drew as ordinary orbs.
-    w.u8(p.mass > PELLET_MASS ? 1 : 0);
+    w.u8(
+      // Compared against the orb mass itself, not a literal. A previous magic
+      // 10 exactly equalled EJECT_KEEP, so blobs failed their own
+      // strictly-greater test and drew as ordinary orbs.
+      (p.mass > PELLET_MASS ? PELLET_BIG : 0) |
+      // So the client can draw your own ejected mass in your own colour.
+      (p.owner === view.id ? PELLET_MINE : 0) |
+      (moving ? PELLET_MOVING : 0)
+    );
+    if (moving) {
+      // A pellet is sent once and never re-sent, so without velocity a thrown
+      // blob would appear at its launch point and never move on screen. The
+      // client extrapolates from this using the same function the server runs.
+      w.i16(Math.round(p.vx));
+      w.i16(Math.round(p.vy));
+    }
   }
   w.u16(removed.length);
   for (const id of removed) w.u32(id);
@@ -321,7 +340,15 @@ export function decodeSnapshot(buffer) {
   const added = [];
   const addCount = r.expect(r.u16(), PELLET_BYTES);
   for (let i = 0; i < addCount; i++) {
-    added.push({ id: r.u32(), x: r.u16(), y: r.u16(), ci: r.u8(), big: r.u8() });
+    const id = r.u32(), x = r.u16(), y = r.u16(), ci = r.u8(), flags = r.u8();
+    const moving = !!(flags & PELLET_MOVING);
+    added.push({
+      id, x, y, ci,
+      big: !!(flags & PELLET_BIG),
+      mine: !!(flags & PELLET_MINE),
+      vx: moving ? r.i16() : 0,
+      vy: moving ? r.i16() : 0
+    });
   }
 
   const removed = [];

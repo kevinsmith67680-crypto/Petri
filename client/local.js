@@ -56,7 +56,8 @@ export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
         }
       }
 
-      const pellets = world.pellets.map(p => [p.x, p.y, p.ci, p.mass > PELLET_MASS ? 1 : 0]);
+      const pellets = world.pellets.map(p =>
+        [p.x, p.y, p.ci, p.mass > PELLET_MASS ? 1 : 0, p.owner === "me" ? 1 : 0]);
       const viruses = world.viruses.map(v => [v.x, v.y]);
       const c = centroid(me);
       const rank = rankOf(world, "me");
@@ -90,6 +91,7 @@ export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
     sendReady() {},
     // Guests play alone against bots; there is nobody worth watching.
     sendSpectate() {},
+    stats() { return { ping: 0, srvMs: 0, hz: 0, budgetMs: 0 }; },
     sendRamp() {},
     sendRename() {},
 

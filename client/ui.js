@@ -203,6 +203,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
 
   bindSwitch("swMap", "map", on => { el.minimap.hidden = !on; });
   bindSwitch("swBoard", "board", on => { el.board.hidden = !on; hudAt = 0; });
+  bindSwitch("swDiag", "diag", on => { $("diagBox").hidden = !on; });
+  bindSwitch("swPerf", "perf", on => { if (!on) $("perfBox").hidden = true; });
   bindSwitch("swGrid", "grid");
   bindSwitch("swNames", "names");
 
@@ -256,7 +258,40 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     $("btnAgain").focus();
   }
 
+  // Thresholds are the point: a number with no sense of "good" is noise.
+  // 60fps is a frame budget met, 100ms ping is where input starts to drag,
+  // and jitter above half a tick is what forces a longer buffer.
+  const row = (label, value, bad) =>
+    `<div><span>${label}</span><b class="${bad ? "warn" : ""}">${value}</b></div>`;
+
+  function renderDiagnostics(stats, scale) {
+    $("diagBox").innerHTML =
+      row("fps", Math.round(stats.fps), stats.fps < 50) +
+      row("ping", `${Math.round(stats.ping)} ms`, stats.ping > 100) +
+      row("jitter", `${Math.round(stats.jitter)} ms`, stats.jitter > 25) +
+      row("buffer", stats.buffered, stats.buffered < 2) +
+      row("zoom", scale.toFixed(2), false);
+  }
+
   function setMode(text) { if (el.mode) el.mode.textContent = text; }
+
+  // fps: how smoothly this machine is drawing.
+  // ping: round trip to the server.
+  // tick: what the server says a tick costs it, against its own budget.
+  // Between them these separate three very different causes of "it feels laggy".
+  function renderPerf(stats) {
+    const box = $("perfBox");
+    if (!settings.perf) { box.hidden = true; return; }
+    box.hidden = false;
+    const slowFps = stats.fps > 0 && stats.fps < 45;
+    const slowPing = stats.ping > 120;
+    const slowTick = stats.budgetMs > 0 && stats.srvMs > stats.budgetMs * 0.6;
+    box.innerHTML =
+      `<div><span class="${slowFps ? "warn" : ""}">${stats.fps || "—"} fps</span></div>` +
+      `<div><span class="${slowPing ? "warn" : ""}">${stats.ping >= 0 ? stats.ping + " ms ping" : "— ping"}</span></div>` +
+      `<div><span class="${slowTick ? "warn" : ""}">${stats.srvMs >= 0 ? stats.srvMs.toFixed(1) : "—"} / ${stats.budgetMs || "—"} ms tick</span></div>` +
+      `<div>${stats.hz || "—"} Hz server</div>`;
+  }
 
   // A banner rather than a quiet note: test mode changes the economics and
   // the lobby rules, and mistaking it for production is the failure worth
@@ -418,7 +453,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     setAuthAvailable,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
-    showSpectator, hideSpectator, setTestMode,
+    showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
     getStake: () => stake,
     isSignedIn: () => signedIn

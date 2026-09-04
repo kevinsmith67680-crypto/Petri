@@ -341,7 +341,40 @@ Pressing W throws a blob forward at the cost of a little mass. Three things were
 
 **Collision ignored the blob's size.** `eatPellets` only used the eater's radius, so you could visibly overlap a 14-unit blob without picking it up. `pelletRadius` is now a single exported function used by both the collision check and the renderer, so the size you see and the size you can eat cannot drift apart.
 
-Ejecting now costs 16 mass and yields a 13-mass blob at radius 14.4, against an orb's fixed 6 — a 2.4× size difference, and a net 3-mass loss so it can't be used to print mass. Blobs are drawn with a membrane and gloss like small cells rather than as flat dots, which is what they behave like.
+**The blob never moved on screen.** Pellets are sent once when they enter view and never re-sent — correct for static orbs, silently wrong for a thrown one. The blob was transmitted at its launch point and sat there. Pellets now carry velocity when they have any, and the client extrapolates using `advancePellet`, the same function the server runs. Static orbs carry no velocity and cost exactly the bytes they always did.
+
+**The motion had to be integrated exactly.** Doing it the naive way — move by `v * dt`, then decay `v` — makes the distance travelled depend on the step size, so a client at 60fps and a server at 20Hz disagreed by 146 units over a third of a second, ten times the blob's own radius. Solving the decay integral in closed form makes the result identical at any frame rate: 313.6 units at both 20 and 60fps, and 0.3 units of drift against the server after a full second.
+
+**It launched detached.** Blobs spawned clear of the cell's eating radius, so they appeared in mid-air. Owner immunity means that gap is unnecessary, so they now emerge from the membrane and are thrown at 760 units/second, coasting to a stop over about a third of a second.
+
+**Your own mass was the wrong colour.** Your cells are always drawn in the player colour rather than their palette slot, but ejected blobs used the slot — so your own mass came out looking like somebody else's. Blobs now carry an ownership flag and are drawn to match.
+
+Ejecting costs 16 mass and yields a 13-mass blob at radius 14.4, against an orb's fixed 6 — a 2.4× size difference, and a net 3-mass loss so it can't be used to print mass. Blobs are drawn with a membrane and gloss like small cells rather than as flat dots, which is what they behave like.
+
+### Diagnosing lag
+
+Turn on **Performance overlay** in settings. Bottom right you get four numbers, and they separate three completely different causes that all feel identical in play:
+
+| Reading | Means | If it's bad |
+|---|---|---|
+| `fps` | how fast your machine draws | under 45, it's the client — lower the bot count or close tabs |
+| `ping` | round trip to the server | over 120ms, it's the network — see the region note below |
+| `x / y ms tick` | what a tick costs the server against its budget | over ~60% of budget, the instance is starved — lower `BOTS` or move up a plan |
+| `Hz server` | the tick rate actually in use | |
+
+`GET /health` reports the same tick figures without needing a browser.
+
+**Check your Render region first.** If the service is in Oregon and you are in Europe, the round trip is 150ms or more before any code runs, and no amount of netcode fixes that. Render picks a region at creation and it cannot be changed afterwards — you would create a new service in the nearer one. This is the single most common cause of a deployed game feeling worse than the same build locally.
+
+### Latency fixes applied
+
+**Nagle's algorithm was on.** Node enables it by default on TCP sockets: small writes are buffered waiting for more data to accumulate, which is exactly wrong for a stream of 5-byte aim packets and can hold one for tens of milliseconds. Every socket now sets `setNoDelay(true)`.
+
+**Compression is explicitly off.** Snapshots are already compact binary; negotiating permessage-deflate would spend CPU and add framing latency on every frame for almost no saving.
+
+**The tick no longer drifts.** `setInterval` compounds error — an overrunning tick pushes the next one late, and the effective rate quietly falls below the nominal one, which players feel as lag even though nothing in the netcode changed. Ticks are now scheduled against an absolute timeline, with a resync if the server falls more than 500ms behind. Measured at 30Hz over six seconds: 29.7 ticks/second actual.
+
+**The tick rate is configurable.** `TICK_HZ=30` roughly halves world-update latency and makes other players visibly smoother, at 1.5× the CPU and bandwidth. Raise it only once the overlay shows the tick has headroom. The client reads the real rate from the server and adapts its interpolation buffer, so the two cannot disagree.
 
 ### Responsiveness
 

@@ -166,7 +166,10 @@ export function createRenderer(canvas, mapCanvas) {
       const r = big ? ejectR : ORB_RADIUS;
       ctx.beginPath();
       ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
-      ctx.fillStyle = colorOf(th, p[2]);
+      // Your own cells are always drawn in the player colour rather than
+      // their palette slot, so mass you eject must match or it looks like it
+      // came from someone else.
+      ctx.fillStyle = colorOf(th, p[4] ? -1 : p[2]);
       ctx.fill();
       if (big) {
         ctx.lineWidth = Math.max(1, r * 0.09);

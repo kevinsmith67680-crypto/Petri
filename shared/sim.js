@@ -53,6 +53,34 @@ export const radiusOf = m => Math.sqrt(m) * 4;
 export const pelletRadius = p =>
   p.mass > PELLET_MASS ? radiusOf(p.mass) : ORB_RADIUS;
 
+// Ejected mass leaves at EJECT_SPEED and coasts to a stop. Exported and used
+// by BOTH ends: the server simulates it, and the client extrapolates from the
+// velocity it was told, which is what makes the throw look continuous instead
+// of arriving as one jump per snapshot.
+export const EJECT_SPEED = 760;        // world units per second at launch
+const PELLET_FRICTION = 0.965;         // per 1/60s; ~0.33s to half speed
+
+// Per-second decay factor, and the exact integral of it over a step.
+//
+// Integrating this the naive way (x += v * dt, then decay v) makes the
+// distance depend on the step size, so a client running at 60fps and a server
+// at 20Hz disagree — measured at 146 units of drift over a third of a second,
+// which is ten times the blob's own radius. Solving the integral exactly makes
+// the result identical at any frame rate.
+const PELLET_DECAY = Math.pow(PELLET_FRICTION, 60);
+const PELLET_LN = Math.log(PELLET_DECAY);
+
+export function advancePellet(p, dt) {
+  if (!p.vx && !p.vy) return;
+  const f = Math.pow(PELLET_DECAY, dt);
+  const travel = (f - 1) / PELLET_LN;        // integral of decay over dt
+  p.x = clamp(p.x + p.vx * travel, ORB_RADIUS, WORLD - ORB_RADIUS);
+  p.y = clamp(p.y + p.vy * travel, ORB_RADIUS, WORLD - ORB_RADIUS);
+  p.vx *= f;
+  p.vy *= f;
+  if (Math.abs(p.vx) < 1 && Math.abs(p.vy) < 1) { p.vx = 0; p.vy = 0; }
+}
+
 // ── pellet spatial index ────────────────────────────────────────────────────
 //
 // With 4,100 orbs in an 8,800-unit arena, scanning the whole list once per
@@ -365,10 +393,13 @@ function doEject(world, ent, tx, ty) {
     // Spawn clear of the owner's own eating reach. Placed any closer and the
     // blob is swallowed again the instant it appears, which made ejecting a
     // no-op that quietly returned most of the mass.
-    const gap = r + blobR + 8;
+    // Emerge from the membrane rather than appearing already detached: with
+    // owner immunity there is no need to clear the eating radius, and a blob
+    // that pops into existence in mid-air is what looked wrong.
+    const gap = r + blobR * 0.35;
     const blob = makePellet(
       world, c.x + a.x * gap, c.y + a.y * gap,
-      EJECT_KEEP, a.x * 22, a.y * 22, c.ci
+      EJECT_KEEP, a.x * EJECT_SPEED, a.y * EJECT_SPEED, c.ci
     );
 
     // Belt and braces: even a cell that turns and chases its own blob cannot
@@ -515,16 +546,7 @@ export function stepWorld(world, dt) {
   world.time += dt;
   world.events.length = 0;
 
-  for (const p of world.pellets) {
-    if (p.vx || p.vy) {
-      p.x = clamp(p.x + p.vx * 60 * dt, 6, WORLD - 6);
-      p.y = clamp(p.y + p.vy * 60 * dt, 6, WORLD - 6);
-      const f = Math.pow(0.9, dt * 60);
-      p.vx *= f; p.vy *= f;
-      if (Math.abs(p.vx) < 0.05) p.vx = 0;
-      if (Math.abs(p.vy) < 0.05) p.vy = 0;
-    }
-  }
+  for (const p of world.pellets) advancePellet(p, dt);
 
   for (const ent of world.players.values()) {
     if (!ent.alive) {

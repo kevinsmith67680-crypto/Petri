@@ -21,7 +21,7 @@ const params = new URLSearchParams(location.search);
 const MODE = params.get("mode") === "online" ? "online" : "local";
 const NAME = (params.get("name") || "You").slice(0, 16);
 
-const settings = { theme: "light", map: true, board: true, grid: true, names: true };
+const settings = { theme: "light", map: true, board: true, grid: true, names: true, diag: false };
 
 const canvas = document.getElementById("stage");
 const mapCanvas = document.getElementById("minimap");
@@ -40,6 +40,10 @@ let lastRank = 0;
 let lastOf = 0;
 let spectating = false;
 let lastRunOrbs = 0, lastRunPeak = 0, lastRunEaten = 0;
+
+// Frame rate over a one-second window rather than instantaneously, so the
+// number is readable instead of flickering.
+let fpsFrames = 0, fpsSince = 0, fps = 0;
 
 // Accounts only exist server-side, so offline play is always a guest.
 const api = MODE === "online" ? createAccountClient() : null;
@@ -307,22 +311,32 @@ function frame(now) {
 
   const th = THEMES[settings.theme];
 
+  fpsFrames++;
+  if (now - fpsSince >= 1000) {
+    fps = Math.round((fpsFrames * 1000) / (now - fpsSince));
+    fpsFrames = 0;
+    fpsSince = now;
+  }
+  if (settings.perf) ui.renderPerf({ fps, ...(conn?.stats?.() || {}) });
+
   if (conn) {
     // Aim is sent as an offset from our own centroid in world units, which is
     // viewport-independent — the server can read it without knowing anything
     // about this client's screen size or zoom.
-    // Aim is recomputed every frame against the predicted centroid, so it
-    // reflects where the cell actually is on screen rather than where the
-    // server last said it was.
-    const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
-    const view = conn.getView();
-    if (view && running) conn.sendAim(target.x - view.me.x, target.y - view.me.y);
-
-    // Offline, the loop is the simulation, so pausing it holds the arena still
-    // behind the start card. Online, the server ticks regardless of us.
+    // getView allocates a fresh cell list and pellet array, so it is built
+    // ONCE per frame. It used to be called twice — for aim and for render —
+    // which doubled the per-frame garbage for no benefit.
     if (running || conn.mode === "online") conn.update(dt);
 
     const fresh = conn.getView();
+
+    // Aim is measured from the predicted centroid, so it reflects where the
+    // cell actually is on screen rather than where the server last said.
+    if (fresh && running) {
+      const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
+      conn.sendAim(target.x - fresh.me.x, target.y - fresh.me.y);
+    }
+
     if (fresh) {
       if (running) elapsed = (now - startedAt) / 1000;
       renderer.follow(camera, fresh, dt);
@@ -364,6 +378,7 @@ function frame(now) {
 
       renderer.draw(fresh, camera, th, settings);
       renderer.drawMinimap(fresh, th, settings);
+      if (settings.diag) ui.renderDiagnostics(conn.stats, camera.scale);
       return;
     }
   }

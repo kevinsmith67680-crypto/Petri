@@ -20,12 +20,13 @@
 import {
   MSG, decodeSnapshot, encodeAim, encodeAction, KEYFRAME_TICKS
 } from "../shared/protocol.js";
-import { TICK_HZ, advanceCell } from "../shared/sim.js";
+import { TICK_HZ, advanceCell, advancePellet } from "../shared/sim.js";
 
-// Other players are still rendered slightly in the past so their motion is
-// smooth between ticks. 1.5 ticks rather than 2: enough of a buffer to absorb
-// normal jitter, 25ms less lag than before.
-const INTERP_MS = (1000 / TICK_HZ) * 1.5;
+// Other players are rendered slightly in the past so their motion is smooth
+// between ticks. Expressed in TICKS, not milliseconds, because the server's
+// rate is configurable and announced in the welcome — at 30Hz this buffer is
+// 50ms rather than 75ms without changing anything here.
+const INTERP_TICKS = 1.5;
 
 // Aim is 5 bytes. Sending it faster than the tick is not wasted — it means
 // the server acts on a fresher vector the moment its tick comes round, which
@@ -58,11 +59,22 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   const pendingAim = { x: 0, y: 0 };
   let myNid = null;
   let decodeErrors = 0;
+  let serverHz = TICK_HZ;          // corrected by the welcome message
+
+  // Diagnostics. "Feels laggy" is three different problems wearing the same
+  // coat — a slow client, a slow server, or a slow network — and they need
+  // different fixes, so each is measured separately.
+  const stats = { ping: 0, jitter: 0, fps: 0, buffered: 0 };
+  let lastPingAt = 0;
+  let lastArrival = 0;
 
   // Locally predicted positions for our own cells, keyed by cell id. This is
   // what removes the round trip from the feel of the controls: we move now,
   // and reconcile against the server as its snapshots arrive.
   const predicted = new Map();
+
+  let ping = -1, srvMs = -1, srvHz = 0, lastPing = 0;
+  let interpMs = INTERP_MS;
 
   socket.addEventListener("open", () => {
     socket.send(JSON.stringify({ type: MSG.JOIN, name, stake, token }));
@@ -73,13 +85,27 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     if (typeof ev.data === "string") {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === "pong") {
+        const rtt = performance.now() - msg.t;
+        // Smoothed: a single sample bounces enough to be unreadable.
+        stats.ping = stats.ping ? stats.ping * 0.7 + rtt * 0.3 : rtt;
+        return;
+      }
       if (msg.type === MSG.WELCOME) {
         myNid = msg.nid;
+        if (msg.tickHz) serverHz = msg.tickHz;
         emit("welcome", msg);
         emit("account", msg);
       } else if (msg.type === "account" || msg.type === "account_error" ||
                  msg.type === "ramp_result") {
         emit("account", msg);
+      } else if (msg.type === "pong") {
+        ping = Math.round(performance.now() - msg.t);
+        srvMs = msg.srvMs;
+        srvHz = msg.hz;
+        // Adapt the interpolation buffer to the server's real tick rate,
+        // which it tells us rather than us assuming.
+        if (srvHz) interpMs = (1000 / srvHz) * 1.5;
       } else if (msg.type === "round_end" || msg.type === "round_start" ||
                  msg.type === "lobby") {
         emit("round", msg);
@@ -116,7 +142,12 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     for (const n of snap.names) names.set(n.nid, n.name);
 
     for (const p of snap.added) {
-      pellets.set(p.id, { x: p.x, y: p.y, ci: p.ci, big: !!p.big, gone: null });
+      pellets.set(p.id, {
+        x: p.x, y: p.y, ci: p.ci,
+        big: !!p.big, mine: !!p.mine,
+        vx: p.vx || 0, vy: p.vy || 0,
+        gone: null
+      });
     }
     for (const id of snap.removed) {
       const p = pellets.get(id);
@@ -129,8 +160,18 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
     if (snap.board) board = snap.board;
 
+    // Arrival spacing tells us how erratic the feed is, which is what the
+    // interpolation buffer exists to absorb.
+    const arrivedAt = performance.now();
+    if (lastArrival) {
+      const gap = Math.abs(arrivedAt - lastArrival - 1000 / serverHz);
+      stats.jitter = stats.jitter * 0.8 + gap * 0.2;
+    }
+    lastArrival = arrivedAt;
+
     frames.push(snap);
     while (frames.length > 20) frames.shift();
+    stats.buffered = frames.length;
   }
 
   const lerp = (a, b, k) => a + (b - a) * k;
@@ -251,12 +292,23 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         lastAimSent = now;
         socket.send(encodeAim(Math.round(pendingAim.x), Math.round(pendingAim.y)));
       }
-      if (dt) predict(dt);
+      if (dt) {
+        predict(dt);
+        stats.fps = stats.fps ? stats.fps * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+      }
+
+      if (now - lastPingAt > 2000 && socket.readyState === WebSocket.OPEN) {
+        lastPingAt = now;
+        socket.send(JSON.stringify({ type: "ping", t: now }));
+      }
     },
+
+    get stats() { return stats; },
 
     getView() {
       if (clockOffset === null) return null;
-      const renderTime = performance.now() / 1000 + clockOffset - INTERP_MS / 1000;
+      const renderTime =
+        performance.now() / 1000 + clockOffset - (INTERP_TICKS / serverHz);
       const snap = interpolate(renderTime);
       if (!snap) return null;
 
@@ -265,7 +317,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       const visible = [];
       for (const p of pellets.values()) {
         if (p.gone !== null && p.gone <= renderTime) continue;
-        visible.push([p.x, p.y, p.ci, p.big ? 1 : 0]);
+        visible.push([p.x, p.y, p.ci, p.big ? 1 : 0, p.mine ? 1 : 0]);
       }
 
       // Our own cells come from prediction; everyone else from interpolation.

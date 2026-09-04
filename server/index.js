@@ -86,6 +86,11 @@ const PORT = Number(process.env.PORT) || 8080;
 // number if you want to pad an empty server while testing.
 const BOTS = envInt("BOTS", TEST_MODE ? 60 : 0) || 0;
 
+// Server tick rate. 20Hz is the safe default; 30Hz roughly halves the
+// world-update latency at 1.5x the CPU and bandwidth. Worth raising once
+// /health shows the tick has headroom.
+const HZ = Math.max(10, Math.min(60, envInt("TICK_HZ", TICK_HZ)));
+
 // Rounds. Ten minutes of play, then a short intermission showing standings.
 const ROUND_SECONDS = envInt("ROUND_SECONDS", TEST_MODE ? 120 : 600);
 const INTERMISSION_SECONDS = envInt("INTERMISSION_SECONDS", TEST_MODE ? 8 : 15);
@@ -158,8 +163,8 @@ const server = http.createServer(async (req, res) => {
       demo: !ramp.isReal,
       storage: DATABASE_URL ? "postgres" : "memory",
       tick: {
-        hz: TICK_HZ,
-        budgetMs: +(1000 / TICK_HZ).toFixed(1),
+        hz: HZ,
+        budgetMs: +(1000 / HZ).toFixed(1),
         avgMs: +tickCost.avgMs.toFixed(2),
         worstMs: +tickCost.worstMs.toFixed(2),
         overruns: tickCost.behind
@@ -304,6 +309,10 @@ function allow(bucket) {
 const wss = new WebSocketServer({
   server,
   maxPayload: MAX_PAYLOAD,
+  // Snapshots are ~500 bytes of already-compact binary. Negotiating
+  // permessage-deflate would spend CPU and add framing latency on every one
+  // of them for almost no saving.
+  perMessageDeflate: false,
   // WebSockets are not covered by the browser's same-origin policy, so if you
   // care where connections come from you have to check it yourself.
   verifyClient(info, done) {
@@ -317,6 +326,11 @@ const wss = new WebSocketServer({
 });
 
 wss.on("connection", (ws, req) => {
+  // Nagle's algorithm buffers small writes waiting for more data, which is
+  // exactly wrong for a stream of tiny time-critical frames — it can hold a
+  // 5-byte aim packet for tens of milliseconds. Node leaves it ON by default.
+  try { req.socket.setNoDelay(true); } catch { /* not a TCP socket */ }
+
   const ip = ipOf(req);
   connectionsByIp.set(ip, (connectionsByIp.get(ip) || 0) + 1);
 
@@ -375,6 +389,13 @@ wss.on("connection", (ws, req) => {
           const fresh = await backend.getAccount(meta.accountId);
           const player = world.players.get(id);
           if (fresh && player) player.name = fresh.displayName;
+        } else if (msg.type === "ping") {
+          // Echoed straight back with the client's own timestamp. Cheaper and
+          // more honest than a WebSocket-level ping, which the browser does
+          // not expose to page code.
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: "pong", t: msg.t }));
+          }
         } else if (msg.type === "ramp") {
           // Placeholder endpoint. Always refuses while MockRamp is in place.
           const result = msg.action === "withdraw"
@@ -469,7 +490,7 @@ wss.on("connection", (ws, req) => {
       }
 
       ws.send(JSON.stringify({
-        type: MSG.WELCOME, id, nid: player.nid, tickHz: TICK_HZ,
+        type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
         round: round.number,
         roundSeconds: ROUND_SECONDS,
         lobbyMin: LOBBY_MIN,
@@ -783,7 +804,7 @@ let lastTick = process.hrtime.bigint();
 // possible to tell the two apart without guessing.
 const tickCost = { avgMs: 0, worstMs: 0, behind: 0 };
 
-setInterval(() => {
+function tick() {
   const tickStart = process.hrtime.bigint();
   const now = tickStart;
   // Measured elapsed time, not the nominal interval, so a busy event loop
@@ -837,8 +858,25 @@ setInterval(() => {
   const cost = Number(process.hrtime.bigint() - tickStart) / 1e6;
   tickCost.avgMs = tickCost.avgMs * 0.95 + cost * 0.05;
   tickCost.worstMs = Math.max(tickCost.worstMs * 0.999, cost);
-  if (cost > 1000 / TICK_HZ) tickCost.behind++;
-}, 1000 / TICK_HZ);
+  if (cost > 1000 / HZ) tickCost.behind++;
+}
+
+// setInterval drifts. A tick that overruns pushes the next one late, the error
+// accumulates, and the effective rate quietly drops below HZ — which players
+// feel as lag even though nothing in the netcode changed. Scheduling against
+// an absolute timeline keeps the average rate honest.
+const TICK_MS = 1000 / HZ;
+let nextTickAt = Date.now();
+
+function scheduleTick() {
+  nextTickAt += TICK_MS;
+  const drift = Date.now() - nextTickAt;
+  // Too far behind to catch up by running fast: resync rather than spiral.
+  if (drift > 500) nextTickAt = Date.now();
+  setTimeout(() => { tick(); scheduleTick(); }, Math.max(0, nextTickAt - Date.now()));
+}
+
+scheduleTick();
 
 // The mass readout is display-only, but if it is ever mistaken for a payout
 // rate the exposure is enormous. Say so loudly at startup rather than letting
@@ -866,7 +904,7 @@ server.listen(PORT, () => {
   console.log(`  online  : http://localhost:${PORT}/?mode=online   <- accounts + live play`);
   console.log(`  offline : http://localhost:${PORT}/                 guest, bots, no accounts`);
   console.log(`  origins : ${ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(", ") : "any (set ALLOWED_ORIGINS in production)"}`);
-  console.log(`  mode    : live PvP, ${ROUND_SECONDS}s rounds, ${BOTS} bots`);
+  console.log(`  mode    : live PvP, ${ROUND_SECONDS}s rounds, ${BOTS} bots, ${HZ}Hz tick`);
   console.log(`  lobby   : starts at ${LOBBY_MIN} ready, capacity ${LOBBY_MAX}`);
   if (TEST_MODE) {
     console.log("  TEST MODE: demo credits only, solo start, bot-filled arena");

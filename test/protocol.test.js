@@ -17,7 +17,8 @@ import {
   decodeClientMessage, createClientState, viewRadius, KEYFRAME_TICKS
 } from "../shared/protocol.js";
 import {
-  createWorld, addPlayer, fillBots, stepWorld, TICK_HZ, centroid
+  createWorld, addPlayer, fillBots, stepWorld, setAim, queueAction,
+  advancePellet, TICK_HZ, centroid
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -187,6 +188,43 @@ check("the eater was actually eating meanwhile", eater.orbs > 0, `${eater.orbs} 
 const farSnap = decodeSnapshot(encodeSnapshot(quiet, observer, qcs));
 const leakedName = farSnap.names.some(n => n.name === "Eater");
 check("out-of-view player names are not sent", !leakedName);
+
+console.log("\n-- ejected mass --");
+
+// A pellet is transmitted once and never re-sent, so a thrown blob has to
+// carry its velocity or it appears at the launch point and never moves.
+const ej = createWorld(202);
+const thrower = addPlayer(ej, { id: "t", name: "Thrower" });
+thrower.cells[0].mass = 200;
+thrower.cells[0].x = 4000; thrower.cells[0].y = 4000;
+setAim(ej, "t", 600, 0);
+queueAction(ej, "t", "eject");
+stepWorld(ej, 1 / TICK_HZ);
+
+const ejSnap = decodeSnapshot(encodeSnapshot(ej, thrower, createClientState(0)));
+const blob = ejSnap.added.find(a => a.big);
+check("an ejected blob is flagged large", !!blob);
+check("it carries velocity so the client can animate it", blob && blob.vx !== 0, `vx ${blob?.vx}`);
+check("it is flagged as the thrower's own", blob && blob.mine === true);
+check("plain orbs carry no velocity and cost no extra bytes",
+  ejSnap.added.filter(a => !a.big).every(a => a.vx === 0 && a.vy === 0));
+
+// Client extrapolation must match the server at any frame rate.
+const cl = { x: blob.x, y: blob.y, vx: blob.vx, vy: blob.vy, mass: 13 };
+for (let i = 0; i < 60; i++) advancePellet(cl, 1 / 60);
+for (let i = 0; i < 20; i++) stepWorld(ej, 1 / TICK_HZ);
+const srv = ej.pellets.find(x => x.mass > 10 && Math.abs(x.y - 4000) < 50 && x.x > 4000);
+check("client extrapolation tracks the server after a second",
+  srv && Math.abs(srv.x - cl.x) < 5, srv ? `${Math.abs(srv.x - cl.x).toFixed(1)} units apart` : "blob missing");
+
+// Frame-rate independence: the naive integration made distance depend on dt.
+const dist = hz => {
+  const q = { x: 0, y: 0, vx: 760, vy: 0, mass: 13 };
+  let t = 0; while (t < 1) { advancePellet(q, 1 / hz); t += 1 / hz; }
+  return q.x;
+};
+check("travel is the same at 20 and 60 fps",
+  Math.abs(dist(20) - dist(60)) < 1, `${dist(20).toFixed(1)} vs ${dist(60).toFixed(1)}`);
 
 console.log("\n-- spectating --");
 

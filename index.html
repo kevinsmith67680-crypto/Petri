@@ -116,6 +116,32 @@
   body.is-test .clock{ top:44px; }
   body.is-test .pot{ top:92px; }
 
+  .diag{
+    position:fixed; right:24px; bottom:24px; z-index:6;
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    padding:9px 12px; font-size:11px; line-height:1.6;
+    font-variant-numeric:tabular-nums; color:var(--muted);
+    pointer-events:none; min-width:132px;
+  }
+  .diag[hidden]{ display:none; }
+  .diag div{ display:flex; justify-content:space-between; gap:14px; }
+  .diag b{ font-weight:600; color:var(--text); }
+  .diag b.warn{ color:#c4453b; }
+  html[data-theme="dark"] .diag b.warn{ color:#f08a80; }
+
+  .perf{
+    position:fixed; right:20px; bottom:20px; z-index:8;
+    font-size:11px; line-height:1.6;
+    font-variant-numeric:tabular-nums;
+    color:var(--muted); text-align:right;
+    pointer-events:none;
+  }
+  .perf[hidden]{ display:none; }
+  .perf b{ color:var(--text); font-weight:600; }
+  .perf .warn{ color:#c4453b; font-weight:600; }
+  html[data-theme="dark"] .perf .warn{ color:#f08a80; }
+  body.is-touch .perf{ bottom:88px; }
+
   /* ── spectator bar ── */
 
   .spec{
@@ -539,6 +565,14 @@
       <button class="switch" id="swGrid" type="button" role="switch" aria-checked="true" aria-labelledby="lblGrid"></button>
     </div>
     <div class="row">
+      <label id="lblDiag" for="swDiag">Performance overlay</label>
+      <button class="switch" id="swDiag" type="button" role="switch" aria-checked="false" aria-labelledby="lblDiag"></button>
+    </div>
+    <div class="row">
+      <label id="lblPerf" for="swPerf">Performance overlay</label>
+      <button class="switch" id="swPerf" type="button" role="switch" aria-checked="false" aria-labelledby="lblPerf"></button>
+    </div>
+    <div class="row">
       <label id="lblNames" for="swNames">Cell names</label>
       <button class="switch" id="swNames" type="button" role="switch" aria-checked="true" aria-labelledby="lblNames"></button>
     </div>
@@ -556,6 +590,10 @@
 </div>
 
 <div class="testflag" id="testFlag" hidden>Test mode &mdash; demo credits, bot-filled arena</div>
+
+<div class="diag" id="diagBox" hidden></div>
+
+<div class="perf" id="perfBox" hidden></div>
 
 <div class="spec" id="specBar" hidden>
   <div class="who"><i>Spectating</i><b id="specName">—</b></div>
