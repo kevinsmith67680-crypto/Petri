@@ -30,7 +30,12 @@ create table if not exists petri.accounts (
   -- Generated column so uniqueness is enforced case-insensitively by the
   -- database rather than by an application-level scan that can race.
   display_name_key  text generated always as (lower(display_name)) stored,
-  password          text not null,
+  -- Null for accounts that sign in with Google. The check constraint below
+  -- guarantees every account still has one credential or the other.
+  password          text,
+  -- Google's stable per-user subject claim. Never the email address: emails
+  -- change ownership, and keying accounts to one invites takeover.
+  google_sub        text,
   created_at        timestamptz not null default now(),
   created_ip        text,
   name_changed_at   timestamptz
@@ -40,6 +45,13 @@ create unique index if not exists accounts_username_key
   on petri.accounts (lower(username));
 create unique index if not exists accounts_display_name_key
   on petri.accounts (display_name_key);
+create unique index if not exists accounts_google_sub_key
+  on petri.accounts (google_sub) where google_sub is not null;
+
+alter table petri.accounts drop constraint if exists accounts_has_credential;
+alter table petri.accounts
+  add constraint accounts_has_credential
+  check (password is not null or google_sub is not null);
 
 -- ── sessions ────────────────────────────────────────────────────────────────
 -- id is the SHA-256 of the token. The raw token is never stored, so a dump of

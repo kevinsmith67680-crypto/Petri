@@ -1,4 +1,4 @@
-# Petri
+# CellRush
 
 An agar.io-style game split into a shared simulation, an authoritative server, and a thin client.
 
@@ -65,6 +65,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `REAL_MONEY` | *(unset)* | `1` demands a real payment ramp. Startup **fails** unless one is implemented — see the wagering section |
 | `DATA_FILE` | *(unset)* | JSON file for the memory backend. Ignored when `DATABASE_URL` is set |
 | `DATABASE_URL` | *(unset)* | Supabase/Postgres connection string. Use the session pooler on port 5432 |
+| `GOOGLE_CLIENT_ID` | *(unset)* | OAuth client id. Unset hides the Google button entirely |
 | `RAKE_BPS` | `0` | House cut on winnings, basis points |
 
 `GET /health` returns player count and tick number, for uptime checks.
@@ -85,6 +86,11 @@ server/     index.js       authoritative tick loop + static file serving
             db/pg.js       Supabase/Postgres backend
             db/memory.js   in-memory backend, same interface
             db/migrations/ schema changes for databases already deployed
+assets/     logo.png       brand mark, light backgrounds
+            logo-dark.png  dark-theme variant, dark pixels lifted
+            mark.png       the C alone, no wordmark
+            icon-32/180    favicon and touch icon
+
 client/     main.js        entry point: transport choice, input, render loop
             account.js     /api client and session token storage
             config.js      SERVER_URL for statically-hosted clients
@@ -244,6 +250,24 @@ Two specific weaknesses worth naming:
 **The session token lives in `localStorage`**, which means any XSS on the page can read it. An HttpOnly cookie would not be readable, but the WebSocket join needs to carry the token in its payload, and cookies would add CSRF handling for no gain there. It is a deliberate trade-off, not an oversight — but revisit it rather than inherit it if real funds are ever involved.
 
 **`FileStore` is a JSON file, not a database.** It has no transactions, so concurrent writes to related records can interleave. It exists so accounts survive a process restart in development.
+
+### Sign in with Google
+
+Set `GOOGLE_CLIENT_ID` and a Google button appears above the password form. Unset, the button is hidden and the Google Identity Services script is never even fetched.
+
+**Setup.** Google Cloud console → APIs & Services → Credentials → Create OAuth client ID → Web application. Add your origin (`http://localhost:8080` for local, your Render URL for production) to **Authorised JavaScript origins**. No redirect URI and **no client secret** are needed: this uses the ID-token flow, where Google hands the browser a signed token and the server verifies it. The client id is public — it appears in the page of every site that uses one — so the client fetches it from `GET /api/config` rather than duplicating it in `client/config.js`.
+
+**The security-critical part is the signature check.** A Google ID token is a JWT, and its middle segment is plain JSON containing a user id — trivially decoded, trivially rewritten. A server that reads that payload without verifying the signature will log an attacker in as anyone they name. `server/google.js` verifies, in order: the RS256 signature against Google's published keys, the issuer, that `aud` is *our* client id so a token minted for another site is refused, expiry with a minute of skew, and `email_verified`.
+
+`test/google.test.js` runs all of this offline against a locally generated keypair, so the forgery cases are actually exercised. The one that matters most: decode a valid token, change `sub` to another user, re-encode, keep the original signature. It is rejected. Also covered are `alg: none`, symmetric algorithms, wrong-key signatures, wrong audience, wrong issuer, expiry, unverified emails, seven kinds of malformed input, and 500 random tokens — none accepted.
+
+**Accounts are never linked by email.** It is tempting to match a Google email to an existing account and merge them, and it is a known takeover route: anyone who obtains a matching Google address inherits that account. A Google sign-in creates its own account keyed by Google's immutable `sub` claim. No email is stored at all.
+
+Federated accounts have no password, so `password` is now nullable, with a check constraint that every account has either a password or a `google_sub`. Login refuses a null hash rather than treating it as a match, and password-less accounts take the same dummy-hash path as missing ones so they are timing-indistinguishable.
+
+Display names come from the Google profile, sanitised to the same rules as any other name and suffixed when they collide — "Ada", then "Ada 2".
+
+**Requires migration 005.** Run `server/db/migrations/005_google_sign_in.sql` before deploying.
 
 ### Persistence
 
@@ -495,6 +519,16 @@ The memory backend scans every account on each signup, which is fine for the han
 
 Settlement is fired from the tick without being awaited — **the game loop must never wait on the database**. Events are copied first because `stepWorld` reuses its array next tick, and stakes are cleared before the await so a second death event cannot settle the same pot twice.
 
+## Branding
+
+The logo sits in the pregame menu header, with a favicon and touch icon generated from the mark.
+
+**Two image files rather than a CSS filter.** The wordmark is near-black and the mark is violet; no single filter lifts one without wrecking the other. `logo-dark.png` lifts only the dark pixels toward the theme's text colour, on a smooth cosine ramp — a hard threshold left a visible seam where it cut through the gradient in the C.
+
+The server's MIME map needed `.png` adding. Without it images were served as `application/octet-stream`, which browsers will render in an `<img>` but will not accept as a favicon.
+
+**Two things to settle.** The internal package, folder and repo are still `petri` — only the user-facing name changed. Renaming those is a repo-wide operation and I have left it alone. And the tagline reads "EAT · GROW · CASH OUT", but cashing out was removed: there is no voluntary exit, only being paid for a top-5 finish. "EAT · GROW · GET PAID" would match the game as built.
+
 ## Test mode
 
 Playing the live PvP mode normally needs 100 signed-in strangers. `TEST_MODE=1` makes it playable alone:
@@ -527,7 +561,11 @@ Bots do not aimbot, collude, or exploit, so this tests mechanics rather than adv
 
 ## Wagering (demo only)
 
-The pregame menu offers a Practice run or a 1.00 USDC wager, shows a balance, and has a **Connect wallet** button that is a deliberate placeholder. No payment ramp is connected, no value moves, and balances are demo credits with no cash value.
+The pregame menu is two cards under a shared header. The left explains the rules — orb value, the size ratio needed to eat someone, the spore threshold, controls, the round length, and who gets paid. The right holds sign-in, the balance, and the stake choice, subtitled "Live rounds, top 5 get paid".
+
+They are separate cards rather than two columns of one card because `align-items: start` then lets each keep its natural height. Two boxes ending at different points reads as deliberate; one box with a short right column reads as broken. Below 780px they stack, and the overlay scrolls.
+
+It offers a Practice run or a 1.00 USDC wager, shows a balance, and has a **Connect wallet** button that is a deliberate placeholder. No payment ramp is connected, no value moves, and balances are demo credits with no cash value.
 
 ### How it is built
 

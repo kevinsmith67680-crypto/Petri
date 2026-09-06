@@ -386,10 +386,51 @@ function frame(now) {
   renderer.draw(null, camera, th, settings);
 }
 
+// Loads Google Identity Services on demand and hands it the button container.
+// The script is only fetched when the server says a client id is configured,
+// so a deployment without Google pulls nothing from Google at all.
+function setupGoogle(clientId) {
+  if (!clientId || window.google?.accounts) return;
+
+  const script = document.createElement("script");
+  script.src = "https://accounts.google.com/gsi/client";
+  script.async = true;
+  script.defer = true;
+  script.onerror = () => ui.showGoogle(false);
+  script.onload = () => {
+    try {
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async ({ credential }) => {
+          try {
+            // The credential is an ID token. It is worth nothing until the
+            // server verifies its signature — nothing here reads its contents.
+            applyAuth(await api.google(credential));
+          } catch (err) {
+            ui.setAuthError(err.message || "Google sign-in failed.");
+          }
+        }
+      });
+      window.google.accounts.id.renderButton(
+        document.getElementById("googleBtn"),
+        { theme: settings.theme === "dark" ? "filled_black" : "outline",
+          size: "large", width: 260, text: "signin_with" }
+      );
+      ui.showGoogle(true);
+    } catch {
+      ui.showGoogle(false);
+    }
+  };
+  document.head.appendChild(script);
+}
+
 // Validate any stored session before the menu renders, so a returning player
 // sees their name rather than a sign-in form that briefly flashes.
 if (api) {
   api.restore().then(payload => applyAuth(payload)).catch(() => applyAuth(null));
+  api.config()
+    .then(cfg => setupGoogle(cfg.googleClientId))
+    .catch(() => { /* server unreachable; the password form still works */ });
 } else {
   // No server, no accounts: hide the form rather than leaving a button that
   // cannot work.

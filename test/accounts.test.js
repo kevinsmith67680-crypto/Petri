@@ -133,6 +133,38 @@ let throttled = false;
 try { await cooled.setDisplayName(tim.id, "Timbo"); } catch (e) { throttled = e.code === "throttled"; }
 check("rename cooldown applies", throttled);
 
+console.log("\n-- google accounts --");
+
+const g1 = await accounts.findOrCreateGoogle({ sub: "sub-aaa", givenName: "Ada", email: "ada@gmail.com" });
+check("creates an account for a new subject", !!g1.id && g1.googleSub === "sub-aaa");
+check("has no password", !g1.password);
+check("takes a display name from the profile", g1.displayName === "Ada", g1.displayName);
+check("public view reports the provider", accounts.publicView(g1).provider === "google");
+
+const again = await accounts.findOrCreateGoogle({ sub: "sub-aaa", givenName: "Ada" });
+check("the same subject returns the same account", again.id === g1.id);
+
+// Google display names collide constantly; a suffix keeps them unique.
+const g2 = await accounts.findOrCreateGoogle({ sub: "sub-bbb", givenName: "Ada" });
+check("a colliding display name is suffixed", g2.displayName !== g1.displayName, g2.displayName);
+check("and both still exist", g2.id !== g1.id);
+
+// The account-takeover route this deliberately does not take.
+const pw = await accounts.signup({ username: "mallory", password: "password1234", displayName: "Mallory" });
+const viaGoogle = await accounts.findOrCreateGoogle({ sub: "sub-ccc", givenName: "Mallory", email: "mallory@gmail.com" });
+check("a Google sign-in never adopts an existing password account",
+  viaGoogle.id !== pw.id, "separate accounts");
+
+// A password-less account must not be loginable with an empty password.
+let sneaked = false;
+try { await accounts.login({ username: g1.username, password: "" }); sneaked = true; } catch { /* expected */ }
+check("a Google account cannot be signed into with a blank password", !sneaked);
+let sneaked2 = false;
+try { await accounts.login({ username: g1.username, password: "anything" }); sneaked2 = true; } catch { /* expected */ }
+check("nor with any password", !sneaked2);
+
+check("verify() refuses a null stored hash", !(await accounts.verify("x", null)));
+
 console.log("\n-- brute force --");
 
 const bf = new Accounts(new MemoryRepo(new MemoryStore()));

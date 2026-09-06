@@ -383,6 +383,13 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     if (!signedIn) setStake(PRACTICE);
   }
 
+  // Google renders its own button, so all we do is reveal the container and
+  // hand it over. Hidden entirely when GOOGLE_CLIENT_ID is unset, rather than
+  // showing a button that cannot work.
+  function showGoogle(on) { $("googleBox").hidden = !on; }
+
+  function setAuthError(text) { $("authError").textContent = text || ""; }
+
   // Guest mode has no account API. Replace the form with an explanation
   // instead of leaving controls that throw when clicked.
   function setAuthAvailable(available, reason) {
@@ -451,7 +458,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   return {
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
-    setAuthAvailable,
+    setAuthAvailable, showGoogle, setAuthError,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },

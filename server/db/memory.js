@@ -41,7 +41,12 @@ export class MemoryRepo {
 
   async getAccount(id) { return this.store.get("accounts", id); }
 
-  async insertAccount({ username, displayName, password, createdIp }) {
+  async findAccountByGoogleSub(sub) {
+    if (!sub) return null;
+    return this.store.all("accounts").find(a => a.googleSub === sub) || null;
+  }
+
+  async insertAccount({ username, displayName, password, googleSub = null, createdIp }) {
     // Re-check under the same tick the write happens, mirroring the unique
     // index the database enforces.
     if (await this.findAccountByUsername(username)) {
@@ -50,9 +55,12 @@ export class MemoryRepo {
     if (await this.findAccountByDisplayName(displayName)) {
       const e = new Error("That display name is taken."); e.code = "taken"; throw e;
     }
+    if (googleSub && await this.findAccountByGoogleSub(googleSub)) {
+      const e = new Error("That Google account is already linked."); e.code = "taken"; throw e;
+    }
     const account = {
       id: crypto.randomUUID(),
-      username, displayName, password,
+      username, displayName, password, googleSub,
       createdAt: Date.now(),
       createdIp,
       nameChangedAt: 0

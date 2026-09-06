@@ -90,6 +90,14 @@ export function createAccountClient({ base = "" } = {}) {
       writeToken(null);
     },
 
+    async config() {
+      return call("config");
+    },
+
+    async google(credential) {
+      return adopt(await call("google", { method: "POST", body: { credential } }));
+    },
+
     async stats() {
       return call("stats");
     },

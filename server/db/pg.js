@@ -64,6 +64,7 @@ const toAccount = row => row && {
   username: row.username,
   displayName: row.display_name,
   password: row.password,
+  googleSub: row.google_sub || null,
   createdAt: new Date(row.created_at).getTime(),
   createdIp: row.created_ip,
   nameChangedAt: row.name_changed_at ? new Date(row.name_changed_at).getTime() : 0
@@ -109,6 +110,14 @@ export class PgRepo {
     return toAccount(rows[0]) || null;
   }
 
+  async findAccountByGoogleSub(sub) {
+    if (!sub) return null;
+    const { rows } = await this.pool.query(
+      "select * from petri.accounts where google_sub = $1 limit 1", [sub]
+    );
+    return toAccount(rows[0]) || null;
+  }
+
   async getAccount(id) {
     const { rows } = await this.pool.query(
       "select * from petri.accounts where id = $1", [id]
@@ -116,12 +125,12 @@ export class PgRepo {
     return toAccount(rows[0]) || null;
   }
 
-  async insertAccount({ username, displayName, password, createdIp }) {
+  async insertAccount({ username, displayName, password, googleSub = null, createdIp }) {
     try {
       const { rows } = await this.pool.query(
-        `insert into petri.accounts (username, display_name, password, created_ip)
-         values ($1, $2, $3, $4) returning *`,
-        [username, displayName, password, createdIp]
+        `insert into petri.accounts (username, display_name, password, google_sub, created_ip)
+         values ($1, $2, $3, $4, $5) returning *`,
+        [username, displayName, password, googleSub, createdIp]
       );
       return toAccount(rows[0]);
     } catch (err) {
@@ -129,7 +138,8 @@ export class PgRepo {
       // against duplicate names; the application-level check is only there to
       // produce a nicer message first.
       if (err.code === "23505") {
-        const field = err.constraint?.includes("display") ? "display name" : "username";
+        const field = err.constraint?.includes("google") ? "Google account"
+          : err.constraint?.includes("display") ? "display name" : "username";
         const e = new Error(`That ${field} is taken.`);
         e.code = "taken";
         throw e;

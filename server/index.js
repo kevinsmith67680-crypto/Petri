@@ -124,6 +124,10 @@ const DATA_FILE = process.env.DATA_FILE || "";
 // balances. Unset falls back to the in-memory backend.
 const DATABASE_URL = process.env.DATABASE_URL || "";
 
+// Google OAuth client id. Not a secret — it is public in every page that uses
+// one. Unset simply hides the button.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+
 // Message budgets. A well-behaved client sends aim at 20Hz plus the occasional
 // action, so these are generous; they exist to stop floods, not to police play.
 const LIMITS = {
@@ -143,14 +147,22 @@ const MIME = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  // Without these the logo and favicon are served as octet-stream, which
+  // browsers will usually render in an <img> but will not accept as an icon.
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+  ".woff2": "font/woff2"
 };
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname.startsWith("/api/")) {
-    await handleApi(req, res, { accounts, backend, ramp, url, ip: ipOf(req) });
+    await handleApi(req, res, {
+      accounts, backend, ramp, url, ip: ipOf(req), googleClientId: GOOGLE_CLIENT_ID
+    });
     return;
   }
 
@@ -906,6 +918,7 @@ server.listen(PORT, () => {
   console.log(`  origins : ${ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(", ") : "any (set ALLOWED_ORIGINS in production)"}`);
   console.log(`  mode    : live PvP, ${ROUND_SECONDS}s rounds, ${BOTS} bots, ${HZ}Hz tick`);
   console.log(`  lobby   : starts at ${LOBBY_MIN} ready, capacity ${LOBBY_MAX}`);
+  console.log(`  google  : ${GOOGLE_CLIENT_ID ? "enabled" : "off (set GOOGLE_CLIENT_ID)"}`);
   if (TEST_MODE) {
     console.log("  TEST MODE: demo credits only, solo start, bot-filled arena");
   }

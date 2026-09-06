@@ -92,6 +92,9 @@ export class Accounts {
   }
 
   async verify(password, stored) {
+    // Google accounts store no password. Refuse rather than treating an empty
+    // hash as a match.
+    if (!stored) return false;
     const parts = String(stored || "").split("$");
     if (parts.length !== 6 || parts[0] !== "scrypt") return false;
     const [, N, r, p, saltHex, keyHex] = parts;
@@ -139,6 +142,56 @@ export class Accounts {
     return !!found && found.id !== exceptId;
   }
 
+  // ── federated sign-in ─────────────────────────────────────────────────────
+
+  // Find the account for a Google subject, or make one.
+  //
+  // DELIBERATELY NOT LINKED BY EMAIL. It is tempting to match a Google email
+  // against an existing account and merge them, and it is a well-known
+  // account-takeover route: anyone who can get a Google address that matches
+  // an existing user inherits their account. Accounts here hold no email at
+  // all, so there is nothing to match against anyway. A Google sign-in is its
+  // own account, keyed by the immutable `sub`.
+  async findOrCreateGoogle({ sub, name, givenName, email, ip = "unknown" }) {
+    const existing = await this.repo.findAccountByGoogleSub(sub);
+    if (existing) return existing;
+
+    const displayName = await this.uniqueDisplayName(
+      givenName || name || (email ? email.split("@")[0] : "Player")
+    );
+
+    return this.repo.insertAccount({
+      // A username is required by the schema but never used to sign in here;
+      // deriving it from the subject keeps it unique without exposing it.
+      username: `g_${sub}`.slice(0, 20),
+      displayName,
+      password: null,          // no password: this account signs in via Google
+      googleSub: sub,
+      createdIp: ip
+    });
+  }
+
+  // Google display names collide constantly — every third person is "James".
+  // Sanitise to our own rules, then add a numeric suffix until it is free.
+  async uniqueDisplayName(raw) {
+    let base;
+    try {
+      base = validateDisplayName(raw);
+    } catch {
+      base = "Player";
+    }
+    if (!(await this.displayNameTaken(base))) return base;
+
+    for (let i = 2; i < 500; i++) {
+      const suffix = String(i);
+      const trimmed = base.slice(0, NAME_MAX - suffix.length - 1).trim();
+      const candidate = `${trimmed} ${suffix}`;
+      if (!(await this.displayNameTaken(candidate))) return candidate;
+    }
+    // Vanishingly unlikely, but never loop forever.
+    return `Player ${Date.now().toString(36).slice(-5)}`;
+  }
+
   async signup({ username, password, displayName, ip = "unknown" }) {
     const user = validateUsername(username);
     if (String(password ?? "").length < PASSWORD_MIN) {
@@ -173,8 +226,9 @@ export class Accounts {
 
     const account = await this.byUsername(user);
     // Hash against a dummy even when the account is missing, so response time
-    // does not reveal whether a username exists.
-    const stored = account ? account.password : await this.dummyHash();
+    // does not reveal whether a username exists. Password-less Google accounts
+    // take the same path, so they are indistinguishable from a wrong password.
+    const stored = account && account.password ? account.password : await this.dummyHash();
     const ok = await this.verify(String(password ?? ""), stored);
 
     if (!account || !ok) {
@@ -252,7 +306,10 @@ export class Accounts {
       id: account.id,
       username: account.username,
       displayName: account.displayName,
-      createdAt: account.createdAt
+      createdAt: account.createdAt,
+      // Lets the client show "signed in with Google" and hide the password
+      // change UI, without ever exposing the Google subject itself.
+      provider: account.googleSub ? "google" : "password"
     };
   }
 }

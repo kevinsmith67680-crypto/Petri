@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
-<title>Petri</title>
+<title>CellRush</title>
+<link rel="icon" type="image/png" sizes="32x32" href="./assets/icon-32.png">
+<link rel="apple-touch-icon" href="./assets/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -115,6 +117,7 @@
   body.is-test .board{ top:46px; }
   body.is-test .clock{ top:44px; }
   body.is-test .pot{ top:92px; }
+  body.is-test .veil{ padding-top:52px; }
 
   .diag{
     position:fixed; right:24px; bottom:24px; z-index:6;
@@ -306,15 +309,6 @@
   .card h2{ font-size:32px; font-weight:600; letter-spacing:-.03em; line-height:1.05; }
   .card p{ margin-top:12px; font-size:14px; line-height:1.65; color:var(--muted); max-width:54ch; }
 
-  .controls{
-    margin-top:18px; font-size:12.5px; color:var(--muted); line-height:1.7;
-  }
-  .controls kbd{
-    font-family:inherit; font-size:11px; font-weight:600;
-    padding:2px 6px; background:var(--key);
-    border:1px solid var(--line-2); border-radius:3px;
-  }
-
   .keys{ margin-top:24px; display:grid; gap:9px; font-size:13px; }
   .keys div{ display:flex; align-items:center; gap:13px; }
   .keys kbd{
@@ -405,6 +399,86 @@
   .career i{ font-style:normal; color:var(--muted); }
   .career em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
 
+  /* ── pregame menu: two cards under a shared header ── */
+
+  .menu{ width:min(880px, 100%); margin:auto; flex:0 0 auto; }
+
+  .head{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:14px; flex-wrap:wrap; margin-bottom:16px;
+  }
+  .brand{ line-height:0; }
+  /* Two files rather than a CSS filter: the wordmark is near-black and the
+     mark is violet, and no single filter lifts one without wrecking the
+     other. The dark variant lifts only the dark pixels, on a smooth ramp so
+     the gradient in the C has no visible seam. */
+  .logo{ display:block; width:128px; height:auto; }
+  .logo.dark{ display:none; }
+  html[data-theme="dark"] .logo.light{ display:none; }
+  html[data-theme="dark"] .logo.dark{ display:block; }
+
+  .panes{
+    display:grid; grid-template-columns:1.05fr 1fr;
+    /* Cards keep their own height instead of stretching to match. Two boxes
+       ending at different points reads as deliberate; one box with a short
+       column reads as broken. */
+    align-items:start;
+    gap:16px;
+  }
+  @media (max-width:780px){ .panes{ grid-template-columns:1fr; } }
+
+  .pane{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:22px 24px;
+    box-shadow:var(--shadow);
+  }
+  .pane-title{
+    padding-bottom:12px; margin-bottom:4px;
+    border-bottom:1px solid var(--line);
+  }
+  .pane-title b{ display:block; font-size:13px; font-weight:600; color:var(--muted); }
+  .pane-title i{
+    display:block; font-style:normal; font-size:11.5px;
+    color:var(--muted); opacity:.8; margin-top:3px;
+  }
+
+  .block{ padding:13px 0; border-bottom:1px solid var(--line); }
+  .block:last-child{ border-bottom:none; padding-bottom:0; }
+  .block h2{ font-size:13px; font-weight:600; margin-bottom:5px; }
+  .block p{ font-size:12.5px; line-height:1.55; color:var(--muted); }
+
+  .facts{ display:grid; gap:5px; font-size:12.5px; }
+  .facts div{ display:flex; justify-content:space-between; gap:12px; }
+  .facts span{ color:var(--muted); }
+  .facts em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
+  .aside{ margin-top:8px; font-size:11px; line-height:1.45; color:var(--muted); }
+
+  .keys{ display:grid; gap:6px; font-size:12.5px; }
+  .keys div{ display:flex; gap:11px; align-items:baseline; }
+  .keys span{ color:var(--muted); }
+
+  .payout{
+    margin-top:11px; padding:11px 12px;
+    border:1px solid var(--accent); border-radius:5px;
+    background:color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .payout b{ display:block; font-size:12.5px; font-weight:600; margin-bottom:4px; }
+  .payout p{ font-size:11.5px; line-height:1.5; color:var(--muted); }
+  .payout strong{ color:var(--text); font-weight:600; }
+
+  /* The Play pane owns the primary action, so its button is full width. */
+  .pane > #btnStart{
+    margin-top:20px; width:100%;
+    font-family:inherit; font-size:14px; font-weight:600;
+    color:var(--panel); background:var(--text);
+    border:none; border-radius:5px; padding:13px; cursor:pointer;
+    transition:opacity .14s ease;
+  }
+  .pane > #btnStart:hover{ opacity:.84; }
+  .pane > #btnStart:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+
   /* ── pregame menu ── */
 
   .badge{
@@ -492,6 +566,10 @@
   /* Short viewports: tighten the rhythm so Start stays above the fold. */
   @media (max-height:900px){
     .card{ padding:24px 28px 22px; }
+    .pane{ padding:18px 20px; }
+    .head{ margin-bottom:12px; }
+    .logo{ width:96px; }
+    .block{ padding:10px 0; }
     .card h2{ font-size:26px; }
     .card p{ margin-top:8px; font-size:13.5px; line-height:1.55; }
     .auth{ margin-top:14px; }
@@ -620,85 +698,149 @@
 </div>
 
 <div class="veil" id="startVeil">
-  <div class="card">
-    <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
-    <h2>Petri</h2>
-    <p>You are one cell on a crowded plate. Absorb the orbs to grow, swallow anything smaller than you, and stay clear of anything larger. Green spores burst you apart if you swallow one.</p>
+  <div class="menu">
 
-    <div class="auth" id="authSignedOut">
-      <div class="tabs" role="tablist">
-        <button id="tabSignIn" type="button" role="tab" aria-selected="true">Sign in</button>
-        <button id="tabSignUp" type="button" role="tab" aria-selected="false">Create account</button>
-      </div>
-      <div class="field">
-        <label for="fUser">Username</label>
-        <input id="fUser" type="text" autocomplete="username" spellcheck="false" maxlength="20">
-      </div>
-      <div class="field" id="fNameWrap" hidden>
-        <label for="fName">Display name</label>
-        <input id="fName" type="text" autocomplete="nickname" maxlength="16">
-      </div>
-      <div class="field">
-        <label for="fPass">Password</label>
-        <input id="fPass" type="password" autocomplete="current-password" maxlength="128">
-      </div>
-      <p class="hint" id="authHint">Play against bots without an account. Sign in to face other players.</p>
-      <p class="err" id="authError"></p>
-      <button class="go" id="btnAuth" type="button">Sign in</button>
+    <div class="head">
+      <h1 class="brand">
+        <img class="logo light" src="./assets/logo.png"
+             alt="CellRush" width="540" height="538">
+        <img class="logo dark" src="./assets/logo-dark.png"
+             alt="" aria-hidden="true" width="540" height="538">
+      </h1>
+      <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
     </div>
 
-    <div class="auth" id="authSignedIn" hidden>
-      <div class="who">
-        <div class="name">
-          <b id="whoName">—</b>
-          <i id="whoUser">—</i>
+    <div class="panes">
+
+      <section class="pane">
+        <div class="pane-title"><b>How it works</b></div>
+
+        <div class="block">
+          <h2>The plate</h2>
+          <p>You are one cell among a hundred. Grow by absorbing orbs, swallow anyone smaller than you, and stay clear of anyone larger.</p>
         </div>
-        <div>
-          <button id="btnRename" type="button">Rename</button>
-          <button id="btnSignOut" type="button">Sign out</button>
+
+        <div class="block">
+          <h2>Orbs</h2>
+          <div class="facts">
+            <div><span>Each orb is worth</span><em>3.4 mass</em></div>
+            <div><span>Mass is shown at</span><em>0.005 USDC</em></div>
+            <div><span>Break even against your stake at</span><em>mass 200</em></div>
+          </div>
+          <p class="aside">The cash figure is indicative only. Your finishing position is what pays.</p>
         </div>
-      </div>
-      <div class="career" id="careerBox">
-        <div><i>Matches</i><em id="stMatches">0</em></div>
-        <div><i>Time played</i><em id="stTime">0m</em></div>
-        <div><i>Best finish</i><em id="stBest">—</em></div>
-        <div><i>1st places</i><em id="stFirsts">0</em></div>
-        <div><i>Players eaten</i><em id="stEaten">0</em></div>
-        <div><i>Longest streak</i><em id="stStreak">0</em></div>
-      </div>
 
-      <div class="rename" id="renameBox" hidden>
-        <div class="row2">
-          <input id="fNewName" type="text" maxlength="16" placeholder="New display name">
-          <button id="btnSaveName" type="button">Save</button>
+        <div class="block">
+          <h2>Eating and being eaten</h2>
+          <p>You need to be roughly a fifth larger to swallow another player, and taking them takes their stake with them. Green spores burst you into ten pieces once you pass mass 127 — so the larger you get, the smaller the safe part of the board becomes.</p>
         </div>
-        <p class="err" id="renameError"></p>
-      </div>
-    </div>
 
-    <div class="wallet" id="walletBox" hidden>
-      <div class="bal">
-        <i>Balance</i>
-        <b id="balValue">—<span>USDC</span></b>
-      </div>
-      <button class="ramp" id="btnRamp" type="button">Connect wallet</button>
-      <p class="ramp-note" id="rampNote">No payment ramp is connected. Balances are demo credits with no cash value.</p>
-    </div>
+        <div class="block">
+          <h2>Controls</h2>
+          <div class="keys">
+            <div><kbd>Mouse</kbd><span>Drift toward the pointer</span></div>
+            <div><kbd>Space</kbd><span>Split forward, rejoins after about 20s</span></div>
+            <div><kbd>W</kbd><span>Throw mass, costs 16 to give 13</span></div>
+          </div>
+        </div>
 
-    <div class="stakes" role="radiogroup" aria-label="Stake">
-      <i>Stake</i>
-      <button class="stake" id="stakeFree" type="button" role="radio" aria-checked="true">
-        <span>Practice<small>Free. Nothing at risk.</small></span>
-        <em>0.00</em>
-      </button>
-      <button class="stake" id="stake1" type="button" role="radio" aria-checked="false">
-        <span>Wager<small>Finish top 5 to be paid. Otherwise it is gone.</small></span>
-        <em>1.00</em>
-      </button>
-    </div>
+        <div class="block">
+          <h2>The round</h2>
+          <div class="facts">
+            <div><span>Starts when ready</span><em>100 players</em></div>
+            <div><span>Time limit</span><em>10 minutes</em></div>
+          </div>
+          <div class="payout">
+            <b>Top 5 are paid</b>
+            <p>There is no cashing out early. You have to survive to the whistle <strong>and</strong> place in the top five to keep your pot. Finish sixth, or get eaten, and your stake is gone.</p>
+          </div>
+        </div>
+      </section>
 
-    <p class="controls">Move with the mouse, <kbd>Space</kbd> to split, <kbd>W</kbd> to eject mass.</p>
-    <button id="btnStart" type="button">Start</button>
+      <section class="pane">
+        <div class="pane-title"><b>Play</b><i>Live rounds, top 5 get paid</i></div>
+
+        <div class="auth" id="authSignedOut">
+          <div class="tabs" role="tablist">
+            <button id="tabSignIn" type="button" role="tab" aria-selected="true">Sign in</button>
+            <button id="tabSignUp" type="button" role="tab" aria-selected="false">Create account</button>
+          </div>
+          <div class="field">
+            <label for="fUser">Username</label>
+            <input id="fUser" type="text" autocomplete="username" spellcheck="false" maxlength="20">
+          </div>
+          <div class="field" id="fNameWrap" hidden>
+            <label for="fName">Display name</label>
+            <input id="fName" type="text" autocomplete="nickname" maxlength="16">
+          </div>
+          <div class="field">
+            <label for="fPass">Password</label>
+            <input id="fPass" type="password" autocomplete="current-password" maxlength="128">
+          </div>
+          <div class="google" id="googleBox" hidden>
+            <div id="googleBtn"></div>
+            <div class="or"><span>or</span></div>
+          </div>
+          <p class="hint" id="authHint">Play against bots without an account. Sign in to face other players.</p>
+          <p class="err" id="authError"></p>
+          <button class="go" id="btnAuth" type="button">Sign in</button>
+        </div>
+
+        <div class="auth" id="authSignedIn" hidden>
+          <div class="who">
+            <div class="name">
+              <b id="whoName">—</b>
+              <i id="whoUser">—</i>
+            </div>
+            <div>
+              <button id="btnRename" type="button">Rename</button>
+              <button id="btnSignOut" type="button">Sign out</button>
+            </div>
+          </div>
+
+          <div class="career" id="careerBox">
+            <div><i>Matches</i><em id="stMatches">0</em></div>
+            <div><i>Time played</i><em id="stTime">0m</em></div>
+            <div><i>Best finish</i><em id="stBest">—</em></div>
+            <div><i>1st places</i><em id="stFirsts">0</em></div>
+            <div><i>Players eaten</i><em id="stEaten">0</em></div>
+            <div><i>Longest streak</i><em id="stStreak">0</em></div>
+          </div>
+
+          <div class="rename" id="renameBox" hidden>
+            <div class="row2">
+              <input id="fNewName" type="text" maxlength="16" placeholder="New display name">
+              <button id="btnSaveName" type="button">Save</button>
+            </div>
+            <p class="err" id="renameError"></p>
+          </div>
+        </div>
+
+        <div class="wallet" id="walletBox" hidden>
+          <div class="bal">
+            <i>Balance</i>
+            <b id="balValue">—<span>USDC</span></b>
+          </div>
+          <button class="ramp" id="btnRamp" type="button">Connect wallet</button>
+          <p class="ramp-note" id="rampNote">No payment ramp is connected. Balances are demo credits with no cash value.</p>
+        </div>
+
+        <div class="stakes" role="radiogroup" aria-label="Stake">
+          <i>Stake</i>
+          <button class="stake" id="stakeFree" type="button" role="radio" aria-checked="true">
+            <span>Practice<small>Free. Bots only. Nothing at risk.</small></span>
+            <em>0.00</em>
+          </button>
+          <button class="stake" id="stake1" type="button" role="radio" aria-checked="false">
+            <span>Wager<small>Live round. Top 5 are paid.</small></span>
+            <em>1.00</em>
+          </button>
+        </div>
+
+        <button id="btnStart" type="button">Start</button>
+      </section>
+
+    </div>
   </div>
 </div>
 

@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import { AccountError } from "./accounts.js";
+import { verifyIdToken, GoogleAuthError } from "./google.js";
 
 const MAX_BODY = 4096;   // no legitimate request here is larger
 
@@ -63,7 +64,7 @@ const bearer = req => {
 
 // Returns true if it handled the request.
 export async function handleApi(req, res, ctx) {
-  const { accounts, backend, ramp, url, ip } = ctx;
+  const { accounts, backend, ramp, url, ip, googleClientId } = ctx;
   if (!url.pathname.startsWith("/api/")) return false;
 
   const route = url.pathname.slice(5);
@@ -84,6 +85,38 @@ export async function handleApi(req, res, ctx) {
   });
 
   try {
+    // Public, and safe to expose: a Google client id is not a secret, it
+    // appears in the page of every site that uses one. The client asks for it
+    // rather than duplicating it in config, so there is one source of truth.
+    if (route === "config" && req.method === "GET") {
+      return send(res, 200, {
+        googleClientId: googleClientId || null,
+        demo: !ramp.isReal
+      }), true;
+    }
+
+    if (route === "google" && req.method === "POST") {
+      if (!googleClientId) throw new AccountError("Google sign-in is not configured.");
+      const body = await readJson(req, res);
+      let profile;
+      try {
+        profile = await verifyIdToken(body.credential, googleClientId);
+      } catch (err) {
+        if (err instanceof GoogleAuthError) {
+          // Log the real reason, tell the client almost nothing: the detail is
+          // useful to an attacker probing which check failed.
+          console.warn("google sign-in rejected:", err.message);
+          throw new AccountError("Could not verify that Google account.", "credentials");
+        }
+        throw err;
+      }
+
+      const account = await accounts.findOrCreateGoogle({ ...profile, ip });
+      if (!ramp.isReal) await ramp.grant(account.id);
+      const token = await accounts.createSession(account.id);
+      return send(res, 200, { token, ...(await shape(account)) }), true;
+    }
+
     if (route === "signup" && req.method === "POST") {
       const body = await readJson(req, res);
       const account = await accounts.signup({ ...body, ip });
