@@ -62,7 +62,7 @@ export function createRenderer(canvas, mapCanvas) {
 
   const colorOf = (th, ci) => (ci < 0 ? th.player : th.stains[ci % th.stains.length]);
 
-  function drawGrid(th, camera) {
+  function drawGrid(th, camera, size) {
     const step = 68;
     const left = camera.x - state.vw / 2 / camera.scale;
     const top = camera.y - state.vh / 2 / camera.scale;
@@ -72,13 +72,13 @@ export function createRenderer(canvas, mapCanvas) {
     ctx.strokeStyle = th.grid;
     ctx.lineWidth = 1 / camera.scale;
     ctx.beginPath();
-    for (let x = Math.max(0, Math.floor(left / step) * step); x <= Math.min(WORLD, right); x += step) {
+    for (let x = Math.max(0, Math.floor(left / step) * step); x <= Math.min(size, right); x += step) {
       ctx.moveTo(x, Math.max(0, top));
-      ctx.lineTo(x, Math.min(WORLD, bottom));
+      ctx.lineTo(x, Math.min(size, bottom));
     }
-    for (let y = Math.max(0, Math.floor(top / step) * step); y <= Math.min(WORLD, bottom); y += step) {
+    for (let y = Math.max(0, Math.floor(top / step) * step); y <= Math.min(size, bottom); y += step) {
       ctx.moveTo(Math.max(0, left), y);
-      ctx.lineTo(Math.min(WORLD, right), y);
+      ctx.lineTo(Math.min(size, right), y);
     }
     ctx.stroke();
   }
@@ -150,12 +150,15 @@ export function createRenderer(canvas, mapCanvas) {
     ctx.scale(camera.scale, camera.scale);
     ctx.translate(-camera.x, -camera.y);
 
+    // Arena size comes from the snapshot: rooms differ, and drawing the wrong
+    // bounds would put the wall in the wrong place.
+    const size = view.world || WORLD;
     ctx.fillStyle = th.field;
-    ctx.fillRect(0, 0, WORLD, WORLD);
-    if (settings.grid) drawGrid(th, camera);
+    ctx.fillRect(0, 0, size, size);
+    if (settings.grid) drawGrid(th, camera, size);
     ctx.lineWidth = 2 / camera.scale;
     ctx.strokeStyle = th.edge;
-    ctx.strokeRect(0, 0, WORLD, WORLD);
+    ctx.strokeRect(0, 0, size, size);
 
     // Plain orbs are flat dots. Ejected mass is drawn like a small cell —
     // membrane and gloss — so it reads as projected mass rather than a big
@@ -199,7 +202,7 @@ export function createRenderer(canvas, mapCanvas) {
     mapCtx.clearRect(0, 0, s, s);
     if (!view || !view.me.alive) return;
 
-    const k = s / WORLD;
+    const k = s / (view.world || WORLD);
 
     mapCtx.strokeStyle = th.grid;
     mapCtx.lineWidth = 1;

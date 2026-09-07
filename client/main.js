@@ -15,6 +15,7 @@ import { createRenderer, THEMES } from "./render.js";
 import { createUI } from "./ui.js";
 import { SERVER_URL } from "./config.js";
 import { PRACTICE } from "../shared/wager.js";
+import { MODES } from "../shared/modes.js";
 import { createAccountClient } from "./account.js";
 
 const params = new URLSearchParams(location.search);
@@ -79,7 +80,9 @@ function applyAuth(payload) {
 const ui = createUI({
   settings,
   onStart: start,
-  onThemeChange: () => {},
+  // Google bakes its theme in at render time, so the button has to be redrawn
+  // or it stays light on a dark menu.
+  onThemeChange: () => renderGoogleButton(),
   onRamp: action => conn?.sendRamp(action),
   auth: {
     // Every one of these guards `api`, which is null in guest mode. Without
@@ -140,7 +143,10 @@ function connect(stake = PRACTICE) {
     ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     return socket;
   }
-  const local = createLocalConnection({ name: api?.account?.displayName || NAME });
+  const local = createLocalConnection({
+    name: api?.account?.displayName || NAME,
+    world: MODES[0].world
+  });
   local.on("event", onEvent);
   ui.setWagerAvailable(false, MODE === "online"
     ? "Sign in to play against other people and to wager."
@@ -411,17 +417,31 @@ function setupGoogle(clientId) {
           }
         }
       });
-      window.google.accounts.id.renderButton(
-        document.getElementById("googleBtn"),
-        { theme: settings.theme === "dark" ? "filled_black" : "outline",
-          size: "large", width: 260, text: "signin_with" }
-      );
+      renderGoogleButton();
       ui.showGoogle(true);
     } catch {
       ui.showGoogle(false);
     }
   };
   document.head.appendChild(script);
+}
+
+// Google's button is an iframe of a fixed pixel width, so it has to be told
+// how wide to be. Matching the container keeps it flush with our own
+// full-width Sign in button instead of floating narrower in the middle.
+function renderGoogleButton() {
+  const box = document.getElementById("googleBtn");
+  if (!box || !window.google?.accounts?.id) return;
+  box.innerHTML = "";
+  const width = Math.max(200, Math.min(400, Math.round(box.clientWidth || 320)));
+  window.google.accounts.id.renderButton(box, {
+    theme: settings.theme === "dark" ? "filled_black" : "outline",
+    size: "large",
+    shape: "rectangular",
+    logo_alignment: "center",
+    text: "signin_with",
+    width
+  });
 }
 
 // Validate any stored session before the menu renders, so a returning player

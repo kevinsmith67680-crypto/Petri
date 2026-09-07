@@ -1,0 +1,148 @@
+// ---------------------------------------------------------------------------
+// Pregame stake gating. Run with:  node test/ui.test.js
+//
+// createUI is pure client logic with no network in it, so it can be exercised
+// headlessly against a DOM stub. Worth doing: "which stakes can a signed-out
+// player pick, and what happens when they try the others" is exactly the kind
+// of rule that silently rots, and clicking through it by hand tests one
+// combination at a time.
+//
+// The stub implements only what createUI actually touches.
+// ---------------------------------------------------------------------------
+
+class El {
+  constructor(id = "") {
+    this.id = id;
+    this.attrs = {};
+    this.style = {};
+    this.handlers = {};
+    this.hidden = false;
+    this.disabled = false;
+    this.textContent = "";
+    this.innerHTML = "";
+    this.value = "";
+    this.offsetWidth = 0;
+    this._lock = null;
+    const set = new Set();
+    this.classList = {
+      add: c => set.add(c),
+      remove: c => set.delete(c),
+      contains: c => set.has(c),
+      toggle: (c, on) => (on === undefined ? (set.has(c) ? set.delete(c) : set.add(c)) : on ? set.add(c) : set.delete(c))
+    };
+  }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener(type, fn) { (this.handlers[type] ||= []).push(fn); }
+  click() { for (const fn of this.handlers.click || []) fn({ target: this }); }
+  querySelector() { return (this._lock ||= new El(`${this.id}:lock`)); }
+  scrollIntoView() {}
+  focus() { globalThis.__focused = this.id; }
+  blur() {}
+}
+
+const registry = new Map();
+globalThis.document = {
+  getElementById: id => {
+    if (!registry.has(id)) registry.set(id, new El(id));
+    return registry.get(id);
+  },
+  body: new El("body"),
+  addEventListener() {},
+  activeElement: null
+};
+globalThis.window = { matchMedia: () => ({ matches: false }) };
+
+const { createUI } = await import("../client/ui.js");
+const { PRACTICE, STAKE_1_USDC, STAKE_2_USDC, UNIT } = await import("../shared/wager.js");
+
+let failures = 0;
+function check(label, cond, detail = "") {
+  if (!cond) failures++;
+  console.log(`${cond ? "  ok  " : " FAIL "} ${label}${detail ? "  " + detail : ""}`);
+}
+
+const $ = id => document.getElementById(id);
+const settings = { theme: "light", map: true, board: true, grid: true, names: true, perf: false };
+const ui = createUI({ settings, onStart() {}, onThemeChange() {}, onRamp() {}, auth: {} });
+
+const locked = id => $(id).getAttribute("aria-disabled") === "true";
+const shown = id => $(id).hidden === false;
+const note = () => ($("stakeNote").hidden ? null : $("stakeNote").textContent);
+
+console.log("\n-- signed out --");
+
+ui.renderAuth(null);
+check("practice is offered", shown("stakeFree") && !locked("stakeFree"));
+check("the 1.00 tier is hidden entirely", !shown("stake1"));
+check("the 2.00 tier is hidden entirely", !shown("stake2"));
+check("practice is the selection", ui.getStake() === PRACTICE);
+
+// Hidden must not mean concealed: the player should still learn stakes exist.
+check("a line says stakes need an account", note() === "Sign in to play for stakes.",
+  String(note()));
+check("and it reads as information, not an error",
+  $("stakeNote").classList.contains("quiet"));
+
+$("stakeFree").click();
+check("choosing practice leaves the line in place", note() === "Sign in to play for stakes.");
+
+console.log("\n-- signed in, funded --");
+
+ui.renderAuth({ id: "a", username: "ada", displayName: "Ada" });
+ui.setAccount({ balance: 5 * UNIT, pot: 0, staked: false, demo: true });
+check("the tiers appear on sign-in", shown("stake1") && shown("stake2"));
+check("1.00 is selectable", !locked("stake1"));
+check("2.00 is selectable", !locked("stake2"));
+check("the sign-in line is gone", note() === null, String(note()));
+
+$("stake2").click();
+check("2.00 can now be selected", ui.getStake() === STAKE_2_USDC, String(ui.getStake()));
+check("no prompt is shown", note() === null);
+
+console.log("\n-- signed in, thin balance --");
+
+// Between the two prices: the cheaper tier stays open, the dearer one does not.
+ui.setAccount({ balance: 1.5 * UNIT, pot: 0, staked: false, demo: true });
+check("both tiers stay visible", shown("stake1") && shown("stake2"));
+check("1.00 stays available", !locked("stake1"));
+check("2.00 locks on its own price", locked("stake2"));
+check("locked is not disabled, so it still takes a click", $("stake2").disabled === false);
+check("the lock tag changes to Low balance",
+  $("stake2").querySelector().textContent === "Low balance",
+  $("stake2").querySelector().textContent);
+check("the unaffordable selection falls back to practice", ui.getStake() === PRACTICE,
+  String(ui.getStake()));
+
+$("stake2").click();
+check("clicking it explains the real reason", note() === "Not enough balance for that stake.",
+  String(note()));
+
+ui.setAccount({ balance: 0, pot: 0, staked: false, demo: true });
+check("with nothing, both wager tiers lock", locked("stake1") && locked("stake2"));
+
+console.log("\n-- offline --");
+
+ui.renderAuth({ id: "a", username: "ada", displayName: "Ada" });
+ui.setAccount({ balance: 5 * UNIT, pot: 0, staked: false, demo: true });
+ui.setWagerAvailable(false, "Wagering needs the server.");
+check("no server hides the tiers even when signed in and funded",
+  !shown("stake1") && !shown("stake2"));
+check("and it says so rather than asking for a sign-in",
+  note() === "Wagering needs the server. Practice runs in this tab.", String(note()));
+
+ui.setWagerAvailable(true);
+check("restoring the server brings them back", shown("stake1") && shown("stake2"));
+
+console.log("\n-- signing out mid-selection --");
+
+$("stake2").click();
+check("2.00 selected", ui.getStake() === STAKE_2_USDC);
+ui.renderAuth(null);
+check("signing out drops the stake back to practice", ui.getStake() === PRACTICE);
+check("and hides the tiers again", !shown("stake1") && !shown("stake2"));
+check("with the sign-in line restored", note() === "Sign in to play for stakes.");
+
+console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
+process.exit(failures === 0 ? 0 : 1);

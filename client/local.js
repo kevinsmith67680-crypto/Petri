@@ -19,8 +19,8 @@ import {
 import { PHASE_NONE } from "../shared/protocol.js";
 import { PELLET_MASS } from "../shared/sim.js";
 
-export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
-  const world = createWorld(seed ?? (Math.random() * 1e9) | 0);
+export function createLocalConnection({ name = "You", bots = 14, seed, world: opts } = {}) {
+  const world = createWorld(seed ?? (Math.random() * 1e9) | 0, opts);
   const me = addPlayer(world, { id: "me", name, ci: -1 });
   fillBots(world, bots);
 
@@ -64,6 +64,7 @@ export function createLocalConnection({ name = "You", bots = 14, seed } = {}) {
 
       return {
         time: world.time,
+        world: world.size,
         cells, pellets, viruses,
         me: {
           id: "me",

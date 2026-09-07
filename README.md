@@ -215,6 +215,14 @@ The server treats any decode failure as "close the socket", since a client that 
 
 Players can create an account, sign in, and change the display name shown on their cell and in the leaderboard.
 
+**Stakes require an account, and the wager tiers do not exist until there is one.** A signed-out player sees Practice and nothing else — a row of greyed buttons is clutter on a screen whose job is to get you signed in. In their place is a quiet line, "Sign in to play for stakes", so hiding them is not the same as concealing them. The tiers appear the moment sign-in succeeds and vanish again on sign-out, taking any selected stake back to Practice with them.
+
+Once visible, a tier can still be unavailable: an insufficient balance shows a "Low balance" tag and is `aria-disabled` rather than `disabled`, because a disabled button swallows the click and reads as broken. Clicking it says "Not enough balance for that stake." One function decides whether a tier is blocked and why, so what is shown and what a click produces can never disagree.
+
+One CSS trap worth knowing: `.stake` sets `display:flex`, which beats the user-agent rule for the `hidden` attribute, so `.stake[hidden]{ display:none }` has to be spelled out or hiding silently does nothing.
+
+`test/ui.test.js` runs the whole matrix headlessly against a DOM stub — signed out, signed in and funded, a balance between the two prices, offline, and signing out mid-selection.
+
 **The shared arena requires an account.** Guests play the same simulation locally in their own browser tab, against bots only — they never join the multiplayer world. The client routes them there automatically, and `server/index.js` rejects any join without a valid session, so a modified client cannot slip in either.
 
 Three reasons it works this way. A balance has to belong to a person; a guest "account" would belong to whoever opens the next socket. Every player in the arena being attributable is the prerequisite for stats and for bans meaning anything. And guests cost the server nothing at all — no socket, no snapshots, no bandwidth — which matters given the egress numbers above.
@@ -426,6 +434,30 @@ A server that cannot hold its tick feels identical to bad netcode from the playe
 
 `avgMs` well under `budgetMs` means the server is fine and any remaining lag is network. `avgMs` approaching or exceeding the budget, or `overruns` climbing steadily, means the instance is starved — on Render's free 0.1 CPU that happens quickly with bots in the arena. Lower `BOTS` or move up an instance size.
 
+## Game modes
+
+Two independent rooms run side by side. Each has its own world, arena, lobby, round clock and connected clients. Only the ledger and the account store are shared, because a balance follows a player between modes while nothing else should.
+
+| | Standard | High stakes |
+|---|---|---|
+| Stake | 1.00 USDC | **2.00 USDC** |
+| Starts at | 100 ready | **50 ready** |
+| Capacity | 150 | 75 |
+| Arena | 8800 × 8800 | **6200 × 6200** |
+| Orbs / spores | 4100 / 90 | 2035 / 45 |
+| Round | 10 minutes | 10 minutes |
+| Paid | Top 5 | Top 5 |
+
+Modes live in `shared/modes.js`, imported by both ends, so a mode cannot mean one thing in the menu and another on the server. **The stake selects the room** — there is exactly one room per stake, so a client cannot ask for a 2.00 seat and pay 1.00.
+
+**Arena size is per world, not a constant.** A 50-player round in the board built for 100 would be half as dense and you would spend it wandering. Both sizes hold ~770k units² per player, and orbs and spores scale with area so the density is identical (52.9 orbs per million units² in both).
+
+That meant the size had to travel: it is a `u16` in the snapshot header, because the client cannot draw the arena bounds, clamp its own prediction or scale the minimap without it. `advanceCell` and `advancePellet` take the size as a parameter for the same reason — the client runs them for prediction and would otherwise clamp to the wrong wall.
+
+Practice remains outside all of this: it runs locally in the player's tab against bots, with no room, no lobby and no server presence.
+
+Overrides apply to every room at once: `LOBBY_MIN`, `ROUND_SECONDS`, `PAID_POSITIONS`. `GET /health` reports each room separately.
+
 ### Lobby and arena size
 
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
@@ -562,6 +594,8 @@ Bots do not aimbot, collude, or exploit, so this tests mechanics rather than adv
 ## Wagering (demo only)
 
 The pregame menu is two cards under a shared header. The left explains the rules — orb value, the size ratio needed to eat someone, the spore threshold, controls, the round length, and who gets paid. The right holds sign-in, the balance, and the stake choice, subtitled "Live rounds, top 5 get paid".
+
+Sizing: the card is 980px wide with a 172px logo and body text at 14–15px, up from 880/128/12.5px. It is a title screen rather than in-game chrome, so it can afford the room. Below 860px the panes stack; below 900px tall a compact breakpoint pulls the padding and type back so Start does not vanish, and the overlay scrolls in any case.
 
 They are separate cards rather than two columns of one card because `align-items: start` then lets each keep its natural height. Two boxes ending at different points reads as deliberate; one box with a short right column reads as broken. Below 780px they stack, and the overlay scrolls.
 

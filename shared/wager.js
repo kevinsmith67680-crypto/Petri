@@ -19,9 +19,10 @@ export const UNIT = 1_000_000;            // one USDC in micro-units
 
 export const PRACTICE = 0;                // free play
 export const STAKE_1_USDC = 1 * UNIT;
+export const STAKE_2_USDC = 2 * UNIT;
 
 // The tiers the pregame menu offers. Kept short deliberately.
-export const STAKE_TIERS = [PRACTICE, STAKE_1_USDC];
+export const STAKE_TIERS = [PRACTICE, STAKE_1_USDC, STAKE_2_USDC];
 
 // House cut on winnings, in basis points. 0 while this is a demo; a real
 // operator takes a rake here, and it must be disclosed to players.

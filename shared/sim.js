@@ -15,11 +15,14 @@
 
 // ── tuning ──────────────────────────────────────────────────────────────────
 
-// Sized for a 100-player lobby at the same per-player density the small arena
-// had (~770k units^2 each). Must stay under 65535: positions travel as u16.
+// Default arena, sized for a 100-player lobby at ~770k units^2 per player.
+// A world can override these — see shared/modes.js — so a 50-player room gets
+// a smaller board rather than half the density. Must stay under 65535:
+// positions travel as u16.
 export const WORLD = 8800;          // square arena, world units
 export const PELLETS = 4100;        // orbs kept in play at all times
 export const VIRUSES = 90;
+export const MAX_WORLD = 65535;
 export const DEFAULT_BOTS = 14;     // guests only; the live arena runs botless
 
 export const START_MASS = 20;
@@ -70,12 +73,12 @@ const PELLET_FRICTION = 0.965;         // per 1/60s; ~0.33s to half speed
 const PELLET_DECAY = Math.pow(PELLET_FRICTION, 60);
 const PELLET_LN = Math.log(PELLET_DECAY);
 
-export function advancePellet(p, dt) {
+export function advancePellet(p, dt, size = WORLD) {
   if (!p.vx && !p.vy) return;
   const f = Math.pow(PELLET_DECAY, dt);
   const travel = (f - 1) / PELLET_LN;        // integral of decay over dt
-  p.x = clamp(p.x + p.vx * travel, ORB_RADIUS, WORLD - ORB_RADIUS);
-  p.y = clamp(p.y + p.vy * travel, ORB_RADIUS, WORLD - ORB_RADIUS);
+  p.x = clamp(p.x + p.vx * travel, ORB_RADIUS, size - ORB_RADIUS);
+  p.y = clamp(p.y + p.vy * travel, ORB_RADIUS, size - ORB_RADIUS);
   p.vx *= f;
   p.vy *= f;
   if (Math.abs(p.vx) < 1 && Math.abs(p.vy) < 1) { p.vx = 0; p.vy = 0; }
@@ -142,9 +145,15 @@ function mulberry32(a) {
 
 // ── world construction ──────────────────────────────────────────────────────
 
-export function createWorld(seed = 1) {
+export function createWorld(seed = 1, opts = {}) {
+  const size = opts.size ?? WORLD;
+  if (size > MAX_WORLD) throw new RangeError(`arena ${size} exceeds u16`);
   const world = {
     seed,
+    // Per-world so two rooms of different sizes can run side by side.
+    size,
+    pelletCount: opts.pellets ?? PELLETS,
+    virusCount: opts.viruses ?? VIRUSES,
     rng: mulberry32(seed),
     tick: 0,
     time: 0,          // seconds since world creation; all timers use this
@@ -158,8 +167,8 @@ export function createWorld(seed = 1) {
     events: []        // drained by the host each tick
   };
 
-  for (let i = 0; i < PELLETS; i++) world.pellets.push(makePellet(world));
-  for (let i = 0; i < VIRUSES; i++) world.viruses.push(makeVirus(world));
+  for (let i = 0; i < world.pelletCount; i++) world.pellets.push(makePellet(world));
+  for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
   return world;
 }
 
@@ -167,7 +176,7 @@ const rand = (world, a, b) => a + world.rng() * (b - a);
 
 function spawnPoint(world) {
   const pad = 140;
-  return { x: rand(world, pad, WORLD - pad), y: rand(world, pad, WORLD - pad) };
+  return { x: rand(world, pad, world.size - pad), y: rand(world, pad, world.size - pad) };
 }
 
 function makePellet(world, x, y, mass, vx, vy, ci) {
@@ -253,7 +262,7 @@ export function setAim(world, id, dx, dy) {
   const p = world.players.get(id);
   if (!p) return;
   const d = Math.hypot(dx, dy);
-  const cap = WORLD;                       // reject absurd values from clients
+  const cap = world.size;                  // reject absurd values from clients
   const k = d > cap ? cap / d : 1;
   p.input.x = dx * k;
   p.input.y = dy * k;
@@ -271,7 +280,7 @@ export const totalMass = ent => ent.cells.reduce((s, c) => s + c.mass, 0);
 export function centroid(ent) {
   let x = 0, y = 0, m = 0;
   for (const c of ent.cells) { x += c.x * c.mass; y += c.y * c.mass; m += c.mass; }
-  return m ? { x: x / m, y: y / m } : { x: WORLD / 2, y: WORLD / 2 };
+  return m ? { x: x / m, y: y / m } : { x: 0, y: 0 };
 }
 
 // ── mechanics ───────────────────────────────────────────────────────────────
@@ -280,7 +289,7 @@ export function centroid(ent) {
 // code to predict its own motion instead of waiting for a round trip. If the
 // two ever diverge, prediction drifts and the correction becomes visible — so
 // there must only be one copy of this maths, and this is it.
-export function advanceCell(c, tx, ty, dt) {
+export function advanceCell(c, tx, ty, dt, size = WORLD) {
   const dx = tx - c.x, dy = ty - c.y;
   const d = Math.hypot(dx, dy);
   const r = radiusOf(c.mass);
@@ -300,13 +309,13 @@ export function advanceCell(c, tx, ty, dt) {
   if (Math.abs(c.vx) < 0.02) c.vx = 0;
   if (Math.abs(c.vy) < 0.02) c.vy = 0;
 
-  c.x = clamp(c.x, r, WORLD - r);
-  c.y = clamp(c.y, r, WORLD - r);
+  c.x = clamp(c.x, r, size - r);
+  c.y = clamp(c.y, r, size - r);
 }
 
 function moveCells(world, ent, tx, ty, dt) {
   for (const c of ent.cells) {
-    advanceCell(c, tx, ty, dt);
+    advanceCell(c, tx, ty, dt, world.size);
     // Decay stays server-side: it is a rule, not motion, and predicting it
     // would have the client quietly disagreeing about mass.
     if (c.mass > DECAY_ABOVE) c.mass -= c.mass * 0.0022 * dt;
@@ -494,7 +503,7 @@ function cellCombat(world) {
 
 function driveBot(world, bot, dt) {
   const c0 = bot.cells[0];
-  if (!c0) return { x: WORLD / 2, y: WORLD / 2 };
+  if (!c0) return { x: world.size / 2, y: world.size / 2 };
   const me = centroid(bot);
   const myMass = totalMass(bot);
 
@@ -523,7 +532,7 @@ function driveBot(world, bot, dt) {
     }
     bot.jitter += dt * 0.7;
     if (near) { tx = near.x + Math.cos(bot.jitter) * 40; ty = near.y + Math.sin(bot.jitter) * 40; }
-    else { tx = WORLD / 2 + Math.cos(bot.jitter) * 900; ty = WORLD / 2 + Math.sin(bot.jitter) * 900; }
+    else { tx = world.size / 2 + Math.cos(bot.jitter) * 900; ty = world.size / 2 + Math.sin(bot.jitter) * 900; }
   }
 
   if (myMass >= VIRUS_MASS * VIRUS_EAT_RATIO) {
@@ -536,7 +545,7 @@ function driveBot(world, bot, dt) {
     }
   }
 
-  return { x: clamp(tx, 60, WORLD - 60), y: clamp(ty, 60, WORLD - 60) };
+  return { x: clamp(tx, 60, world.size - 60), y: clamp(ty, 60, world.size - 60) };
 }
 
 // ── the tick ────────────────────────────────────────────────────────────────
@@ -546,7 +555,7 @@ export function stepWorld(world, dt) {
   world.time += dt;
   world.events.length = 0;
 
-  for (const p of world.pellets) advancePellet(p, dt);
+  for (const p of world.pellets) advancePellet(p, dt, world.size);
 
   for (const ent of world.players.values()) {
     if (!ent.alive) {
@@ -617,7 +626,7 @@ export function stepWorld(world, dt) {
   // Sweep eaten pellets and top the arena back up. One pass, once a tick.
   if (world.pelletsDirty) {
     world.pellets = world.pellets.filter(p => !p.dead);
-    while (world.pellets.length < PELLETS) world.pellets.push(makePellet(world));
+    while (world.pellets.length < world.pelletCount) world.pellets.push(makePellet(world));
     world.pelletsDirty = false;
   }
 
@@ -635,10 +644,10 @@ export function stepWorld(world, dt) {
 // kept, so connected clients roll straight into the next round.
 export function resetArena(world) {
   world.pellets.length = 0;
-  for (let i = 0; i < PELLETS; i++) world.pellets.push(makePellet(world));
+  for (let i = 0; i < world.pelletCount; i++) world.pellets.push(makePellet(world));
 
   world.viruses.length = 0;
-  for (let i = 0; i < VIRUSES; i++) world.viruses.push(makeVirus(world));
+  for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
 
   for (const p of world.players.values()) {
     spawnPlayer(world, p);

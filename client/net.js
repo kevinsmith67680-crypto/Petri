@@ -74,6 +74,9 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   const predicted = new Map();
 
   let ping = -1, srvMs = -1, srvHz = 0, lastPing = 0;
+  // Arena size for this room, learned from the first snapshot. Prediction has
+  // to clamp to the same bounds the server does or cells drift through walls.
+  let worldSize = 0;
   let interpMs = INTERP_MS;
 
   socket.addEventListener("open", () => {
@@ -133,6 +136,8 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const offset = snap.time - localNow;
     // Track the smallest observed offset: that is the least-delayed packet.
     clockOffset = clockOffset === null ? offset : Math.min(clockOffset, offset);
+
+    if (snap.world) worldSize = snap.world;
 
     if (snap.keyframe) {
       pellets.clear();
@@ -217,7 +222,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       p.mass = c.m;
 
       const ghost = { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 };
-      if (age > 0) advanceCell(ghost, atx, aty, age);
+      if (age > 0) advanceCell(ghost, atx, aty, age, worldSize);
 
       const ex = ghost.x - p.x, ey = ghost.y - p.y;
       if (Math.hypot(ex, ey) > SNAP_ERROR) {
@@ -238,7 +243,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const cx = sm ? sx / sm : 0, cy = sm ? sy / sm : 0;
     const tx = cx + pendingAim.x, ty = cy + pendingAim.y;
 
-    for (const p of predicted.values()) advanceCell(p, tx, ty, dt);
+    for (const p of predicted.values()) advanceCell(p, tx, ty, dt, worldSize);
   }
 
   // Blend the two frames straddling the render time. Cells are matched by id;
@@ -340,6 +345,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
       return {
         time: snap.time,
+        world: snap.world || worldSize,
         cells,
         pellets: visible,
         viruses: snap.viruses,

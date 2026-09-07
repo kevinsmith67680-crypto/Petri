@@ -28,13 +28,13 @@
 
 import { Reader, Writer, clampU16 } from "./codec.js";
 import {
-  radiusOf, totalMass, centroid, leaderboard, rankOf, WORLD, forEachPelletNear,
+  radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,
   PELLET_MASS
 } from "./sim.js";
 
-// Positions travel as u16, so the arena must fit. Guard it here rather than
-// discovering the wrap-around as jitter in production.
-if (WORLD > 65535) throw new RangeError("WORLD exceeds u16; widen the position fields");
+// Positions travel as u16. createWorld enforces the same bound at construction
+// so an oversized arena fails loudly rather than wrapping around as jitter.
+export const WORLD_LIMIT = MAX_WORLD;
 
 export const MSG = {
   JOIN: "join",        // text
@@ -206,6 +206,8 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   w.u8((keyframe ? FLAG_KEYFRAME : 0) | (withBoard ? FLAG_BOARD : 0));
   w.u32(world.tick);
   w.f32(world.time);
+  // Rooms differ in size, so the client is told rather than assuming.
+  w.u16(world.size);
 
   // me
   w.u8(view.alive ? 1 : 0);
@@ -301,6 +303,7 @@ export function decodeSnapshot(buffer) {
   const flags = r.u8();
   const tick = r.u32();
   const time = r.f32();
+  const world = r.u16();
   if (!Number.isFinite(time)) throw new RangeError("bad time");
 
   const me = {
@@ -372,7 +375,7 @@ export function decodeSnapshot(buffer) {
 
   return {
     keyframe: !!(flags & FLAG_KEYFRAME),
-    tick, time, me, round, spectating, eyeNid,
+    tick, time, world, me, round, spectating, eyeNid,
     names, cells, added, removed, viruses, board
   };
 }

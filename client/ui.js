@@ -3,7 +3,8 @@
 // Knows nothing about the simulation beyond the view shape.
 // ---------------------------------------------------------------------------
 
-import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC } from "../shared/wager.js";
+import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
+import { MODES } from "../shared/modes.js";
 import { PHASE_LIVE, PHASE_LOBBY } from "../shared/protocol.js";
 
 const $ = id => document.getElementById(id);
@@ -28,6 +29,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     rampNote: $("rampNote"),
     stakeFree: $("stakeFree"),
     stake1: $("stake1"),
+    stake2: $("stake2"),
+    stakeNote: $("stakeNote"),
     potBar: $("potBar"),
     potValue: $("potValue"),
     signedOut: $("authSignedOut"),
@@ -53,6 +56,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   let account = { balance: 0, pot: 0, staked: false, demo: true };
   let stake = PRACTICE;
   let signedIn = false;
+  let wagerPossible = true;
 
   let tickTimer = null;
   let hudAt = 0;
@@ -308,10 +312,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     el.potValue.textContent = formatUsdc(account.pot);
     el.potBar.hidden = !(account.pot > 0);
 
-    // Cannot stake what you do not have, and cannot stake at all as a guest.
-    const affordable = account.balance >= STAKE_1_USDC;
-    el.stake1.disabled = !affordable || !signedIn;
-    if (!affordable && stake !== PRACTICE) setStake(PRACTICE);
+    // paintStakes drops an unaffordable selection back to practice itself.
+    paintStakes();
 
     el.badge.hidden = !account.demo;
   }
@@ -321,14 +323,108 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     renderAccount();
   }
 
-  function setStake(units) {
-    stake = units;
-    el.stakeFree.setAttribute("aria-checked", String(units === PRACTICE));
-    el.stake1.setAttribute("aria-checked", String(units === STAKE_1_USDC));
+  const stakeButtons = [
+    [PRACTICE, () => el.stakeFree],
+    [STAKE_1_USDC, () => el.stake1],
+    [STAKE_2_USDC, () => el.stake2]
+  ];
+
+  // Why a tier cannot be picked, or null if it can. One function so the greyed
+  // state and the message a click produces can never disagree.
+  function stakeBlockedBy(units) {
+    if (units === PRACTICE) return null;
+    if (!wagerPossible) return "offline";
+    if (!signedIn) return "auth";
+    if (account.balance < units) return "funds";
+    return null;
   }
 
-  el.stakeFree.addEventListener("click", () => setStake(PRACTICE));
-  el.stake1.addEventListener("click", () => { if (!el.stake1.disabled) setStake(STAKE_1_USDC); });
+  const BLOCK_MESSAGE = {
+    offline: "Wagering needs the server. Practice runs in this tab.",
+    auth: "Sign in to play for stakes.",
+    funds: "Not enough balance for that stake."
+  };
+
+  function showStakeNote(reason, quiet = false) {
+    if (!reason) { el.stakeNote.hidden = true; return; }
+    el.stakeNote.textContent = BLOCK_MESSAGE[reason] || "";
+    el.stakeNote.classList.toggle("quiet", quiet);
+    el.stakeNote.hidden = false;
+  }
+
+  // Clicking a locked tier is the prompt: say what is missing, then put the
+  // player in front of the thing that fixes it.
+  function promptFor(reason) {
+    showStakeNote(reason);
+    if (reason !== "auth") return;
+    setAuthMode("login");
+    el.signedOut.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    $("fUser").focus();
+  }
+
+  function paintStakes() {
+    // Wager tiers only exist once there is an account to charge. Hidden rather
+    // than shown locked: a row of greyed buttons is clutter on a screen whose
+    // job is to get you signed in.
+    const offerTiers = signedIn && wagerPossible;
+
+    for (const [units, get] of stakeButtons) {
+      const btn = get();
+      if (units === PRACTICE) continue;
+      btn.hidden = !offerTiers;
+    }
+
+    if (!offerTiers) {
+      // Say that stakes exist, so hiding them is not the same as concealing
+      // them. Quiet styling: it is information, not a failure.
+      showStakeNote(wagerPossible ? "auth" : "offline", true);
+      if (stake !== PRACTICE) setStake(PRACTICE);
+      return;
+    }
+
+    for (const [units, get] of stakeButtons) {
+      if (units === PRACTICE) continue;
+      const blocked = stakeBlockedBy(units);
+      const btn = get();
+      // aria-disabled, not disabled: the button must still take the click, or
+      // it swallows it and reads as broken.
+      btn.setAttribute("aria-disabled", String(!!blocked));
+      btn.removeAttribute("disabled");
+      const lock = btn.querySelector(".lock");
+      if (lock) lock.textContent = "Low balance";
+    }
+    if (stakeBlockedBy(stake)) setStake(PRACTICE);
+    else if (el.stakeNote.classList.contains("quiet")) showStakeNote(null);
+  }
+
+  function setStake(units) {
+    // Never let a blocked tier become the selection; the server would refuse
+    // it anyway and the player would only find out at Start.
+    if (stakeBlockedBy(units)) return;
+    stake = units;
+    if (!el.stakeNote.classList.contains("quiet")) showStakeNote(null);
+    for (const [value, get] of stakeButtons) {
+      get().setAttribute("aria-checked", String(units === value));
+    }
+    // The rules panel describes whichever mode is selected, so the lobby size
+    // and arena on the left always match the stake chosen on the right.
+    const mode = MODES.find(m => m.stake === units);
+    if (mode) {
+      $("ruleLobby").textContent = `${mode.lobbyMin} players`;
+      $("ruleArena").textContent = `${mode.world.size} wide`;
+    } else {
+      $("ruleLobby").textContent = "bots only";
+      $("ruleArena").textContent = "8800 wide";
+    }
+  }
+
+  for (const [units, get] of stakeButtons) {
+    get().addEventListener("click", () => {
+      const blocked = stakeBlockedBy(units);
+      if (blocked) promptFor(blocked);
+      else setStake(units);
+    });
+  }
 
   el.ramp.addEventListener("click", () => onRamp?.("deposit"));
 
@@ -337,12 +433,10 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   // Offline play has no server ledger, so wagering is meaningless there:
   // a client-side balance is just free money.
   function setWagerAvailable(available, reason) {
-    el.stake1.disabled = !available;
+    wagerPossible = !!available;
     el.ramp.disabled = !available;
-    if (!available) {
-      setStake(PRACTICE);
-      if (reason) setRampNote(reason);
-    }
+    paintStakes();
+    if (!available && reason) setRampNote(reason);
   }
 
 
@@ -379,8 +473,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     }
     // Wagering requires identity: a guest balance belongs to whoever opens
     // the next socket, which is to say nobody.
-    el.stake1.disabled = !signedIn || account?.canWager === false;
-    if (!signedIn) setStake(PRACTICE);
+    paintStakes();
   }
 
   // Google renders its own button, so all we do is reveal the container and
@@ -407,7 +500,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
     const err = $("authError");
     err.textContent = "";
     btn.disabled = true;
-    btn.textContent = mode === "signup" ? "Creating…" : "Signing in…";
+    btn.setAttribute("aria-busy", "true");
+    btn.textContent = mode === "signup" ? "Creating account…" : "Signing in…";
     try {
       await auth?.[mode === "signup" ? "signup" : "login"](
         $("fUser").value,
@@ -418,6 +512,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
       err.textContent = e.message || "Something went wrong.";
     } finally {
       btn.disabled = false;
+      btn.removeAttribute("aria-busy");
       btn.textContent = mode === "signup" ? "Create account" : "Sign in";
     }
   }
