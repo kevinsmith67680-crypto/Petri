@@ -154,7 +154,10 @@ function connect(stake = PRACTICE) {
     world: MODES[0].world
   });
   local.on("event", onEvent);
-  ui.setWagerAvailable(false, MODE === "online"
+  // Not signed in is not the same as no server. In online mode the server is
+  // there and reachable, so wagering stays "possible" and the menu asks for a
+  // sign-in; only genuinely offline play reports a missing server.
+  ui.setWagerAvailable(MODE === "online", MODE === "online"
     ? "Sign in to play against other people and to wager."
     : "Wagering needs the server. Offline play is practice only.");
   ui.setMode(MODE === "online"
@@ -390,7 +393,6 @@ function frame(now) {
 
       renderer.draw(fresh, camera, th, settings);
       renderer.drawMinimap(fresh, th, settings);
-      if (settings.diag) ui.renderDiagnostics(conn.stats, camera.scale);
       return;
     }
   }

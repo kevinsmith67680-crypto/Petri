@@ -64,7 +64,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // Diagnostics. "Feels laggy" is three different problems wearing the same
   // coat — a slow client, a slow server, or a slow network — and they need
   // different fixes, so each is measured separately.
-  const stats = { ping: 0, jitter: 0, fps: 0, buffered: 0 };
+  const diag = { ping: 0, jitter: 0, fps: 0, buffered: 0, srvMs: -1 };
   let lastPingAt = 0;
   let lastArrival = 0;
 
@@ -73,11 +73,13 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // and reconcile against the server as its snapshots arrive.
   const predicted = new Map();
 
-  let ping = -1, srvMs = -1, srvHz = 0, lastPing = 0;
   // Arena size for this room, learned from the first snapshot. Prediction has
   // to clamp to the same bounds the server does or cells drift through walls.
   let worldSize = 0;
-  let interpMs = INTERP_MS;
+  // Derived from the tick rate, and re-derived when the server announces its
+  // own. Referred to the old INTERP_MS name until an integration test caught
+  // it: every online connection threw here, which left the client silently on
+  // its guest connection.
 
   socket.addEventListener("open", () => {
     socket.send(JSON.stringify({ type: MSG.JOIN, name, stake, token }));
@@ -91,7 +93,9 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       if (msg.type === "pong") {
         const rtt = performance.now() - msg.t;
         // Smoothed: a single sample bounces enough to be unreadable.
-        stats.ping = stats.ping ? stats.ping * 0.7 + rtt * 0.3 : rtt;
+        diag.ping = diag.ping ? diag.ping * 0.7 + rtt * 0.3 : rtt;
+        if (typeof msg.srvMs === "number") diag.srvMs = msg.srvMs;
+        if (msg.hz) serverHz = msg.hz;
         return;
       }
       if (msg.type === MSG.WELCOME) {
@@ -102,13 +106,6 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       } else if (msg.type === "account" || msg.type === "account_error" ||
                  msg.type === "ramp_result") {
         emit("account", msg);
-      } else if (msg.type === "pong") {
-        ping = Math.round(performance.now() - msg.t);
-        srvMs = msg.srvMs;
-        srvHz = msg.hz;
-        // Adapt the interpolation buffer to the server's real tick rate,
-        // which it tells us rather than us assuming.
-        if (srvHz) interpMs = (1000 / srvHz) * 1.5;
       } else if (msg.type === "round_end" || msg.type === "round_start" ||
                  msg.type === "lobby") {
         emit("round", msg);
@@ -170,13 +167,13 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const arrivedAt = performance.now();
     if (lastArrival) {
       const gap = Math.abs(arrivedAt - lastArrival - 1000 / serverHz);
-      stats.jitter = stats.jitter * 0.8 + gap * 0.2;
+      diag.jitter = stats.jitter * 0.8 + gap * 0.2;
     }
     lastArrival = arrivedAt;
 
     frames.push(snap);
     while (frames.length > 20) frames.shift();
-    stats.buffered = frames.length;
+    diag.buffered = frames.length;
   }
 
   const lerp = (a, b, k) => a + (b - a) * k;
@@ -299,7 +296,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       }
       if (dt) {
         predict(dt);
-        stats.fps = stats.fps ? stats.fps * 0.9 + (1 / dt) * 0.1 : 1 / dt;
+        diag.fps = diag.fps ? diag.fps * 0.9 + (1 / dt) * 0.1 : 1 / dt;
       }
 
       if (now - lastPingAt > 2000 && socket.readyState === WebSocket.OPEN) {
@@ -308,7 +305,18 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       }
     },
 
-    get stats() { return stats; },
+    // A method, not a getter: main.js calls conn.stats(). The two disagreed,
+    // which would have thrown the moment the performance overlay was opened.
+    stats() {
+      return {
+        ping: diag.ping ? Math.round(diag.ping) : -1,
+        srvMs: diag.srvMs,
+        hz: serverHz,
+        budgetMs: serverHz ? +(1000 / serverHz).toFixed(1) : 0,
+        jitter: Math.round(diag.jitter),
+        buffered: diag.buffered
+      };
+    },
 
     getView() {
       if (clockOffset === null) return null;

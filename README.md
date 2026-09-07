@@ -221,7 +221,9 @@ Once visible, a tier can still be unavailable: an insufficient balance shows a "
 
 One CSS trap worth knowing: `.stake` sets `display:flex`, which beats the user-agent rule for the `hidden` attribute, so `.stake[hidden]{ display:none }` has to be spelled out or hiding silently does nothing.
 
-`test/ui.test.js` runs the whole matrix headlessly against a DOM stub — signed out, signed in and funded, a balance between the two prices, offline, and signing out mid-selection.
+`test/signin.test.js` boots `client/main.js` against stubbed DOM, fetch, WebSocket and canvas and drives an actual sign-in through the form. That exists because a unit test on `ui.js` could not catch the bug it guards: `ui.js` was always right, and `main.js` failed to tell it the server was reachable. The failure only appears when the two run together in the real order — guest connect, restore, sign in, reconnect.
+
+`test/ui.test.js` runs the state matrix headlessly against a DOM stub — signed out, signed in and funded, a balance between the two prices, offline, and signing out mid-selection.
 
 **The shared arena requires an account.** Guests play the same simulation locally in their own browser tab, against bots only — they never join the multiplayer world. The client routes them there automatically, and `server/index.js` rejects any join without a valid session, so a modified client cannot slip in either.
 
