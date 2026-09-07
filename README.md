@@ -54,7 +54,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | 8080 | Listen port |
-| `BOTS` | 0 | Bots in the live arena. Off: signed-in play is PvP only |
+| `BOTS` | 0, or 25 in test mode | Bots **per room**. Test mode fills both, so this is doubled in practice |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
@@ -220,6 +220,8 @@ Players can create an account, sign in, and change the display name shown on the
 Once visible, a tier can still be unavailable: an insufficient balance shows a "Low balance" tag and is `aria-disabled` rather than `disabled`, because a disabled button swallows the click and reads as broken. Clicking it says "Not enough balance for that stake." One function decides whether a tier is blocked and why, so what is shown and what a click produces can never disagree.
 
 One CSS trap worth knowing: `.stake` sets `display:flex`, which beats the user-agent rule for the `hidden` attribute, so `.stake[hidden]{ display:none }` has to be spelled out or hiding silently does nothing.
+
+`test/control.test.js` drives `client/net.js` against a stubbed socket fed by a real simulation and asserts the most basic thing nothing else checked: that aiming moves your cell. It exists because "no control, frozen screen" turned out to be an exception thrown inside `applySnapshot` on every frame after the first — which escaped into the socket event handler, killed the update, and left the client rendering its first snapshot for ever. Every other test passed throughout. Decode and apply now sit inside the same guard.
 
 `test/signin.test.js` boots `client/main.js` against stubbed DOM, fetch, WebSocket and canvas and drives an actual sign-in through the form. That exists because a unit test on `ui.js` could not catch the bug it guards: `ui.js` was always right, and `main.js` failed to tell it the server was reachable. The failure only appears when the two run together in the real order — guest connect, restore, sign in, reconnect.
 

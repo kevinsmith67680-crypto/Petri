@@ -85,7 +85,10 @@ const PORT = Number(process.env.PORT) || 8080;
 // The live arena is player versus player, so no bots by default. Bots still
 // fill the guest experience, which runs locally in the browser. Set BOTS to a
 // number if you want to pad an empty server while testing.
-const BOTS = envInt("BOTS", TEST_MODE ? 60 : 0) || 0;
+// Test mode fills EVERY room, and there are two of them — the old default of
+// 60 quietly doubled to 120 bots when the second room arrived. 25 each keeps a
+// 0.1 CPU instance at about a quarter of its tick budget.
+const BOTS = envInt("BOTS", TEST_MODE ? 25 : 0) || 0;
 
 // Server tick rate. 20Hz is the safe default; 30Hz roughly halves the
 // world-update latency at 1.5x the CPU and bandwidth. Worth raising once

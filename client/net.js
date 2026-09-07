@@ -113,16 +113,15 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       return;
     }
 
-    let snap;
+    // Decode AND apply inside the guard. applySnapshot used to sit outside it,
+    // so a fault there escaped into the socket event handler and quietly froze
+    // every later frame — the client kept rendering its first snapshot for
+    // ever, which looks exactly like having no control.
     try {
-      snap = decodeSnapshot(ev.data);
+      applySnapshot(decodeSnapshot(ev.data));
     } catch (err) {
-      // Drop it whole. Never apply half a frame.
-      if (++decodeErrors <= 3) console.warn("dropped malformed snapshot:", err.message);
-      return;
+      if (++decodeErrors <= 3) console.warn("dropped snapshot:", err.message);
     }
-
-    applySnapshot(snap);
   });
 
   socket.addEventListener("close", () => emit("close"));
@@ -167,7 +166,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const arrivedAt = performance.now();
     if (lastArrival) {
       const gap = Math.abs(arrivedAt - lastArrival - 1000 / serverHz);
-      diag.jitter = stats.jitter * 0.8 + gap * 0.2;
+      diag.jitter = diag.jitter * 0.8 + gap * 0.2;
     }
     lastArrival = arrivedAt;
 
