@@ -39,6 +39,15 @@ export const EAT_BONUS = 1.20;       // mass multiplier when absorbing a rival
 export const MERGE_DELAY = 1.75;     // multiplier on the rejoin cooldown
 export const DECAY_ABOVE = 260;      // mass above which cells slowly shrink
 
+// Base movement rate. This was tuned when the arena was 3,400 units across and
+// never revisited when it grew to 8,800 for a 100-player lobby — so crossing
+// the board went from 11 seconds to 30, and a screen's width took over three.
+// That is the "sluggish" that is left once the input latency is gone: not a
+// delay, just a slow character on a big map.
+//
+// Speed still falls with mass at the same rate; only the base moves.
+export const BASE_SPEED = 17;
+
 export const TICK_HZ = 20;           // authoritative server tick rate
 export const STAIN_COUNT = 7;        // palette slots; colours live client-side
 
@@ -294,7 +303,7 @@ export function advanceCell(c, tx, ty, dt, size = WORLD) {
   const d = Math.hypot(dx, dy);
   const r = radiusOf(c.mass);
   if (d > 1) {
-    const speed = 10.2 * Math.pow(c.mass, -0.24) * 60;
+    const speed = BASE_SPEED * Math.pow(c.mass, -0.24) * 60;
     // Ease off as the aim point enters the cell so it settles instead of
     // jittering around the target.
     const throttle = clamp(d / (r * 0.9), 0, 1);

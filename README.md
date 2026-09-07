@@ -401,7 +401,18 @@ Two separate things make a round feel sluggish, and they need different fixes.
 
 The minimap is also throttled to about 12Hz. It shows one dot on a 132px canvas; redrawing it 60 times a second bought nothing visible.
 
-**Camera lag was the biggest single contributor, and the least obvious.** The camera chased the cell with a 143ms time constant, so client prediction made the cell move instantly and the camera put the delay straight back — which is what the player actually feels, because they are watching the centre of the screen. The rate went from 7 to 25, a 40ms constant: at full speed the camera now trails by 32ms instead of 135ms.
+**Once the latency was gone, what remained was simply a slow character on a big map.** Measured end to end with the real client against a simulated 80ms link, the cell and the camera both start moving in the same frame the pointer moves, and the camera trails by about 50ms. There is no delay left to remove.
+
+But `BASE_SPEED` was tuned when the arena was 3,400 units across, and nobody revisited it when it grew to 8,800 for a 100-player lobby. Crossing the board went from 11 seconds to 30, and a screen's width took over three. Raising the base from 10.2 to 17 puts a small cell back at 1.8s to cross the view — close to what it was before the arena grew. Speed still falls with mass at the same rate; only the base moved.
+
+| Mass | Units/s | Crosses the view |
+|---|---|---|
+| 20 | 497 | 1.8 s |
+| 100 | 338 | 2.7 s |
+| 400 | 242 | 3.8 s |
+| 2000 | 165 | 5.6 s |
+
+**Camera lag was the previous contributor, and the least obvious.** The camera chased the cell with a 143ms time constant, so client prediction made the cell move instantly and the camera put the delay straight back — which is what the player actually feels, because they are watching the centre of the screen. The rate went from 7 to 25, a 40ms constant: at full speed the camera now trails by 32ms instead of 135ms.
 
 The smoothing is also solved exponentially rather than as `rate * dt`. The linear form drifts with frame rate, so a 30fps client was chased at a different speed from a 144fps one.
 
