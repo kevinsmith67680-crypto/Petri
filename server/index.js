@@ -179,13 +179,19 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       ok: true,
       players: [...rooms.values()].reduce((n, r) => n + r.clients.size, 0),
+      // startsAt and test are here so a deployment can be diagnosed from a
+      // browser: "nothing happens when I press ready" is almost always a
+      // lobby minimum of 100 on a server nobody set TEST_MODE on.
+      test: TEST_MODE,
       rooms: [...rooms.values()].map(r => ({
         mode: r.mode.id,
         players: r.clients.size,
         ready: readyCount(r),
-        phase: r.round.phase,
+        startsAt: r.lobbyMin,
+        phase: ["", "live", "intermission", "lobby"][r.round.phase] || r.round.phase,
         round: r.round.number,
-        arena: r.world.size
+        arena: r.world.size,
+        bots: r.bots
       })),
       demo: !ramp.isReal,
       storage: DATABASE_URL ? "postgres" : "memory",

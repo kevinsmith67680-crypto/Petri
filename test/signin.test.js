@@ -166,5 +166,39 @@ console.log("\n-- picking a stake --");
 $("stake2").click();
 check("2.00 can be selected", $("stake2").getAttribute("aria-checked") === "true");
 
+console.log("\n-- lobby and ready --");
+
+const sock = sockets[sockets.length - 1];
+$("stake1").click();
+$("btnStart").click();
+await settle();
+
+const live = sockets[sockets.length - 1];
+const lobbyMsg = p => JSON.stringify({
+  type: "lobby", mode: "standard", ready: 0, connected: 1, min: 1, max: 150, phase: p, test: true
+});
+
+// PHASE_LOBBY is 3.
+live.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
+check("the lobby overlay opens", $("lobbyVeil").hidden === false);
+
+const before = live.sent.length;
+$("btnReady").click();
+const sent = live.sent.slice(before).map(String);
+check("pressing ready puts a frame on the wire",
+  sent.some(m => m.includes('"type":"ready"') && m.includes('"ready":true')),
+  sent.join(" ") || "nothing sent");
+
+live.handlers.message.forEach(fn => fn({
+  data: JSON.stringify({ type: "round_start", mode: "standard", number: 1, seconds: 120 })
+}));
+check("round_start closes the lobby", $("lobbyVeil").hidden === true);
+
+// The bug: pushLobby fires on every join and leave, including mid-round, and
+// the client was acting on it — dropping a live player back to the lobby.
+live.handlers.message.forEach(fn => fn({ data: lobbyMsg(1) }));   // PHASE_LIVE
+check("a lobby broadcast during a live round is ignored",
+  $("lobbyVeil").hidden === true);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
