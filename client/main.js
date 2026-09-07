@@ -337,6 +337,8 @@ function frame(now) {
     fpsFrames = 0;
     fpsSince = now;
   }
+  // fps is measured here because only the render loop knows it; everything
+  // else comes from the connection.
   if (settings.perf) ui.renderPerf({ fps, ...(conn?.stats?.() || {}) });
 
   if (conn) {

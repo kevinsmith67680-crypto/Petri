@@ -42,6 +42,11 @@ export const THEMES = {
 };
 
 export function createRenderer(canvas, mapCanvas) {
+  // Reused across frames so a busy renderer is not also an allocator. Eight
+  // buckets: seven palette slots plus one for the player's own colour.
+  const batch = Array.from({ length: 8 }, () => []);
+  const bigOrbs = [];
+  let lastMapDraw = 0;
   const ctx = canvas.getContext("2d", { alpha: false });
   const mapCtx = mapCanvas.getContext("2d");
   const state = { vw: 0, vh: 0, dpr: 1, mapSize: 132 };
@@ -160,30 +165,51 @@ export function createRenderer(canvas, mapCanvas) {
     ctx.strokeStyle = th.edge;
     ctx.strokeRect(0, 0, size, size);
 
-    // Plain orbs are flat dots. Ejected mass is drawn like a small cell —
-    // membrane and gloss — so it reads as projected mass rather than a big
-    // orb, which is what it behaves like.
+    // Plain orbs are batched into one path per colour. Drawn individually
+    // they were 380 beginPath/fill pairs and 380 fillStyle changes a frame —
+    // the single most expensive thing in the renderer, and every one of those
+    // fills is a separate rasterisation pass.
+    //
+    // moveTo before each arc keeps the sub-paths from being joined by a line.
     const ejectR = radiusOf(EJECT_KEEP);
+    const byColour = batch;
+    for (const arr of byColour) arr.length = 0;
+
     for (const p of view.pellets) {
-      const big = !!p[3];
-      const r = big ? ejectR : ORB_RADIUS;
+      if (p[3]) { bigOrbs.push(p); continue; }     // ejected mass is drawn below
+      // Your own ejected mass uses the player colour; slot 7 stands in for it.
+      byColour[p[4] ? 7 : (p[2] % 7)].push(p);
+    }
+
+    for (let ci = 0; ci < 8; ci++) {
+      const group = byColour[ci];
+      if (!group.length) continue;
+      ctx.fillStyle = colorOf(th, ci === 7 ? -1 : ci);
       ctx.beginPath();
-      ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
-      // Your own cells are always drawn in the player colour rather than
-      // their palette slot, so mass you eject must match or it looks like it
-      // came from someone else.
+      for (const p of group) {
+        ctx.moveTo(p[0] + ORB_RADIUS, p[1]);
+        ctx.arc(p[0], p[1], ORB_RADIUS, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    }
+
+    // Ejected mass is drawn like a small cell — membrane and gloss — so it
+    // reads as projected mass rather than a big orb. There are only ever a
+    // handful, so these stay individual.
+    for (const p of bigOrbs) {
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], ejectR, 0, Math.PI * 2);
       ctx.fillStyle = colorOf(th, p[4] ? -1 : p[2]);
       ctx.fill();
-      if (big) {
-        ctx.lineWidth = Math.max(1, r * 0.09);
-        ctx.strokeStyle = th.membrane;
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(p[0] - r * 0.19, p[1] - r * 0.21, r * 0.26, 0, Math.PI * 2);
-        ctx.fillStyle = th.gloss;
-        ctx.fill();
-      }
+      ctx.lineWidth = Math.max(1, ejectR * 0.09);
+      ctx.strokeStyle = th.membrane;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p[0] - ejectR * 0.19, p[1] - ejectR * 0.21, ejectR * 0.26, 0, Math.PI * 2);
+      ctx.fillStyle = th.gloss;
+      ctx.fill();
     }
+    bigOrbs.length = 0;
 
     for (const v of view.viruses) drawVirus(th, v, view.time);
 
@@ -198,6 +224,11 @@ export function createRenderer(canvas, mapCanvas) {
   // The minimap deliberately shows nothing but you — no orbs, no rivals.
   function drawMinimap(view, th, settings) {
     if (!settings.map) return;
+    // It shows one dot on a 132px canvas. Redrawing it 60 times a second buys
+    // nothing a player can see.
+    const now = performance.now();
+    if (now - lastMapDraw < 80) return;
+    lastMapDraw = now;
     const s = state.mapSize;
     mapCtx.clearRect(0, 0, s, s);
     if (!view || !view.me.alive) return;

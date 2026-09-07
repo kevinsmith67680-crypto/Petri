@@ -54,7 +54,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | 8080 | Listen port |
-| `BOTS` | 0, or 25 in test mode | Bots **per room**. Test mode fills both, so this is doubled in practice |
+| `BOTS` | 0; in test mode each room fills to its own lobby size | Overrides both rooms. Bots exist only while a human is in the room |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
@@ -387,6 +387,34 @@ Pressing W throws a blob forward at the cost of a little mass. Three things were
 
 Ejecting costs 16 mass and yields a 13-mass blob at radius 14.4, against an orb's fixed 6 — a 2.4× size difference, and a net 3-mass loss so it can't be used to print mass. Blobs are drawn with a membrane and gloss like small cells rather than as flat dots, which is what they behave like.
 
+### Frame cost and perceived lag
+
+Two separate things make a round feel sluggish, and they need different fixes.
+
+**Draw calls.** Orbs were drawn one at a time: 380 `beginPath`/`arc`/`fill` triples and 380 `fillStyle` changes per frame, every one of those fills a separate rasterisation pass. They are now batched into one path per palette colour, with a `moveTo` before each arc so the sub-paths are not joined.
+
+| Per frame | Before | After |
+|---|---|---|
+| `fill()` calls | 441 | **77** |
+| State writes (`fillStyle` etc.) | 661 | **291** |
+| Total canvas calls | 1705 | **1328** |
+
+The minimap is also throttled to about 12Hz. It shows one dot on a 132px canvas; redrawing it 60 times a second bought nothing visible.
+
+**The interpolation buffer is now adaptive.** Other players are rendered slightly in the past so their motion is smooth between ticks, and that delay was a flat 1.5 ticks — 75ms of deliberate lag, sized for jitter that a good connection does not have. It now tracks measured jitter and sits near a one-tick floor on a steady link:
+
+| Measured jitter | Buffer |
+|---|---|
+| 0–2 ms | 50–52 ms |
+| 5 ms | 55 ms |
+| 12 ms | 62 ms |
+| 25 ms | 75 ms (the old fixed value) |
+| 60 ms | 110 ms, widening to cover it |
+
+On a clean connection that is 23ms of lag removed for free, and on a bad one the buffer widens rather than stuttering. The performance overlay shows the live figure as "ms buffer" next to ping and fps.
+
+**If you want more, raise the tick rate.** `TICK_HZ=30` halves the wait for the next server update and shrinks the buffer proportionally, at 1.5x the CPU. Measured at 2.97ms/tick for both rooms with 25 bots each, that is comfortable on a Standard instance and too tight on the free 0.1 CPU one — check `avgMs` against `budgetMs` in the overlay before committing.
+
 ### Diagnosing lag
 
 Turn on **Performance overlay** in settings. Bottom right you get four numbers, and they separate three completely different causes that all feel identical in play:
@@ -467,6 +495,8 @@ Overrides apply to every room at once: `LOBBY_MIN`, `ROUND_SECONDS`, `PAID_POSIT
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
 
 A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and the server refuses connections past **`LOBBY_MAX`** (default 150) with a "server full" close. The cycle is lobby → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
+
+In test mode each room fills to the size its mode is built for — **100 bots for Standard, 50 for High stakes** — so a solo test sees the board the mode is actually designed around rather than an empty field. Bots are created when the first player joins a room and removed when the last one leaves; simulating a hundred of them in a room nobody is in doubled the server's work for no one's benefit. Measured per tick with both rooms present: 0.33ms idle, 1.49ms with only High stakes occupied, 3.63ms with only Standard, 4.96ms with both.
 
 **Set `LOBBY_MIN=2` while testing.** At 100, nothing starts until a hundred real people are in the lobby simultaneously — which on a new game is never. This is the single most likely way to end up staring at a screen that never does anything.
 

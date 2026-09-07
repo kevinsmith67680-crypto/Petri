@@ -294,6 +294,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
       `<div><span class="${slowFps ? "warn" : ""}">${stats.fps || "—"} fps</span></div>` +
       `<div><span class="${slowPing ? "warn" : ""}">${stats.ping >= 0 ? stats.ping + " ms ping" : "— ping"}</span></div>` +
       `<div><span class="${slowTick ? "warn" : ""}">${stats.srvMs >= 0 ? stats.srvMs.toFixed(1) : "—"} / ${stats.budgetMs || "—"} ms tick</span></div>` +
+      `<div>${stats.interpMs != null ? stats.interpMs + " ms buffer" : ""}</div>` +
       `<div>${stats.hz || "—"} Hz server</div>`;
   }
 

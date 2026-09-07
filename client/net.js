@@ -24,9 +24,14 @@ import { TICK_HZ, advanceCell, advancePellet } from "../shared/sim.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
 // between ticks. Expressed in TICKS, not milliseconds, because the server's
-// rate is configurable and announced in the welcome — at 30Hz this buffer is
-// 50ms rather than 75ms without changing anything here.
-const INTERP_TICKS = 1.5;
+// rate is announced in the welcome — at 30Hz the same buffer is 50ms.
+//
+// ADAPTIVE. A fixed 1.5 ticks spends 75ms of lag insuring against jitter that
+// a good connection does not have. The buffer only needs to cover the spread
+// in arrival times, so it tracks measured jitter and sits near the floor on a
+// steady link, widening only when packets actually arrive unevenly.
+const INTERP_MIN = 1.0;
+const INTERP_MAX = 2.5;
 
 // Aim is 5 bytes. Sending it faster than the tick is not wasted — it means
 // the server acts on a fresher vector the moment its tick comes round, which
@@ -76,6 +81,14 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // Arena size for this room, learned from the first snapshot. Prediction has
   // to clamp to the same bounds the server does or cells drift through walls.
   let worldSize = 0;
+
+  // How far behind the server to render, in seconds. One tick of buffer plus
+  // however much the arrivals are actually spreading.
+  function interpSeconds() {
+    const tickMs = 1000 / serverHz;
+    const ticks = Math.min(INTERP_MAX, Math.max(INTERP_MIN, 1 + diag.jitter / tickMs));
+    return (ticks * tickMs) / 1000;
+  }
   // Derived from the tick rate, and re-derived when the server announces its
   // own. Referred to the old INTERP_MS name until an integration test caught
   // it: every online connection threw here, which left the client silently on
@@ -313,6 +326,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         hz: serverHz,
         budgetMs: serverHz ? +(1000 / serverHz).toFixed(1) : 0,
         jitter: Math.round(diag.jitter),
+        interpMs: Math.round(interpSeconds() * 1000),
         buffered: diag.buffered
       };
     },
@@ -320,7 +334,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     getView() {
       if (clockOffset === null) return null;
       const renderTime =
-        performance.now() / 1000 + clockOffset - (INTERP_TICKS / serverHz);
+        performance.now() / 1000 + clockOffset - interpSeconds();
       const snap = interpolate(renderTime);
       if (!snap) return null;
 

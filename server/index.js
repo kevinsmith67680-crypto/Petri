@@ -85,10 +85,10 @@ const PORT = Number(process.env.PORT) || 8080;
 // The live arena is player versus player, so no bots by default. Bots still
 // fill the guest experience, which runs locally in the browser. Set BOTS to a
 // number if you want to pad an empty server while testing.
-// Test mode fills EVERY room, and there are two of them — the old default of
-// 60 quietly doubled to 120 bots when the second room arrived. 25 each keeps a
-// 0.1 CPU instance at about a quarter of its tick budget.
-const BOTS = envInt("BOTS", TEST_MODE ? 25 : 0) || 0;
+// Bots per room in test mode. Unset, each room fills to its own lobby size —
+// 100 for Standard, 50 for High stakes — so a solo test sees the board the
+// mode is actually designed around. Set BOTS to override both.
+const BOTS_OVERRIDE = process.env.BOTS !== undefined ? Number(process.env.BOTS) : null;
 
 // Server tick rate. 20Hz is the safe default; 30Hz roughly halves the
 // world-update latency at 1.5x the CPU and bandwidth. Worth raising once
@@ -191,7 +191,10 @@ const server = http.createServer(async (req, res) => {
         phase: ["", "live", "intermission", "lobby"][r.round.phase] || r.round.phase,
         round: r.round.number,
         arena: r.world.size,
-        bots: r.bots
+        botTarget: r.bots,
+        // Everything in the world: humans plus however many bots are
+        // currently standing in for the rest of the lobby.
+        inWorld: r.world.players.size
       })),
       demo: !ramp.isReal,
       storage: DATABASE_URL ? "postgres" : "memory",
@@ -276,14 +279,17 @@ function createRoom(mode) {
     lastEater: new Map(),        // victim id -> killer id, for settlement
     lingering: [],               // players whose socket dropped
     round: { number: 0, phase: PHASE_LOBBY, endsAt: Infinity },
-    // Test mode fills every room so a single player can start one alone.
-    bots: TEST_MODE ? Math.min(BOTS, mode.lobbyMax - 1) : 0,
+    // Test mode fills the room to the size the mode is built for, so a solo
+    // test is representative rather than an empty field.
+    bots: TEST_MODE ? Math.min(BOTS_OVERRIDE ?? mode.lobbyMin, mode.lobbyMax - 1) : 0,
     lobbyMin: TEST_MODE ? 1 : (LOBBY_MIN_OVERRIDE ?? mode.lobbyMin),
     lobbyMax: mode.lobbyMax,
     roundSeconds: ROUND_SECONDS_OVERRIDE ?? (TEST_MODE ? 120 : mode.roundSeconds),
     paidPositions: PAID_OVERRIDE ?? mode.paidPositions
   };
-  if (room.bots > 0) fillBots(world, room.bots);
+  // Deliberately NOT populated here. An empty room costs a tick either way;
+  // simulating a hundred bots in a room nobody is in is pure waste, and with
+  // two rooms it doubled the server's load for no one's benefit.
   return room;
 }
 
@@ -326,7 +332,8 @@ const roundView = room => ({
   number: room.round.number
 });
 
-const botTarget = room => (TEST_MODE ? room.bots : 0);
+// Bots exist for the benefit of players in the room. No players, no bots.
+const botTarget = room => (TEST_MODE && room.clients.size > 0 ? room.bots : 0);
 
 let nextClientId = 1;
 
@@ -587,7 +594,7 @@ function startRound(room) {
     else { player.alive = false; player.cells = []; }
   }
 
-  if (botTarget(room) > 0) fillBots(world, botTarget(room));
+  syncBots(room);
   room.lastEater.clear();
   broadcast(room, {
     type: "round_start", mode: room.mode.id,
@@ -596,10 +603,16 @@ function startRound(room) {
   console.log(`[${room.mode.id}] round ${round.number} started with ${readyCount(room)} player(s)`);
 }
 
-function trimBots(room) {
+// Bring the bot population to whatever this room should currently have,
+// in either direction. Called when someone joins or leaves.
+function syncBots(room) {
+  const target = botTarget(room);
   const bots = [...room.world.players.values()].filter(p => p.bot);
-  const excess = bots.length - botTarget(room);
-  for (let i = 0; i < excess; i++) removePlayer(room.world, bots[i].id);
+  if (bots.length > target) {
+    for (let i = 0; i < bots.length - target; i++) removePlayer(room.world, bots[i].id);
+  } else if (bots.length < target) {
+    fillBots(room.world, target);
+  }
 }
 
 // ── connections ─────────────────────────────────────────────────────────────
@@ -742,7 +755,7 @@ wss.on("connection", (ws, req) => {
       const player = addPlayer(room.world, { id, name: displayName });
       meta.state = createClientState(nextClientId);   // staggers keyframes
       room.clients.set(ws, meta);
-      trimBots(room);
+      syncBots(room);
       pushLobby(room);
 
       // Arrivals wait in the lobby rather than dropping into a live round.
@@ -797,6 +810,7 @@ wss.on("connection", (ws, req) => {
 
     if (meta.joined && room) {
       pushLobby(room);
+      syncBots(room);
       // Do not delete the player immediately. Vanishing on demand is a free
       // escape from any losing fight, so cells linger, motionless and edible.
       setAim(room.world, id, 0, 0);
@@ -857,7 +871,7 @@ function tickRoom(room, dt) {
       removePlayer(world, goneId);
       room.lastEater.delete(goneId);
       room.lingering.splice(i, 1);
-      if (botTarget(room) > 0) fillBots(world, botTarget(room));
+      syncBots(room);
     }
   }
 
@@ -926,7 +940,7 @@ server.listen(PORT, () => {
     console.log(
       `  room    : ${r.mode.label.padEnd(12)} stake ${(r.mode.stake / 1e6).toFixed(2)}  ` +
       `starts at ${String(r.lobbyMin).padStart(3)}  cap ${r.lobbyMax}  ` +
-      `arena ${r.world.size}  ${r.roundSeconds}s  ${r.bots} bots`
+      `arena ${r.world.size}  ${r.roundSeconds}s  ${r.bots} bots on demand`
     );
   }
   console.log(`  google  : ${GOOGLE_CLIENT_ID ? "enabled" : "off (set GOOGLE_CLIENT_ID)"}`);
