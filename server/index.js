@@ -943,6 +943,13 @@ server.listen(PORT, () => {
       `arena ${r.world.size}  ${r.roundSeconds}s  ${r.bots} bots on demand`
     );
   }
+  if (TEST_MODE && BOTS_OVERRIDE !== null) {
+    console.warn(
+      `  NOTE    : BOTS=${BOTS_OVERRIDE} is overriding the per-mode bot counts ` +
+      `(Standard would be ${MODES[0].lobbyMin}, High stakes ${MODES[1].lobbyMin}). ` +
+      `Unset BOTS to fill each room to its own size.`
+    );
+  }
   console.log(`  google  : ${GOOGLE_CLIENT_ID ? "enabled" : "off (set GOOGLE_CLIENT_ID)"}`);
   if (TEST_MODE) {
     console.log("  TEST MODE: demo credits only, solo start, bot-filled arena");

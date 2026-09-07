@@ -401,6 +401,10 @@ Two separate things make a round feel sluggish, and they need different fixes.
 
 The minimap is also throttled to about 12Hz. It shows one dot on a 132px canvas; redrawing it 60 times a second bought nothing visible.
 
+**Camera lag was the biggest single contributor, and the least obvious.** The camera chased the cell with a 143ms time constant, so client prediction made the cell move instantly and the camera put the delay straight back — which is what the player actually feels, because they are watching the centre of the screen. The rate went from 7 to 25, a 40ms constant: at full speed the camera now trails by 32ms instead of 135ms.
+
+The smoothing is also solved exponentially rather than as `rate * dt`. The linear form drifts with frame rate, so a 30fps client was chased at a different speed from a 144fps one.
+
 **The interpolation buffer is now adaptive.** Other players are rendered slightly in the past so their motion is smooth between ticks, and that delay was a flat 1.5 ticks — 75ms of deliberate lag, sized for jitter that a good connection does not have. It now tracks measured jitter and sits near a one-tick floor on a steady link:
 
 | Measured jitter | Buffer |

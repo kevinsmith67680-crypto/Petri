@@ -10,6 +10,15 @@ import { WORLD, radiusOf, EJECT_KEEP, ORB_RADIUS } from "../shared/sim.js";
 
 export const CAMERA_ZOOM = 1.5;   // 1 = original framing, 1.5 = 50% closer in
 
+// How hard the camera chases the cell, as a rate per second. The old value of
+// 7 gave a 143ms time constant: prediction made the cell move instantly and
+// then the camera put the lag straight back, which is what a player actually
+// perceives because they are watching the centre of the screen. 25 is a 40ms
+// constant — still smooth, no longer sludge.
+const CAMERA_FOLLOW = 25;
+// Zoom stays gentle. It changes rarely and a snappy zoom is nauseating.
+const CAMERA_ZOOM_RATE = 4;
+
 export const THEMES = {
   light: {
     outside: "#f4f4f2",
@@ -268,9 +277,14 @@ export function createRenderer(canvas, mapCanvas) {
     const span = radiusOf(Math.max(view.me.mass, 1));
     const fit = Math.min(Math.max(Math.min(state.vw, state.vh) / 820, 0.62), 1.35);
     const target = Math.pow(Math.min(78 / span, 1), 0.42) * fit * CAMERA_ZOOM;
-    camera.x += (view.me.x - camera.x) * Math.min(1, dt * 7);
-    camera.y += (view.me.y - camera.y) * Math.min(1, dt * 7);
-    camera.scale += (target - camera.scale) * Math.min(1, dt * 3.2);
+    // Exponential, solved exactly rather than as rate * dt. The linear form
+    // drifts with frame rate — a 30fps client chased at a different speed
+    // from a 144fps one, which is not something the player should feel.
+    const followK = 1 - Math.exp(-CAMERA_FOLLOW * dt);
+    const zoomK = 1 - Math.exp(-CAMERA_ZOOM_RATE * dt);
+    camera.x += (view.me.x - camera.x) * followK;
+    camera.y += (view.me.y - camera.y) * followK;
+    camera.scale += (target - camera.scale) * zoomK;
   }
 
   function initialScale() {
