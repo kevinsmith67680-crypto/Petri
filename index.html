@@ -155,8 +155,8 @@
     box-shadow:var(--shadow); font-size:13px;
   }
   .spec[hidden]{ display:none; }
-  .spec .who{ display:flex; align-items:baseline; gap:8px; }
-  .spec .who i{ font-style:normal; font-size:11.5px; color:var(--muted); }
+  .spec .who{ display:flex; align-items:baseline; gap:10px; }
+  .spec .who i{ font-style:normal; font-size:14.4px; color:var(--muted); }
   .spec .who b{ font-weight:600; }
   .spec button{
     font-family:inherit; font-size:12.5px; font-weight:600;
@@ -309,12 +309,12 @@
   .card h2{ font-size:32px; font-weight:600; letter-spacing:-.03em; line-height:1.05; }
   .card p{ margin-top:12px; font-size:14px; line-height:1.65; color:var(--muted); max-width:54ch; }
 
-  .keys{ margin-top:24px; display:grid; gap:9px; font-size:13px; }
-  .keys div{ display:flex; align-items:center; gap:13px; }
+  .keys{ margin-top:30px; display:grid; gap:11.2px; font-size:16.2px; }
+  .keys div{ display:flex; align-items:center; gap:16.2px; }
   .keys kbd{
-    font-family:inherit; font-size:12.5px; font-weight:600;
-    padding:5px 0; min-width:70px; text-align:center;
-    background:var(--key); border:1px solid var(--line-2); border-radius:4px;
+    font-family:inherit; font-size:15.6px; font-weight:600;
+    padding:6.2px 0; min-width:87.5px; text-align:center;
+    background:var(--key); border:1px solid var(--line-2); border-radius:5px;
   }
   .keys p{ margin:0; color:var(--muted); }
 
@@ -347,12 +347,12 @@
 
   /* ── account panel ── */
 
-  .auth{ margin-top:20px; }
+  .auth{ margin-top:25px; }
   .auth[hidden]{ display:none; }
-  .tabs{ display:flex; gap:18px; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  .tabs{ display:flex; gap:22.5px; border-bottom:1px solid var(--line); margin-bottom:17.5px; }
   .tabs button{
-    margin:0; padding:0 0 11px; background:none; border:none;
-    font-family:inherit; font-size:14.5px; font-weight:600;
+    margin:0; padding:0 0 13.8px; background:none; border:none;
+    font-family:inherit; font-size:18.1px; font-weight:600;
     color:var(--muted); cursor:pointer;
     border-bottom:2px solid transparent; border-radius:0;
     transition:color .14s ease, border-color .14s ease;
@@ -360,35 +360,35 @@
   .tabs button:hover{ color:var(--text); opacity:1; }
   .tabs button[aria-selected="true"]{ color:var(--text); border-bottom-color:var(--accent); }
 
-  .google{ margin-bottom:16px; }
+  .google{ margin-bottom:20px; }
   .google[hidden]{ display:none; }
 
   /* Google renders its own button into here as a fixed-width iframe. We size
      it to this container in JS so it sits flush with our full-width Sign in
      button rather than floating narrower in the middle. */
-  #googleBtn{ display:flex; justify-content:center; min-height:44px; }
-  #googleBtn > div{ border-radius:5px; overflow:hidden; }
+  #googleBtn{ display:flex; justify-content:center; min-height:55px; }
+  #googleBtn > div{ border-radius:6.2px; overflow:hidden; }
 
   /* Hairline either side of the word, so the two sign-in routes read as
      alternatives rather than a stack of buttons. */
   .or{
-    display:flex; align-items:center; gap:12px;
-    margin-top:16px;
-    font-size:12px; letter-spacing:.02em; color:var(--muted);
+    display:flex; align-items:center; gap:15px;
+    margin-top:20px;
+    font-size:15px; letter-spacing:.02em; color:var(--muted);
   }
-  .or::before, .or::after{ content:""; flex:1; height:1px; background:var(--line); }
+  .or::before, .or::after{ content:""; flex:1; height:1.2px; background:var(--line); }
 
-  .field{ display:grid; gap:6px; margin-bottom:13px; }
-  .field label{ font-size:13px; color:var(--muted); }
+  .field{ display:grid; gap:7.5px; margin-bottom:16.2px; }
+  .field label{ font-size:16.2px; color:var(--muted); }
   .field input{
-    font-family:inherit; font-size:15px;
-    padding:12px 14px; border-radius:5px;
+    font-family:inherit; font-size:18.8px;
+    padding:15px 17.5px; border-radius:6.2px;
     background:var(--bg); color:var(--text);
     border:1px solid var(--line-2);
   }
   .field input:focus{ outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent; }
-  .hint{ font-size:12.5px; line-height:1.5; color:var(--muted); margin-top:-4px; margin-bottom:13px; }
-  .err{ font-size:13px; color:#c4453b; margin-top:3px; min-height:1em; }
+  .hint{ font-size:15.6px; line-height:1.5; color:var(--muted); margin-top:-5px; margin-bottom:16.2px; }
+  .err{ font-size:16.2px; color:#c4453b; margin-top:3.8px; min-height:1em; }
   html[data-theme="dark"] .err{ color:#f08a80; }
   /* Buttons inside a pane are styled by explicit selector, never by a blanket
      `.pane button` rule — that would out-specify .stake, .ramp and .switch and
@@ -398,64 +398,64 @@
   .pane .rename button{
     font-family:inherit; font-weight:600;
     color:var(--panel); background:var(--text);
-    border:none; border-radius:5px; cursor:pointer;
+    border:none; border-radius:6.2px; cursor:pointer;
     transition:opacity .14s ease, transform .06s ease;
   }
   .pane .go{
-    margin-top:4px; width:100%;
-    font-size:14.5px; padding:13px 16px;
+    margin-top:5px; width:100%;
+    font-size:18.1px; padding:16.2px 20px;
   }
-  .pane .rename button{ margin:0; font-size:13.5px; padding:0 18px; }
+  .pane .rename button{ margin:0; font-size:16.9px; padding:0 22.5px; }
 
   .pane .go:hover,
   .pane .rename button:hover{ opacity:.86; }
   /* A touch of travel on press: the only feedback between click and the
      network answering, which on a cold Render instance can be a while. */
   .pane .go:active,
-  .pane .rename button:active{ transform:translateY(1px); }
+  .pane .rename button:active{ transform:translateY(1.2px); }
   .pane .go:focus-visible,
   .pane .rename button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
   .pane .go[disabled]{ opacity:.55; cursor:progress; transform:none; }
 
   .who{
-    display:flex; align-items:center; justify-content:space-between; gap:12px;
-    padding:12px 0; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; gap:15px;
+    padding:15px 0; border-bottom:1px solid var(--line);
   }
-  .who .name{ display:grid; gap:2px; }
-  .who .name b{ font-size:17px; font-weight:600; }
-  .who .name i{ font-style:normal; font-size:13px; color:var(--muted); }
+  .who .name{ display:grid; gap:2.5px; }
+  .who .name b{ font-size:21.2px; font-weight:600; }
+  .who .name i{ font-style:normal; font-size:16.2px; color:var(--muted); }
   .who button{
-    margin:0; padding:8px 13px; font-size:13px;
+    margin:0; padding:10px 16.2px; font-size:16.2px;
     background:transparent; color:var(--text); border:1px solid var(--line-2);
-    border-radius:4px; cursor:pointer; font-family:inherit; font-weight:600;
+    border-radius:5px; cursor:pointer; font-family:inherit; font-weight:600;
   }
   .who button:hover{ opacity:1; border-color:var(--text); }
-  .rename{ margin-top:12px; }
+  .rename{ margin-top:15px; }
   .rename[hidden]{ display:none; }
-  .rename .row2{ display:flex; gap:8px; }
+  .rename .row2{ display:flex; gap:10px; }
   .rename input{ flex:1; }
 
 
-  .career{ margin-top:14px; display:none; grid-template-columns:1fr 1fr; gap:8px 18px; font-size:13.5px; }
+  .career{ margin-top:17.5px; display:none; grid-template-columns:1fr 1fr; gap:10px 22.5px; font-size:16.9px; }
   .career.on{ display:grid; }
-  .career div{ display:flex; justify-content:space-between; gap:10px; }
+  .career div{ display:flex; justify-content:space-between; gap:12.5px; }
   .career i{ font-style:normal; color:var(--muted); }
   .career em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
 
   /* ── pregame menu: two cards under a shared header ── */
 
-  .menu{ width:min(980px, 100%); margin:auto; flex:0 0 auto; }
+  .menu{ width:min(1225px, 100%); margin:auto; flex:0 0 auto; }
 
   .head{
     display:flex; align-items:center; justify-content:space-between;
-    gap:14px; flex-wrap:wrap; margin-bottom:16px;
+    gap:17.5px; flex-wrap:wrap; margin-bottom:20px;
   }
   .brand{ line-height:0; }
   /* Two files rather than a CSS filter: the wordmark is near-black and the
      mark is violet, and no single filter lifts one without wrecking the
      other. The dark variant lifts only the dark pixels, on a smooth ramp so
      the gradient in the C has no visible seam. */
-  .logo{ display:block; width:172px; height:auto; }
+  .logo{ display:block; width:215px; height:auto; }
   .logo.dark{ display:none; }
   html[data-theme="dark"] .logo.light{ display:none; }
   html[data-theme="dark"] .logo.dark{ display:block; }
@@ -466,57 +466,57 @@
        ending at different points reads as deliberate; one box with a short
        column reads as broken. */
     align-items:start;
-    gap:18px;
+    gap:22.5px;
   }
-  @media (max-width:860px){ .panes{ grid-template-columns:1fr; } }
+  @media (max-width:1075px){ .panes{ grid-template-columns:1fr; } }
 
   .pane{
     background:var(--panel);
     border:1px solid var(--line);
-    border-radius:8px;
-    padding:26px 28px;
+    border-radius:10px;
+    padding:32.5px 35px;
     box-shadow:var(--shadow);
   }
   .pane-title{
-    padding-bottom:12px; margin-bottom:4px;
+    padding-bottom:15px; margin-bottom:5px;
     border-bottom:1px solid var(--line);
   }
-  .pane-title b{ display:block; font-size:15px; font-weight:600; color:var(--muted); }
+  .pane-title b{ display:block; font-size:18.8px; font-weight:600; color:var(--muted); }
   .pane-title i{
-    display:block; font-style:normal; font-size:13px;
-    color:var(--muted); opacity:.8; margin-top:4px;
+    display:block; font-style:normal; font-size:16.2px;
+    color:var(--muted); opacity:.8; margin-top:5px;
   }
 
-  .block{ padding:15px 0; border-bottom:1px solid var(--line); }
+  .block{ padding:18.8px 0; border-bottom:1px solid var(--line); }
   .block:last-child{ border-bottom:none; padding-bottom:0; }
-  .block h2{ font-size:15px; font-weight:600; margin-bottom:6px; }
-  .block p{ font-size:14px; line-height:1.6; color:var(--muted); }
+  .block h2{ font-size:18.8px; font-weight:600; margin-bottom:7.5px; }
+  .block p{ font-size:17.5px; line-height:1.6; color:var(--muted); }
 
-  .facts{ display:grid; gap:7px; font-size:14px; }
-  .facts div{ display:flex; justify-content:space-between; gap:12px; }
+  .facts{ display:grid; gap:8.8px; font-size:17.5px; }
+  .facts div{ display:flex; justify-content:space-between; gap:15px; }
   .facts span{ color:var(--muted); }
   .facts em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
-  .aside{ margin-top:9px; font-size:12.5px; line-height:1.5; color:var(--muted); }
+  .aside{ margin-top:11.2px; font-size:15.6px; line-height:1.5; color:var(--muted); }
 
-  .keys{ display:grid; gap:8px; font-size:14px; }
-  .keys div{ display:flex; gap:11px; align-items:baseline; }
+  .keys{ display:grid; gap:10px; font-size:17.5px; }
+  .keys div{ display:flex; gap:13.8px; align-items:baseline; }
   .keys span{ color:var(--muted); }
 
   .payout{
-    margin-top:13px; padding:13px 14px;
-    border:1px solid var(--accent); border-radius:5px;
+    margin-top:16.2px; padding:16.2px 17.5px;
+    border:1px solid var(--accent); border-radius:6.2px;
     background:color-mix(in srgb, var(--accent) 8%, transparent);
   }
-  .payout b{ display:block; font-size:14px; font-weight:600; margin-bottom:5px; }
-  .payout p{ font-size:13px; line-height:1.55; color:var(--muted); }
+  .payout b{ display:block; font-size:17.5px; font-weight:600; margin-bottom:6.2px; }
+  .payout p{ font-size:16.2px; line-height:1.55; color:var(--muted); }
   .payout strong{ color:var(--text); font-weight:600; }
 
   /* The Play pane owns the primary action, so its button is full width. */
   .pane > #btnStart{
-    margin-top:22px; width:100%;
-    font-family:inherit; font-size:15.5px; font-weight:600;
+    margin-top:27.5px; width:100%;
+    font-family:inherit; font-size:19.4px; font-weight:600;
     color:var(--panel); background:var(--text);
-    border:none; border-radius:5px; padding:15px; cursor:pointer;
+    border:none; border-radius:6.2px; padding:18.8px; cursor:pointer;
     transition:opacity .14s ease;
   }
   .pane > #btnStart:hover{ opacity:.84; }
@@ -526,47 +526,47 @@
 
   .badge{
     display:inline-block;
-    font-size:11.5px; font-weight:700; letter-spacing:.06em;
-    padding:5px 11px; border-radius:3px;
+    font-size:14.4px; font-weight:700; letter-spacing:.06em;
+    padding:6.2px 13.8px; border-radius:3.8px;
     background:#f0e3b8; color:#4a3b0d; border:1px solid #d8c47e;
-    margin-bottom:14px;
+    margin-bottom:17.5px;
   }
   html[data-theme="dark"] .badge{ background:#3a3216; color:#f0dfa4; border-color:#5c4f22; }
 
   .wallet[hidden]{ display:none; }
   .wallet{
-    margin-top:22px;
-    border:1px solid var(--line); border-radius:6px;
-    padding:14px 16px;
+    margin-top:27.5px;
+    border:1px solid var(--line); border-radius:7.5px;
+    padding:17.5px 20px;
   }
   .wallet .bal{
-    display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+    display:flex; align-items:baseline; justify-content:space-between; gap:15px;
   }
-  .wallet .bal i{ font-style:normal; font-size:13.5px; color:var(--muted); }
+  .wallet .bal i{ font-style:normal; font-size:16.9px; color:var(--muted); }
   .wallet .bal b{
-    font-size:29px; font-weight:600; letter-spacing:-.02em;
+    font-size:36.2px; font-weight:600; letter-spacing:-.02em;
     font-variant-numeric:tabular-nums;
   }
-  .wallet .bal b span{ font-size:14px; font-weight:500; color:var(--muted); margin-left:5px; }
+  .wallet .bal b span{ font-size:17.5px; font-weight:500; color:var(--muted); margin-left:6.2px; }
   .ramp{
-    margin-top:13px; width:100%;
-    font-family:inherit; font-size:13.5px; font-weight:600;
-    padding:11px 14px; border-radius:4px; cursor:pointer;
+    margin-top:16.2px; width:100%;
+    font-family:inherit; font-size:16.9px; font-weight:600;
+    padding:13.8px 17.5px; border-radius:5px; cursor:pointer;
     background:transparent; color:var(--text);
     border:1px dashed var(--line-2);
     transition:border-color .14s ease;
   }
   .ramp:hover{ border-color:var(--text); }
   .ramp:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
-  .ramp-note{ margin-top:9px; font-size:12.5px; line-height:1.5; color:var(--muted); }
+  .ramp-note{ margin-top:11.2px; font-size:15.6px; line-height:1.5; color:var(--muted); }
 
-  .stakes{ margin-top:22px; display:grid; gap:9px; }
-  .stakes > i{ font-style:normal; font-size:13.5px; color:var(--muted); }
+  .stakes{ margin-top:27.5px; display:grid; gap:11.2px; }
+  .stakes > i{ font-style:normal; font-size:16.9px; color:var(--muted); }
   .stake{
-    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    display:flex; align-items:center; justify-content:space-between; gap:15px;
     width:100%; text-align:left;
-    font-family:inherit; font-size:15px;
-    padding:14px 16px; border-radius:5px; cursor:pointer;
+    font-family:inherit; font-size:18.8px;
+    padding:17.5px 20px; border-radius:6.2px; cursor:pointer;
     background:transparent; color:var(--text);
     border:1px solid var(--line-2);
     transition:border-color .14s ease, background .14s ease;
@@ -584,8 +584,8 @@
 
   .stake .lock{
     display:none; font-style:normal;
-    margin-left:9px; padding:3px 8px; border-radius:3px;
-    font-size:11px; font-weight:600; letter-spacing:.02em;
+    margin-left:11.2px; padding:3.8px 10px; border-radius:3.8px;
+    font-size:13.8px; font-weight:600; letter-spacing:.02em;
     background:var(--key); color:var(--muted);
     border:1px solid var(--line-2);
   }
@@ -593,7 +593,7 @@
   .stake em{ display:flex; align-items:center; }
 
   .stake-note{
-    margin-top:2px; font-size:12.5px; line-height:1.5;
+    margin-top:2.5px; font-size:15.6px; line-height:1.5;
     color:var(--accent); font-weight:600;
   }
   /* When the tiers are hidden entirely the note is the only thing left, so it
@@ -601,7 +601,7 @@
   .stake-note.quiet{ color:var(--muted); font-weight:400; }
   .stake-note[hidden]{ display:none; }
   .stake em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
-  .stake small{ display:block; font-size:12.5px; color:var(--muted); margin-top:3px; }
+  .stake small{ display:block; font-size:15.6px; color:var(--muted); margin-top:3.8px; }
   .stake:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 
   /* pot readout + cash out, shown only during a wagered run */
@@ -633,31 +633,31 @@
   }
 
   /* Short viewports: tighten the rhythm so Start stays above the fold. */
-  @media (max-height:900px){
+  @media (max-height:1100px){
     .card{ padding:24px 28px 22px; }
-    .pane{ padding:20px 22px; }
-    .head{ margin-bottom:12px; }
-    .logo{ width:132px; }
-    .block{ padding:11px 0; }
-    .block p{ font-size:13px; }
-    .facts, .keys{ font-size:13px; }
-    .field{ margin-bottom:9px; }
-    .field input{ padding:10px 12px; font-size:14px; }
-    .stake{ padding:11px 13px; }
-    .stakes{ margin-top:16px; }
-    .pane > #btnStart{ margin-top:16px; padding:12px; }
-    .block{ padding:10px 0; }
+    .pane{ padding:25px 27.5px; }
+    .head{ margin-bottom:15px; }
+    .logo{ width:165px; }
+    .block{ padding:13.8px 0; }
+    .block p{ font-size:16.2px; }
+    .facts, .keys{ font-size:16.2px; }
+    .field{ margin-bottom:11.2px; }
+    .field input{ padding:12.5px 15px; font-size:17.5px; }
+    .stake{ padding:13.8px 16.2px; }
+    .stakes{ margin-top:20px; }
+    .pane > #btnStart{ margin-top:20px; padding:15px; }
+    .block{ padding:12.5px 0; }
     .card h2{ font-size:26px; }
     .card p{ margin-top:8px; font-size:13.5px; line-height:1.55; }
-    .auth{ margin-top:14px; }
-    .field{ margin-bottom:8px; }
-    .field input{ padding:8px 11px; }
-    .wallet{ margin-top:14px; padding:11px 13px; }
-    .stakes{ margin-top:14px; }
-    .stake{ padding:9px 12px; }
-    .keys{ margin-top:14px; }
+    .auth{ margin-top:17.5px; }
+    .field{ margin-bottom:10px; }
+    .field input{ padding:10px 13.8px; }
+    .wallet{ margin-top:17.5px; padding:13.8px 16.2px; }
+    .stakes{ margin-top:17.5px; }
+    .stake{ padding:11.2px 15px; }
+    .keys{ margin-top:17.5px; }
     .card button{ margin-top:18px; }
-    .badge{ margin-bottom:10px; }
+    .badge{ margin-bottom:12.5px; }
   }
 
   @media (max-width:640px){

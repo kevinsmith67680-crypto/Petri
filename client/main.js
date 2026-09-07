@@ -129,7 +129,8 @@ function connect(stake = PRACTICE) {
     const url = serverUrl();
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
-      return createLocalConnection({ name: NAME });
+      ui.setWagerAvailable(false, "Wagering needs a wss:// connection to the server.");
+      return createLocalConnection({ name: NAME, world: MODES[0].world });
     }
     const socket = createSocketConnection({
       url, name: NAME, stake, token: api?.token || null
@@ -140,6 +141,11 @@ function connect(stake = PRACTICE) {
     socket.on("welcome", w => ui.setTestMode(w.test));
     socket.on("close", () => ui.setMode("Disconnected"));
     socket.on("error", () => ui.setMode(`Could not reach ${url}`));
+    // Must be set on BOTH paths. The page connects as a guest before the
+    // stored session has been validated, so this flag starts false; without
+    // clearing it here, signing in reconnects to the server but the menu goes
+    // on insisting that wagering needs one.
+    ui.setWagerAvailable(true);
     ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     return socket;
   }

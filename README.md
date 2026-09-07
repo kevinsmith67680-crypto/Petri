@@ -595,7 +595,7 @@ Bots do not aimbot, collude, or exploit, so this tests mechanics rather than adv
 
 The pregame menu is two cards under a shared header. The left explains the rules — orb value, the size ratio needed to eat someone, the spore threshold, controls, the round length, and who gets paid. The right holds sign-in, the balance, and the stake choice, subtitled "Live rounds, top 5 get paid".
 
-Sizing: the card is 980px wide with a 172px logo and body text at 14–15px, up from 880/128/12.5px. It is a title screen rather than in-game chrome, so it can afford the room. Below 860px the panes stack; below 900px tall a compact breakpoint pulls the padding and type back so Start does not vanish, and the overlay scrolls in any case.
+Sizing: the card is 1225px wide with a 215px logo and body text at 17.5–18.8px. Values were scaled programmatically from the selector list rather than by hand — 161 of them — with `border` and `outline` widths deliberately excluded so hairlines stay at 1px instead of going fuzzy. It is a title screen rather than in-game chrome, so it can afford the room. Below 1075px the panes stack; below 1100px tall a compact breakpoint pulls the padding and type back. At full size the signed-out card runs to roughly 1114px, so on anything shorter than a 1440px display the overlay scrolls — which it is built to do.
 
 They are separate cards rather than two columns of one card because `align-items: start` then lets each keep its natural height. Two boxes ending at different points reads as deliberate; one box with a short right column reads as broken. Below 780px they stack, and the overlay scrolls.
 

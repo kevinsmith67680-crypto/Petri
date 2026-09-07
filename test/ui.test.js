@@ -144,5 +144,30 @@ check("signing out drops the stake back to practice", ui.getStake() === PRACTICE
 check("and hides the tiers again", !shown("stake1") && !shown("stake2"));
 check("with the sign-in line restored", note() === "Sign in to play for stakes.");
 
+console.log("\n-- connect() must set the flag on every path --");
+
+// A latching flag caused a real bug: the page connects as a guest before the
+// stored session is validated, so wagerPossible starts false. The local branch
+// set it; the online branch did not, so signing in reconnected to the server
+// while the menu went on insisting wagering needed one.
+//
+// main.js cannot be imported here (it touches window and a canvas), so this is
+// a source-level guard. Crude, but it catches exactly the regression.
+const mainSrc = await (await import("node:fs/promises")).readFile(
+  new URL("../client/main.js", import.meta.url), "utf8");
+const connectFn = mainSrc.slice(
+  mainSrc.indexOf("function connect("),
+  mainSrc.indexOf("\nfunction onEvent")
+);
+check("connect() enables wagering on the online path",
+  /setWagerAvailable\(true\)/.test(connectFn));
+check("connect() disables it on the local path",
+  /setWagerAvailable\(false/.test(connectFn));
+check("every early return from connect() is accounted for",
+  (connectFn.match(/setWagerAvailable\(/g) || []).length ===
+  (connectFn.match(/return /g) || []).length,
+  `${(connectFn.match(/setWagerAvailable\(/g) || []).length} calls, ` +
+  `${(connectFn.match(/return /g) || []).length} returns`);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
