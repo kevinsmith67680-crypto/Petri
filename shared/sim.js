@@ -34,7 +34,16 @@ export const VIRUS_MASS = 110;
 export const VIRUS_EAT_RATIO = 1.15; // how much bigger you must be to pop one
 export const VIRUS_PIECES = 9;       // fragments a virus scatters you into
 export const MAX_CELLS = 16;
-export const EAT_RATIO = 1.22;       // size advantage needed to eat a rival
+// Size advantage needed to eat a rival. Lowered from 1.22 by 10%: you now
+// need to be 9.8% bigger rather than 22%, so to swallow a mass-100 player you
+// need 110 instead of 122. Contested chases resolve far more often.
+//
+// This is the single most load-bearing number in the game. It sets how fast
+// the board consolidates, how dangerous a near-equal rival is, and how much a
+// split gamble costs — lowering it makes the round more aggressive, and the
+// leader snowballs sooner. Worth playing a full round before deciding it is
+// right.
+export const EAT_RATIO = 1.098;
 export const EAT_BONUS = 1.20;       // mass multiplier when absorbing a rival
 export const MERGE_DELAY = 1.75;     // multiplier on the rejoin cooldown
 export const DECAY_ABOVE = 260;      // mass above which cells slowly shrink

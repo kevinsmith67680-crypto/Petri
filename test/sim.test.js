@@ -11,7 +11,8 @@ import {
   createWorld, addPlayer, fillBots, stepWorld, setAim, queueAction,
   totalMass, centroid, leaderboard, TICK_HZ, WORLD, PELLETS, VIRUSES,
   radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
-  advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN
+  advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN,
+  EAT_RATIO
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -122,6 +123,26 @@ const board = leaderboard(world);
 const sorted = board.every((r, i) => i === 0 || board[i - 1].mass >= r.mass);
 check("leaderboard is sorted by mass", sorted);
 
+
+console.log("\n-- the eating threshold --");
+{
+  // EAT_RATIO is the most load-bearing number in the game, so pin what it
+  // actually means rather than just its value.
+  const contest = (mine, theirs) => {
+    const w = createWorld(4, { size: 8800, pellets: 0, viruses: 0 });
+    const a = addPlayer(w, { id: "a", name: "A" });
+    const b = addPlayer(w, { id: "b", name: "B" });
+    a.cells[0].mass = mine; a.cells[0].x = 4400; a.cells[0].y = 4400;
+    b.cells[0].mass = theirs; b.cells[0].x = 4400; b.cells[0].y = 4400;
+    stepWorld(w, 1 / TICK_HZ);
+    return !b.alive;
+  };
+  check("a 9.8% advantage is enough", contest(110, 100), "110 vs 100");
+  check("but a 5% advantage is not", !contest(105, 100), "105 vs 100");
+  check("equal cells cannot eat each other", !contest(100, 100));
+  check("the threshold is where it is meant to be",
+    Math.abs(EAT_RATIO - 1.098) < 0.001, String(EAT_RATIO));
+}
 
 console.log("\n-- ejected mass behaves like a projectile --");
 {
