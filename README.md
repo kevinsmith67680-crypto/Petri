@@ -460,6 +460,18 @@ On a clean connection that is 23ms of lag removed for free, and on a bad one the
 
 **If you want more, raise the tick rate.** `TICK_HZ=30` halves the wait for the next server update and shrinks the buffer proportionally, at 1.5x the CPU. Measured at 2.97ms/tick for both rooms with 25 bots each, that is comfortable on a Standard instance and too tight on the free 0.1 CPU one — check `avgMs` against `budgetMs` in the overlay before committing.
 
+### Why the moves felt late, and why the motion had a faint stutter
+
+**Split and eject are now predicted locally.** Pressing Space or W used to send the action and then show nothing until the server's snapshot came back — a full round trip, 80 to 200ms on a real link. The physics were fine; the *response* was late, and that lateness is what "unnatural" meant. The client now mirrors what the server will do on the same frame the key goes down: a provisional split piece with the right launch velocity, or a provisional blob. These are ghosts — dropped the moment the server's real cells arrive, or after 0.45s of simulated time if it never confirms. The server remains the only authority.
+
+**Splits coast instead of popping.** The old per-frame friction of 0.86 shed 90% of a split's travel in 255ms; agar.io pieces visibly coast for half a second or more. Friction is now 0.935, with launch speed retuned so a mass-100 split travels 274 units and finishes 90% of it at 567ms. The velocity decay is integrated exactly, the same way ejected mass already was, so the client's ghost and the server's real piece follow the same path at any frame rate.
+
+**Mass is smoothed, not stepped.** Every orb eaten arrived as a jump in radius at the tick rate, and because speed depends on mass the movement jerked with it — a faint 20Hz stutter under everything. Predicted mass now eases toward the server's value.
+
+**Prediction has a dead zone.** Positions travel as whole units, so a sub-unit disagreement with the server is quantisation noise. Correcting toward it wobbled the cell by a pixel every snapshot. Errors under 1.5 units are now left alone.
+
+The interpolation floor for other players rose from 1.0 to 1.2 ticks, so a single late packet no longer stalls their motion.
+
 ### Diagnosing lag
 
 Turn on **Performance overlay** in settings. Bottom right you get four numbers, and they separate three completely different causes that all feel identical in play:

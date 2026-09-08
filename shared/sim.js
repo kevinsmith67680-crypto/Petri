@@ -48,6 +48,17 @@ export const DECAY_ABOVE = 260;      // mass above which cells slowly shrink
 // Speed still falls with mass at the same rate; only the base moves.
 export const BASE_SPEED = 17;
 
+// Split and burst physics. Velocity is in world units per second and decays
+// exponentially. The old per-frame factor of 0.86 shed 90% of the travel in
+// 255ms, which read as a pop; agar.io pieces visibly coast for half a second
+// or more. CELL_FRICTION is the per-1/60s factor for readability; the exact
+// per-second form is derived once below.
+const CELL_FRICTION = 0.935;                 // ~0.6s to shed 90% of travel
+const CELL_DECAY = Math.pow(CELL_FRICTION, 60);
+const CELL_LN = Math.log(CELL_DECAY);
+// Launch speed for a split piece of the given mass, units per second.
+export const splitLaunchSpeed = half => 780 + Math.sqrt(half) * 40;
+
 export const TICK_HZ = 20;           // authoritative server tick rate
 export const STAIN_COUNT = 7;        // palette slots; colours live client-side
 
@@ -313,13 +324,18 @@ export function advanceCell(c, tx, ty, dt, size = WORLD) {
     c.x += (dx / d) * speed * throttle * dt;
     c.y += (dy / d) * speed * throttle * dt;
   }
-  c.x += (c.vx || 0) * 60 * dt;
-  c.y += (c.vy || 0) * 60 * dt;
-  const friction = Math.pow(0.86, dt * 60);
-  c.vx = (c.vx || 0) * friction;
-  c.vy = (c.vy || 0) * friction;
-  if (Math.abs(c.vx) < 0.02) c.vx = 0;
-  if (Math.abs(c.vy) < 0.02) c.vy = 0;
+  // Launch velocity from a split or a virus burst, coasting to a stop.
+  // Integrated exactly (see advancePellet) so the client's prediction of a
+  // split and the server's simulation of it agree at any frame rate.
+  if (c.vx || c.vy) {
+    const f = Math.pow(CELL_DECAY, dt);
+    const travel = (f - 1) / CELL_LN;          // integral of the decay over dt
+    c.x += c.vx * travel;
+    c.y += c.vy * travel;
+    c.vx *= f;
+    c.vy *= f;
+    if (Math.abs(c.vx) < 1 && Math.abs(c.vy) < 1) { c.vx = 0; c.vy = 0; }
+  }
 
   c.x = clamp(c.x, r, size - r);
   c.y = clamp(c.y, r, size - r);
@@ -374,7 +390,7 @@ function splitCell(world, ent, cell, dirX, dirY, mass) {
     cell.y + dirY * radiusOf(cell.mass) * 0.4,
     half, cell.ci
   );
-  const power = 15 + Math.sqrt(half) * 0.9;
+  const power = splitLaunchSpeed(half);
   child.vx = dirX * power;
   child.vy = dirY * power;
   // Cooldown grows with fragment mass; bigger pieces stay apart longer.
@@ -440,8 +456,8 @@ function burst(world, ent, cell) {
   for (let i = 0; i < pieces; i++) {
     const ang = spin + (Math.PI * 2 * i) / pieces + rand(world, -0.18, 0.18);
     const frag = splitCell(world, ent, cell, Math.cos(ang), Math.sin(ang), chunk);
-    frag.vx *= 1.7;   // fragments fly further so the pop reads clearly
-    frag.vy *= 1.7;
+    frag.vx *= 1.4;   // fragments fly further so the pop reads clearly
+    frag.vy *= 1.4;
   }
 }
 

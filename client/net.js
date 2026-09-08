@@ -20,7 +20,10 @@
 import {
   MSG, decodeSnapshot, encodeAim, encodeAction, KEYFRAME_TICKS
 } from "../shared/protocol.js";
-import { TICK_HZ, advanceCell, advancePellet } from "../shared/sim.js";
+import {
+  TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed,
+  EJECT_MASS, EJECT_KEEP, EJECT_SPEED, MAX_CELLS
+} from "../shared/sim.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
 // between ticks. Expressed in TICKS, not milliseconds, because the server's
@@ -30,7 +33,7 @@ import { TICK_HZ, advanceCell, advancePellet } from "../shared/sim.js";
 // a good connection does not have. The buffer only needs to cover the spread
 // in arrival times, so it tracks measured jitter and sits near the floor on a
 // steady link, widening only when packets actually arrive unevenly.
-const INTERP_MIN = 1.0;
+const INTERP_MIN = 1.2;   // a hair over one tick: one late packet no longer stalls
 const INTERP_MAX = 2.5;
 
 // Aim is 5 bytes. Sending it faster than the tick is not wasted — it means
@@ -77,6 +80,16 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // what removes the round trip from the feel of the controls: we move now,
   // and reconcile against the server as its snapshots arrive.
   const predicted = new Map();
+
+  // Locally predicted results of a split or an eject, shown the instant the
+  // key goes down. Without these the piece or the blob appears a full round
+  // trip after the press — 80 to 200ms on a real link — which is most of why
+  // the moves felt unnatural. They are provisional: dropped when the server's
+  // real cells arrive, or after a short deadline if it never confirms.
+  const ghostCells = [];      // { x, y, mass, vx, vy, age }
+  const ghostBlobs = [];      // { x, y, vx, vy, age, ci }
+  const GHOST_TTL = 0.45;     // seconds before an unconfirmed ghost is dropped
+  let authoritativeCount = 0; // cells the server last said were ours
 
   // Arena size for this room, learned from the first snapshot. Prediction has
   // to clamp to the same bounds the server does or cells drift through walls.
@@ -164,6 +177,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
     for (const n of snap.names) names.set(n.nid, n.name);
 
+    if (snap.added.some(p => p.big && p.mine)) ghostBlobs.length = 0;
     for (const p of snap.added) {
       pellets.set(p.id, {
         x: p.x, y: p.y, ci: p.ci,
@@ -231,22 +245,33 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const atx = (am ? ax / am : 0) + pendingAim.x;
     const aty = (am ? ay / am : 0) + pendingAim.y;
 
+    // New server cells mean a split or burst was confirmed: the ghosts have
+    // done their job.
+    if (authoritative.size > authoritativeCount) ghostCells.length = 0;
+    authoritativeCount = authoritative.size;
+
     for (const [id, c] of authoritative) {
       let p = predicted.get(id);
       if (!p) {
         predicted.set(id, { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 });
         continue;
       }
-      p.mass = c.m;
+      // Mass is smoothed rather than stepped. Every orb eaten arrives as a
+      // jump in radius at the tick rate, and because speed depends on mass
+      // the movement jerked with it — visible as a faint 20Hz stutter.
+      p.mass += (c.m - p.mass) * Math.min(1, dt * 12);
 
       const ghost = { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 };
       if (age > 0) advanceCell(ghost, atx, aty, age, worldSize);
 
       const ex = ghost.x - p.x, ey = ghost.y - p.y;
-      if (Math.hypot(ex, ey) > SNAP_ERROR) {
+      const err = Math.hypot(ex, ey);
+      if (err > SNAP_ERROR) {
         // Not a wrong guess but stale state: a split, a virus pop, a respawn.
         p.x = ghost.x; p.y = ghost.y; p.vx = 0; p.vy = 0;
-      } else {
+      } else if (err > 1.5) {
+        // Dead zone: positions travel as whole units, so a sub-unit error is
+        // quantisation noise, and correcting toward it wobbles the cell.
         const k = Math.min(1, dt * CORRECT_PER_SEC);
         p.x += ex * k;
         p.y += ey * k;
@@ -262,6 +287,56 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const tx = cx + pendingAim.x, ty = cy + pendingAim.y;
 
     for (const p of predicted.values()) advanceCell(p, tx, ty, dt, worldSize);
+
+    for (let i = ghostCells.length - 1; i >= 0; i--) {
+      const g = ghostCells[i];
+      if ((g.age += dt) > GHOST_TTL) { ghostCells.splice(i, 1); continue; }
+      advanceCell(g, tx, ty, dt, worldSize);
+    }
+    for (let i = ghostBlobs.length - 1; i >= 0; i--) {
+      const g = ghostBlobs[i];
+      if ((g.age += dt) > GHOST_TTL) { ghostBlobs.splice(i, 1); continue; }
+      advancePellet(g, dt, worldSize);
+    }
+  }
+
+  // Mirror what the server will do so the response is on screen this frame.
+  // The server remains the authority: if it disagrees, its version replaces
+  // these within one snapshot.
+  function predictSplit() {
+    let room = MAX_CELLS - predicted.size - ghostCells.length;
+    const ready = [...predicted.values()].filter(p => p.mass >= 36).sort((a, b) => b.mass - a.mass);
+    let cx = 0, cy = 0, cm = 0;
+    for (const p of predicted.values()) { cx += p.x * p.mass; cy += p.y * p.mass; cm += p.mass; }
+    const tx = (cm ? cx / cm : 0) + pendingAim.x, ty = (cm ? cy / cm : 0) + pendingAim.y;
+    for (const p of ready) {
+      if (room-- <= 0) break;
+      const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
+      const half = p.mass / 2;
+      p.mass -= half;
+      const speed = splitLaunchSpeed(half);
+      ghostCells.push({
+        x: p.x + (dx / d) * radiusOf(p.mass) * 0.4,
+        y: p.y + (dy / d) * radiusOf(p.mass) * 0.4,
+        mass: half, vx: (dx / d) * speed, vy: (dy / d) * speed, age: 0
+      });
+    }
+  }
+
+  function predictEject(ci) {
+    let cx = 0, cy = 0, cm = 0;
+    for (const p of predicted.values()) { cx += p.x * p.mass; cy += p.y * p.mass; cm += p.mass; }
+    const tx = (cm ? cx / cm : 0) + pendingAim.x, ty = (cm ? cy / cm : 0) + pendingAim.y;
+    for (const p of predicted.values()) {
+      if (p.mass < EJECT_MASS * 2) continue;
+      const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
+      p.mass -= EJECT_MASS;
+      const gap = radiusOf(p.mass) + radiusOf(EJECT_KEEP) * 0.35;
+      ghostBlobs.push({
+        x: p.x + (dx / d) * gap, y: p.y + (dy / d) * gap,
+        vx: (dx / d) * EJECT_SPEED, vy: (dy / d) * EJECT_SPEED, age: 0, ci
+      });
+    }
   }
 
   // Blend the two frames straddling the render time. Cells are matched by id;
@@ -306,7 +381,11 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     sendAction(action) {
       if (socket.readyState !== WebSocket.OPEN) return;
       const frame = encodeAction(action);
-      if (frame) socket.send(frame);
+      if (!frame) return;
+      socket.send(frame);
+      // Show it now; the server's version supersedes it on arrival.
+      if (action === "split") predictSplit();
+      else if (action === "eject") predictEject(-1);
     },
 
     update(dt) {
@@ -355,6 +434,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         if (p.gone !== null && p.gone <= renderTime) continue;
         visible.push([p.x, p.y, p.ci, p.big ? 1 : 0, p.mine ? 1 : 0]);
       }
+      for (const g of ghostBlobs) visible.push([g.x, g.y, 0, 1, 1]);
 
       // Our own cells come from prediction; everyone else from interpolation.
       const cells = snap.cells.map(c => {
@@ -363,6 +443,11 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
           ? { ...c, x: p.x, y: p.y, m: p.mass, n: names.get(c.o) || "" }
           : { ...c, n: names.get(c.o) || "" };
       });
+      // Provisional split pieces, drawn as ours until the server confirms.
+      for (let i = 0; i < ghostCells.length; i++) {
+        const g = ghostCells[i];
+        cells.push({ i: -1 - i, x: g.x, y: g.y, m: g.mass, o: myNid, mine: true, s: 1, n: "" });
+      }
 
       // The camera must follow the predicted centroid, not the server's. This
       // is the single biggest part of the feel: a camera lagging behind your

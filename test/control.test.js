@@ -23,7 +23,7 @@ globalThis.WebSocket = class {
   fire(t, ev) { for (const fn of this.h[t] || []) fn(ev); }
 };
 
-const { createWorld, addPlayer, stepWorld, setAim, TICK_HZ } = await import("../shared/sim.js");
+const { createWorld, addPlayer, stepWorld, setAim, queueAction, TICK_HZ } = await import("../shared/sim.js");
 const { encodeSnapshot, createClientState } = await import("../shared/protocol.js");
 const { MODES } = await import("../shared/modes.js");
 const { createSocketConnection } = await import("../client/net.js");
@@ -139,6 +139,49 @@ for (let f = 0; f < 90; f++) {
 }
 check("and the cell still responds there",
   hs.conn.getView().me.x > 3100 + 200, String(Math.round(hs.conn.getView().me.x)));
+
+console.log("\n-- split and eject respond on the next frame --");
+
+// Before local prediction of these, the piece and the blob appeared a full
+// round trip after the key went down. That was most of "the moves feel
+// unnatural": the physics were fine, the response was late.
+const sp = harness();
+sp.me.cells[0].mass = 200;
+sp.push();
+sp.conn.sendAim(600, 0);
+for (let f = 0; f < 6; f++) { sp.conn.update(1 / 60); if (f % 3 === 2) { stepWorld(sp.world, 1 / TICK_HZ); sp.push(); } }
+
+const mine = () => sp.conn.getView().cells.filter(c => c.mine);
+const beforeSplit = mine().length;
+sp.conn.sendAction("split");
+sp.conn.update(1 / 60);
+check("a split shows a second cell on the very next frame",
+  mine().length === beforeSplit + 1, `${beforeSplit} -> ${mine().length}`);
+check("the provisional piece is flagged as ours", mine().every(c => c.mine));
+
+// Server catches up two ticks later, as a real one would.
+for (let f = 0; f < 6; f++) sp.conn.update(1 / 60);
+queueAction(sp.world, "me", "split");
+stepWorld(sp.world, 1 / TICK_HZ);
+sp.push();
+sp.conn.update(1 / 60);
+const confirmed = mine();
+check("the server's cells replace the ghost", confirmed.length === 2 && confirmed.every(c => c.i >= 0),
+  `${confirmed.length} cells, ids ${confirmed.map(c => c.i).join(",")}`);
+const xs = confirmed.map(c => c.x).sort((a, b) => a - b);
+check("the two pieces have separated", xs[1] - xs[0] > 20,
+  `${xs.map(x => Math.round(x)).join(" and ")}`);
+
+const blobs = () => sp.conn.getView().pellets.filter(p => p[3] && p[4]).length;
+const beforeEject = blobs();
+sp.conn.sendAction("eject");
+sp.conn.update(1 / 60);
+check("an eject shows the blob on the very next frame", blobs() > beforeEject,
+  `${beforeEject} -> ${blobs()}`);
+
+// An unconfirmed ghost must not live for ever if the server never agrees.
+for (let f = 0; f < 40; f++) sp.conn.update(1 / 60);
+check("unconfirmed ghosts expire", blobs() === 0, `${blobs()} left after 0.66s`);
 
 console.log("\n-- diagnostics --");
 
