@@ -124,6 +124,11 @@ check("readying one player starts the round",
   msgs.some(m => m.includes("round_start")), msgs.join(" ").slice(0, 120) || "nothing");
 check("the room reports itself live", (await room("highstakes")).phase === "live");
 
-if (createdStub) fs.rmSync(stubDir, { recursive: true, force: true });
+if (createdStub) {
+  fs.rmSync(stubDir, { recursive: true, force: true });
+  // and the parent, if this test was the only thing in it
+  const nm = path.dirname(stubDir);
+  try { if (fs.readdirSync(nm).length === 0) fs.rmdirSync(nm); } catch { /* fine */ }
+}
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

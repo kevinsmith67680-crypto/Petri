@@ -107,8 +107,11 @@ const GRID = 220;                       // ~half the view radius of a small cell
 const key = (gx, gy) => gx * 100003 + gy;   // prime stride, coords are >= 0
 
 export function buildPelletGrid(world) {
+  // Buckets are kept and emptied rather than the Map being cleared: clearing
+  // it meant allocating ~1,600 fresh arrays every tick, and the garbage
+  // collector was a quarter of the whole frame.
   const g = world.grid || (world.grid = new Map());
-  g.clear();
+  for (const bucket of g.values()) bucket.length = 0;
   for (const p of world.pellets) {
     const k = key((p.x / GRID) | 0, (p.y / GRID) | 0);
     const bucket = g.get(k);
@@ -494,11 +497,16 @@ function cellCombat(world) {
       const A = ents[i], B = ents[j];
       if (!A.cells.length || !B.cells.length) continue;
       for (const a of A.cells) {
+        const ra = radiusOf(a.mass);
         for (let k = B.cells.length - 1; k >= 0; k--) {
           const b = B.cells[k];
           if (a.mass < b.mass * EAT_RATIO) continue;
-          const ra = radiusOf(a.mass), rb = radiusOf(b.mass);
-          if (Math.hypot(b.x - a.x, b.y - a.y) < ra - rb * 0.55) {
+          // Axis reject before the sqrt: with a hundred players this pair
+          // loop runs ten thousand times a tick.
+          const dx = b.x - a.x; if (dx > ra || dx < -ra) continue;
+          const dy = b.y - a.y; if (dy > ra || dy < -ra) continue;
+          const rb = radiusOf(b.mass);
+          if (Math.hypot(dx, dy) < ra - rb * 0.55) {
             a.mass += b.mass * EAT_BONUS;
             B.cells.splice(k, 1);
             A.eaten++;
@@ -510,22 +518,34 @@ function cellCombat(world) {
   }
 }
 
+const SCAN = 620, SCAN2 = SCAN * SCAN;
+
 function driveBot(world, bot, dt) {
   const c0 = bot.cells[0];
   if (!c0) return { x: world.size / 2, y: world.size / 2 };
-  const me = centroid(bot);
-  const myMass = totalMass(bot);
+  // Almost every bot is one cell; centroid() allocates and this runs a
+  // hundred times a tick.
+  const me = bot.cells.length === 1 ? c0 : centroid(bot);
+  const myMass = bot.cells.length === 1 ? c0.mass : totalMass(bot);
 
-  let threat = null, threatD = Infinity, prey = null, preyD = Infinity;
+  let threat = null, threatD2 = Infinity, prey = null, preyD2 = Infinity;
+  const canBeEatenBy = c0.mass * EAT_RATIO;
+  const canEat = c0.mass / (EAT_RATIO * 1.1);
   for (const o of world.players.values()) {
     if (o === bot || !o.alive) continue;
     for (const c of o.cells) {
-      const d = Math.hypot(c.x - me.x, c.y - me.y);
-      if (d > 620) continue;
-      if (c.mass > c0.mass * EAT_RATIO && d < threatD) { threat = c; threatD = d; }
-      else if (c0.mass > c.mass * EAT_RATIO * 1.1 && d < preyD) { prey = c; preyD = d; }
+      // Cheap rejects first: an axis test, then squared distance. sqrt only
+      // when a candidate is actually chosen.
+      const dx = c.x - me.x; if (dx > SCAN || dx < -SCAN) continue;
+      const dy = c.y - me.y; if (dy > SCAN || dy < -SCAN) continue;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > SCAN2) continue;
+      if (c.mass > canBeEatenBy) { if (d2 < threatD2) { threat = c; threatD2 = d2; } }
+      else if (c.mass < canEat) { if (d2 < preyD2) { prey = c; preyD2 = d2; } }
     }
   }
+  const threatD = threat ? Math.sqrt(threatD2) : Infinity;
+  const preyD = prey ? Math.sqrt(preyD2) : Infinity;
 
   let tx, ty;
   if (threat && threatD < radiusOf(threat.mass) + 260) {
@@ -534,10 +554,18 @@ function driveBot(world, bot, dt) {
   } else if (prey && preyD < 430) {
     tx = prey.x; ty = prey.y;
   } else {
+    // Nearest orb via the spatial grid, not a scan of the whole arena. With
+    // 100 bots and 4,100 orbs the scan was 410,000 distance checks a tick —
+    // 80% of the free tier's tick budget on its own, and the reason the
+    // server fell behind. Search widens if the neighbourhood is bare.
     let near = null, nd = Infinity;
-    for (const p of world.pellets) {
-      const d = (p.x - me.x) ** 2 + (p.y - me.y) ** 2;
-      if (d < nd) { nd = d; near = p; }
+    for (const reach of [300, 700, 1500]) {
+      forEachPelletNear(world, me.x, me.y, reach, p => {
+        if (p.dead) return;
+        const d = (p.x - me.x) ** 2 + (p.y - me.y) ** 2;
+        if (d < nd) { nd = d; near = p; }
+      });
+      if (near) break;
     }
     bot.jitter += dt * 0.7;
     if (near) { tx = near.x + Math.cos(bot.jitter) * 40; ty = near.y + Math.sin(bot.jitter) * 40; }
@@ -606,10 +634,17 @@ export function stepWorld(world, dt) {
   // Refresh standings before combat. A player whose cells are eaten this tick
   // has zero mass by the time the death is detected, so their finishing
   // position has to be read from the moment before the fatal bite.
-  const standings = [...world.players.values()]
-    .filter(p => p.alive && p.cells.length)
-    .sort((a, b) => totalMass(b) - totalMass(a));
-  standings.forEach((p, i) => { p.rank = i + 1; p.of = standings.length; });
+  if (world.tick % 4 === 0) {
+    const standings = [];
+    for (const p of world.players.values()) {
+      if (p.alive && p.cells.length) { p._m = totalMass(p); standings.push(p); }
+    }
+    standings.sort((a, b) => b._m - a._m);
+    for (let i = 0; i < standings.length; i++) {
+      standings[i].rank = i + 1;
+      standings[i].of = standings.length;
+    }
+  }
 
   cellCombat(world);
 
@@ -677,9 +712,14 @@ export function leaderboard(world, limit = 8) {
     .slice(0, limit);
 }
 
+// Standings are computed once per tick in stepWorld and stored on each
+// player. Reading them here instead of re-sorting means a room of 100 does
+// one sort a tick rather than one per client — which was 100 sorts.
 export function rankOf(world, id) {
-  const all = [...world.players.values()]
-    .filter(p => p.alive)
-    .sort((a, b) => totalMass(b) - totalMass(a));
-  return { rank: all.findIndex(p => p.id === id) + 1, of: all.length };
+  const p = world.players.get(id);
+  if (p && p.alive && p.rank) return { rank: p.rank, of: p.of };
+  // Fallback for a player not yet ranked (first tick, or dead).
+  let of = 0;
+  for (const q of world.players.values()) if (q.alive && q.cells.length) of++;
+  return { rank: 0, of };
 }

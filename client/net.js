@@ -69,7 +69,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // Diagnostics. "Feels laggy" is three different problems wearing the same
   // coat — a slow client, a slow server, or a slow network — and they need
   // different fixes, so each is measured separately.
-  const diag = { ping: 0, jitter: 0, fps: 0, buffered: 0, srvMs: -1 };
+  const diag = { ping: 0, jitter: 0, fps: 0, buffered: 0, srvMs: -1, snaps: 0, snapsPerSec: -1, snapWindow: 0 };
   let lastPingAt = 0;
   let lastArrival = 0;
 
@@ -142,6 +142,15 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
   function applySnapshot(snap) {
     const localNow = performance.now() / 1000;
+    // Snapshots received per second. If this sits well below the server's
+    // tick rate the server is overrunning its budget — that is a starved
+    // instance, not a client or network problem.
+    diag.snaps++;
+    if (localNow - diag.snapWindow >= 1) {
+      diag.snapsPerSec = Math.round(diag.snaps / Math.max(0.001, localNow - diag.snapWindow));
+      diag.snaps = 0;
+      diag.snapWindow = localNow;
+    }
     const offset = snap.time - localNow;
     // Track the smallest observed offset: that is the least-delayed packet.
     clockOffset = clockOffset === null ? offset : Math.min(clockOffset, offset);
@@ -327,6 +336,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         budgetMs: serverHz ? +(1000 / serverHz).toFixed(1) : 0,
         jitter: Math.round(diag.jitter),
         interpMs: Math.round(interpSeconds() * 1000),
+        snapsPerSec: diag.snapsPerSec,
         buffered: diag.buffered
       };
     },

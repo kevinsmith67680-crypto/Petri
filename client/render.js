@@ -56,12 +56,23 @@ export function createRenderer(canvas, mapCanvas) {
   const batch = Array.from({ length: 8 }, () => []);
   const bigOrbs = [];
   let lastMapDraw = 0;
-  const ctx = canvas.getContext("2d", { alpha: false });
+  let lastFontSize = -1;
+  // alpha:false skips compositing against the page. desynchronized:true lets
+  // the browser present the canvas without waiting for the compositor's next
+  // pass — a frame or two less between drawing and seeing it, where supported.
+  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
   const mapCtx = mapCanvas.getContext("2d");
   const state = { vw: 0, vh: 0, dpr: 1, mapSize: 132 };
 
+  // Render resolution. A Retina display reports devicePixelRatio 2, which is
+  // FOUR times the pixels to fill every frame. For a game of flat circles the
+  // sharpness is not worth halving the frame rate, so the default is 1 and
+  // the settings panel offers the full resolution as an opt-in.
+  let sharp = false;
+  function setSharp(on) { sharp = !!on; resize(); }
+
   function resize() {
-    state.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    state.dpr = sharp ? Math.min(window.devicePixelRatio || 1, 2) : 1;
     state.vw = window.innerWidth;
     state.vh = window.innerHeight;
     canvas.width = Math.round(state.vw * state.dpr);
@@ -122,8 +133,11 @@ export function createRenderer(canvas, mapCanvas) {
     }
 
     if (showNames && c.n && r * camera.scale > 22) {
-      const size = Math.max(11, r * 0.4);
-      ctx.font = `600 ${size}px Archivo, system-ui, sans-serif`;
+      const size = Math.round(Math.max(11, r * 0.4));
+      if (size !== lastFontSize) {
+        ctx.font = `600 ${size}px Archivo, system-ui, sans-serif`;
+        lastFontSize = size;
+      }
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.lineWidth = size * 0.18;
@@ -155,6 +169,7 @@ export function createRenderer(canvas, mapCanvas) {
   }
 
   function draw(view, camera, th, settings) {
+    lastFontSize = -1;   // font state does not survive a frame boundary
     ctx.fillStyle = th.outside;
     ctx.fillRect(0, 0, state.vw, state.vh);
     if (!view) return;
@@ -298,5 +313,5 @@ export function createRenderer(canvas, mapCanvas) {
   });
 
   resize();
-  return { resize, draw, drawMinimap, follow, initialScale, screenToWorld, state };
+  return { resize, draw, drawMinimap, follow, initialScale, screenToWorld, setSharp, state };
 }

@@ -85,6 +85,7 @@ const ui = createUI({
   // or it stays light on a dark menu.
   onThemeChange: () => renderGoogleButton(),
   onRamp: action => conn?.sendRamp(action),
+  onSharp: on => renderer.setSharp(on),
   auth: {
     // Every one of these guards `api`, which is null in guest mode. Without
     // the check the click throws "null is not an object" into the console and

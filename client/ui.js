@@ -10,7 +10,7 @@ import { PHASE_LIVE, PHASE_LOBBY } from "../shared/protocol.js";
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
+export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, auth }) {
   const el = {
     orbs: $("orbCount"),
     mass: $("statMass"),
@@ -209,6 +209,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   bindSwitch("swBoard", "board", on => { el.board.hidden = !on; hudAt = 0; });
   bindSwitch("swDiag", "diag", on => { $("diagBox").hidden = !on; });
   bindSwitch("swPerf", "perf", on => { if (!on) $("perfBox").hidden = true; });
+  bindSwitch("swSharp", "sharp", on => onSharp?.(on));
   bindSwitch("swGrid", "grid");
   bindSwitch("swNames", "names");
 
@@ -295,7 +296,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
       `<div><span class="${slowPing ? "warn" : ""}">${stats.ping >= 0 ? stats.ping + " ms ping" : "— ping"}</span></div>` +
       `<div><span class="${slowTick ? "warn" : ""}">${stats.srvMs >= 0 ? stats.srvMs.toFixed(1) : "—"} / ${stats.budgetMs || "—"} ms tick</span></div>` +
       `<div>${stats.interpMs != null ? stats.interpMs + " ms buffer" : ""}</div>` +
-      `<div>${stats.hz || "—"} Hz server</div>`;
+      `<div><span class="${stats.hz && stats.snapsPerSec > 0 && stats.snapsPerSec < stats.hz * 0.85 ? "warn" : ""}">` +
+        `${stats.snapsPerSec >= 0 ? stats.snapsPerSec : "—"} / ${stats.hz || "—"} snapshots/s</span></div>`;
   }
 
   // A banner rather than a quiet note: test mode changes the economics and
@@ -304,6 +306,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, auth }) {
   function setTestMode(on) {
     $("testFlag").hidden = !on;
     document.body.classList.toggle("is-test", !!on);
+    // Test mode exists to find problems, so the numbers are on by default.
+    if (on && !settings.perf) {
+      settings.perf = true;
+      $("swPerf").setAttribute("aria-checked", "true");
+    }
   }
 
   // ── wager menu ────────────────────────────────────────────────────────────

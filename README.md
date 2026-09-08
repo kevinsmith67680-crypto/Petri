@@ -387,6 +387,36 @@ Pressing W throws a blob forward at the cost of a little mass. Three things were
 
 Ejecting costs 16 mass and yields a 13-mass blob at radius 14.4, against an orb's fixed 6 — a 2.4× size difference, and a net 3-mass loss so it can't be used to print mass. Blobs are drawn with a membrane and gloss like small cells rather than as flat dots, which is what they behave like.
 
+## If it feels laggy: read these four numbers first
+
+The performance overlay is **on by default in test mode** (bottom right). Every cause of "sluggish" shows up as a different number, and guessing which one it is has cost days.
+
+| Reading | Healthy | If it's not |
+|---|---|---|
+| `fps` | 55–60 | **Your browser is the limit.** Turn off High resolution in settings (it is off by default — check it did not get switched on), close other tabs, try Chrome. |
+| `ping` | under 80 ms | **Distance to the server.** Render picks a region at creation and cannot change it. If you are in Europe and the service is in Oregon this is 150ms+ and nothing in the code fixes it. |
+| `snapshots/s` | equal to the Hz figure | **The server is starved.** It cannot hold its tick. On the free 0.1-CPU tier with 100 bots this was 40ms of a 50ms budget before the optimisations below; it is now ~11ms. If it still reads low, set `BOTS=50` or move off the free tier. |
+| `ms tick` | well under budget | Same cause as above, seen from the server's side. |
+
+**Tell me these four numbers and I can tell you what is wrong.** Without them, every fix is a guess.
+
+### What was optimised in this pass
+
+Profiled at the real test-mode load (100 bots + 1 player, one core):
+
+| | Before | After |
+|---|---|---|
+| Server tick | 4.03 ms | **1.47 ms** |
+| On Render free (0.1 CPU) | 40 ms of 50 | **15 ms of 50** |
+| 100 snapshots | 6.53 ms | 4.02 ms |
+
+- Bot orb-seeking scanned every orb in the arena: 100 bots × 4,100 orbs = **410,000 distance checks a tick**. It now uses the spatial grid. That alone was 80% of a free-tier tick.
+- The garbage collector was 25% of the frame. The pellet grid allocated ~1,600 fresh arrays a tick; buckets are now emptied and reused.
+- Bot threat detection used `Math.hypot` on every player pair. Axis rejection first, squared distances, sqrt only for the chosen target.
+- Standings were sorted every tick, and then **sorted again per client per snapshot** — 100 sorts a tick in a full room. Once every four ticks now, read back by everyone.
+- Client render resolution defaults to 1×. Retina reported 2×, which is **four times the pixels every frame** for circles that gain nothing from it. "High resolution" in settings opts back in.
+- The canvas is created `desynchronized`, so the browser can present it without waiting for the compositor.
+
 ### Frame cost and perceived lag
 
 Two separate things make a round feel sluggish, and they need different fixes.
