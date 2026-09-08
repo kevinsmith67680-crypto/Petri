@@ -90,8 +90,39 @@ export const pelletRadius = p =>
 // by BOTH ends: the server simulates it, and the client extrapolates from the
 // velocity it was told, which is what makes the throw look continuous instead
 // of arriving as one jump per snapshot.
-export const EJECT_SPEED = 760;        // world units per second at launch
-const PELLET_FRICTION = 0.965;         // per 1/60s; ~0.33s to half speed
+// Ejecting throws a projectile that shoots clear of the cell and parks just
+// outside its reach. Two constants shape it:
+//
+//   EJECT_CLEARANCE  how far past the eating edge it comes to rest, as a
+//                    multiple of the cell's radius plus a floor. It MUST
+//                    scale: a fixed distance that clears a small cell rests
+//                    inside a large one's mouth and is swallowed instantly.
+//   EJECT_SNAP       how sharply it decelerates. Higher means it arrives
+//                    faster and travels the same distance — a shot, not a lob.
+export const EJECT_CLEARANCE = 1.2;    // x cell radius
+export const EJECT_CLEAR_MIN = 30;     // plus this many units
+const EJECT_SNAP = 6.67;               // 1/e-folds per second of travel
+
+// Launch speed needed to come to rest at the intended clearance. Derived, not
+// guessed: with exponential decay the total travel is v0 / EJECT_SNAP.
+export const ejectLaunchSpeed = cellRadius =>
+  (cellRadius * EJECT_CLEARANCE + EJECT_CLEAR_MIN) * EJECT_SNAP;
+
+// The thrower cannot pick its own mass back up for this long. Everyone else
+// can take it immediately. Long enough that a cell continuing forward sails
+// past rather than vacuuming it up, so recovering your own mass means turning
+// round and going back for it — a decision, not an accident.
+export const EJECT_OWNER_COOLDOWN = 1.2;
+
+// Thrown mass can be reclaimed immediately — there is no immunity window.
+//
+// What stops a cell swallowing its own throw is physical rather than a timer:
+// eatPellets ignores anything receding from the cell. A blob leaves at
+// EJECT_SPEED and is moving away far faster than the cell can close, so it
+// escapes; once it slows to a stop it becomes food like anything else, for
+// its thrower as much as anyone. A blob thrown TOWARD you is closing, so it
+// stays edible — which is what makes feeding work.
+const PELLET_FRICTION = Math.exp(-EJECT_SNAP / 60);   // per 1/60s
 
 // Per-second decay factor, and the exact integral of it over a step.
 //
@@ -455,19 +486,15 @@ function doEject(world, ent, tx, ty) {
     // Spawn clear of the owner's own eating reach. Placed any closer and the
     // blob is swallowed again the instant it appears, which made ejecting a
     // no-op that quietly returned most of the mass.
-    // Emerge from the membrane rather than appearing already detached: with
-    // owner immunity there is no need to clear the eating radius, and a blob
-    // that pops into existence in mid-air is what looked wrong.
+    // Emerging from the membrane, not detached in mid-air.
     const gap = r + blobR * 0.35;
     const blob = makePellet(
       world, c.x + a.x * gap, c.y + a.y * gap,
-      EJECT_KEEP, a.x * EJECT_SPEED, a.y * EJECT_SPEED, c.ci
+      EJECT_KEEP, a.x * ejectLaunchSpeed(r), a.y * ejectLaunchSpeed(r), c.ci
     );
 
-    // Belt and braces: even a cell that turns and chases its own blob cannot
-    // reclaim it for a moment. Anyone else may take it immediately.
     blob.owner = ent.id;
-    blob.immuneUntil = world.time + 0.4;
+    blob.ownerFree = world.time + EJECT_OWNER_COOLDOWN;
     world.pellets.push(blob);
   }
 }
@@ -494,7 +521,14 @@ function eatPellets(world, ent) {
     const r = radiusOf(c.mass);
     forEachPelletNear(world, c.x, c.y, r + ORB_RADIUS * 3, p => {
       if (p.dead) return;
-      if (p.owner === ent.id && world.time < p.immuneUntil) return;
+      // Your own mass is yours again only after the cooldown, so driving
+      // forward sails past it instead of hoovering it up.
+      if (p.owner === ent.id && world.time < p.ownerFree) return;
+      // And nothing receding can have been swallowed, whoever threw it.
+      if (p.vx || p.vy) {
+        const away = (p.x - c.x) * p.vx + (p.y - c.y) * p.vy;
+        if (away > 0) return;
+      }
       const dx = p.x - c.x, dy = p.y - c.y;
       // An ejected blob is large enough that ignoring its radius would mean
       // visibly overlapping it without eating it.

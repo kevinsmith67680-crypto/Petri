@@ -482,6 +482,23 @@ With the simulation providing the softness, the camera went back to a tight 45ms
 
 The interpolation floor for other players rose from 1.0 to 1.2 ticks, so a single late packet no longer stalls their motion.
 
+### Ping is distance, and Render's region cannot be changed
+
+A 180ms round trip from the UK means the service is in Oregon. Roughly 138ms of that is light in fibre plus routing across the Atlantic and back; only about 40ms is anything this codebase controls. Netcode does not shorten cable.
+
+Expected round trip from the UK:
+
+| Render region | Ping |
+|---|---|
+| **Frankfurt** | 20–35 ms |
+| Virginia | 85–110 ms |
+| Ohio | 100–120 ms |
+| Oregon | 150–190 ms |
+
+**A service's region is fixed when it is created.** Moving means creating a new service in the region you want, copying the environment variables across, and deleting the old one. Your Supabase project has a region too — if the database is in the US and the server moves to Frankfurt, every sign-in and settlement pays the crossing instead. Keep them together.
+
+Prediction already hides the round trip for your own cell, which is why the game is playable at 180ms at all. What it cannot hide is how current everyone else looks: at 180ms you are seeing them roughly a fifth of a second in the past, so contested chases feel unfair even when nothing is broken.
+
 ### Diagnosing lag
 
 Turn on **Performance overlay** in settings. Bottom right you get four numbers, and they separate three completely different causes that all feel identical in play:

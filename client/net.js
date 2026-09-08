@@ -22,7 +22,8 @@ import {
 } from "../shared/protocol.js";
 import {
   TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed,
-  EJECT_MASS, EJECT_KEEP, EJECT_SPEED, MAX_CELLS, PELLET_MASS, ORB_RADIUS
+  EJECT_MASS, EJECT_KEEP, MAX_CELLS, PELLET_MASS, ORB_RADIUS,
+  ejectLaunchSpeed, EJECT_OWNER_COOLDOWN
 } from "../shared/sim.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
@@ -189,13 +190,19 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
     for (const n of snap.names) names.set(n.nid, n.name);
 
-    if (snap.added.some(p => p.big && p.mine)) ghostBlobs.length = 0;
+    // Hand over only when the real blob arrives, and drop the oldest ghost
+    // per real blob rather than all of them — two quick ejects would
+    // otherwise lose the second one.
+    for (const p of snap.added) {
+      if (p.big && p.mine && ghostBlobs.length) ghostBlobs.shift();
+    }
     for (const p of snap.added) {
       pellets.set(p.id, {
         x: p.x, y: p.y, ci: p.ci,
         big: !!p.big, mine: !!p.mine,
         vx: p.vx || 0, vy: p.vy || 0,
-        gone: null
+        gone: null,
+        age: 0            // seconds since it entered view, for the immunity rule
       });
     }
     for (const id of snap.removed) {
@@ -311,6 +318,15 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       const reach2 = reach * reach;
       for (const o of pellets.values()) {
         if (o.gone !== null || o.eatenAt !== undefined) continue;
+        // Your own thrown mass is off limits until the cooldown expires. The
+        // margin covers the trip: it is already part-way through by the time
+        // we hear about it, and guessing early would hide an orb the server
+        // still has.
+        if (o.mine && o.age < EJECT_OWNER_COOLDOWN + 0.3) continue;
+        // Nothing receding can have been swallowed, whoever threw it.
+        if (o.vx || o.vy) {
+          if ((o.x - cell.x) * o.vx + (o.y - cell.y) * o.vy > 0) continue;
+        }
         const dx = o.x - cell.x; if (dx > reach || dx < -reach) continue;
         const dy = o.y - cell.y; if (dy > reach || dy < -reach) continue;
         if (dx * dx + dy * dy < reach2) {
@@ -320,12 +336,22 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       }
     }
     // A locally eaten orb the server never removed was a wrong guess: bring
-    // it back rather than leaving a hole in the field.
+    // it back rather than leaving a hole in the field. But only once we have
+    // actually moved off it — restoring an orb the cell is still sitting on
+    // makes it blink, and the next frame eats it again.
     for (const o of pellets.values()) {
-      if (o.eatenAt !== undefined) {
-        o.eatenAt += dt;
-        if (o.eatenAt > EAT_TTL) o.eatenAt = undefined;
+      o.age += dt;
+      if (o.eatenAt === undefined) continue;
+      o.eatenAt += dt;
+      if (o.eatenAt <= EAT_TTL) continue;
+      let covered = false;
+      for (const cell of predicted.values()) {
+        const reach = radiusOf(cell.mass) + ORB_RADIUS * 0.6;
+        const dx = o.x - cell.x, dy = o.y - cell.y;
+        if (dx * dx + dy * dy < reach * reach) { covered = true; break; }
       }
+      if (covered) o.eatenAt = EAT_TTL;     // hold, re-check next frame
+      else o.eatenAt = undefined;           // genuinely a wrong guess
     }
 
     for (let i = ghostCells.length - 1; i >= 0; i--) {
@@ -371,10 +397,12 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       if (p.mass < EJECT_MASS * 2) continue;
       const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
       p.mass -= EJECT_MASS;
-      const gap = radiusOf(p.mass) + radiusOf(EJECT_KEEP) * 0.35;
+      const r = radiusOf(p.mass);
+      const gap = r + radiusOf(EJECT_KEEP) * 0.35;
+      const speed = ejectLaunchSpeed(r);
       ghostBlobs.push({
         x: p.x + (dx / d) * gap, y: p.y + (dy / d) * gap,
-        vx: (dx / d) * EJECT_SPEED, vy: (dy / d) * EJECT_SPEED, age: 0, ci
+        vx: (dx / d) * speed, vy: (dy / d) * speed, age: 0, ci
       });
     }
   }
@@ -435,6 +463,14 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         socket.send(encodeAim(Math.round(pendingAim.x), Math.round(pendingAim.y)));
       }
       if (dt) {
+        // Thrown mass is sent once, with its velocity, and never re-sent —
+        // so the client has to carry it forward itself. This loop went
+        // missing in an edit and every blob sat frozen at its launch point
+        // while the server moved it, which is what made ejecting look broken.
+        // Advanced BEFORE prediction, so the eat test sees where it really is.
+        for (const p of pellets.values()) {
+          if (p.vx || p.vy) advancePellet(p, dt, worldSize);
+        }
         predict(dt);
         diag.fps = diag.fps ? diag.fps * 0.9 + (1 / dt) * 0.1 : 1 / dt;
       }

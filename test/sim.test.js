@@ -10,7 +10,8 @@
 import {
   createWorld, addPlayer, fillBots, stepWorld, setAim, queueAction,
   totalMass, centroid, leaderboard, TICK_HZ, WORLD, PELLETS, VIRUSES,
-  radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO
+  radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
+  advancePellet, ejectLaunchSpeed, EJECT_KEEP, EJECT_MASS
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -120,6 +121,80 @@ check("a small cell shelters on a virus", tiny.cells.length === 1);
 const board = leaderboard(world);
 const sorted = board.every((r, i) => i === 0 || board[i - 1].mass >= r.mass);
 check("leaderboard is sorted by mass", sorted);
+
+
+console.log("\n-- ejected mass behaves like a projectile --");
+{
+  const blobR = radiusOf(EJECT_KEEP);
+
+  // It has to clear the mouth at every size. A fixed distance that clears a
+  // small cell rests inside a large one's reach and is swallowed instantly.
+  for (const mass of [40, 200, 800, 3000]) {
+    const r = radiusOf(mass);
+    const p = { x: r + blobR * 0.35, y: 0, vx: ejectLaunchSpeed(r), vy: 0, mass: EJECT_KEEP };
+    let t = 0;
+    while (t < 3) { advancePellet(p, 1 / 60, 8800); t += 1 / 60; }
+    check(`a mass-${mass} cell throws clear of its own reach`,
+      p.x > r + blobR * 0.6 + 20,
+      `rests at ${p.x.toFixed(0)}, eats to ${(r + blobR * 0.6).toFixed(0)}`);
+  }
+
+  // Driving straight on must not hoover it back up.
+  const w1 = createWorld(9, { size: 8800, pellets: 0, viruses: 0 });
+  const p1 = addPlayer(w1, { id: "me", name: "M" });
+  p1.cells[0].mass = 200; p1.cells[0].x = 4400; p1.cells[0].y = 4400;
+  setAim(w1, "me", 600, 0);
+  queueAction(w1, "me", "eject");
+  stepWorld(w1, 1 / TICK_HZ);
+  const afterEject = p1.cells[0].mass;
+  check("ejecting costs exactly EJECT_MASS", Math.round(200 - afterEject) === EJECT_MASS,
+    afterEject.toFixed(1));
+  for (let i = 0; i < 60; i++) { setAim(w1, "me", 600, 0); stepWorld(w1, 1 / TICK_HZ); }
+  check("driving forward for 3s does not reclaim it",
+    Math.abs(p1.cells[0].mass - afterEject) < 0.5 && !!w1.pellets.find(p => p.owner === "me"),
+    `mass ${p1.cells[0].mass.toFixed(1)}`);
+
+  // But turning round and going back for it must work.
+  const w2 = createWorld(9, { size: 8800, pellets: 0, viruses: 0 });
+  const p2 = addPlayer(w2, { id: "me", name: "M" });
+  p2.cells[0].mass = 200; p2.cells[0].x = 4400; p2.cells[0].y = 4400;
+  setAim(w2, "me", 600, 0);
+  queueAction(w2, "me", "eject");
+  stepWorld(w2, 1 / TICK_HZ);
+  const base = p2.cells[0].mass;
+  for (let i = 0; i < 40; i++) { setAim(w2, "me", -600, 0); stepWorld(w2, 1 / TICK_HZ); }
+  for (let i = 0; i < 150; i++) {
+    const b = w2.pellets.find(p => p.owner === "me");
+    if (!b) break;
+    const c = centroid(p2);
+    setAim(w2, "me", b.x - c.x, b.y - c.y);
+    stepWorld(w2, 1 / TICK_HZ);
+  }
+  check("going back for it deliberately does reclaim it",
+    p2.cells[0].mass > base + EJECT_KEEP - 1,
+    `${base.toFixed(0)} -> ${p2.cells[0].mass.toFixed(0)}`);
+
+  // Anyone else can take it straight away: that is what feeding is.
+  const w3 = createWorld(9, { size: 8800, pellets: 0, viruses: 0 });
+  const thrower = addPlayer(w3, { id: "a", name: "A" });
+  thrower.cells[0].mass = 200; thrower.cells[0].x = 4400; thrower.cells[0].y = 4400;
+  setAim(w3, "a", 600, 0);
+  queueAction(w3, "a", "eject");
+  stepWorld(w3, 1 / TICK_HZ);
+  // Let it come to rest: a blob still in flight is receding from a standing
+  // player and cannot be caught, which is correct.
+  for (let i = 0; i < 20; i++) stepWorld(w3, 1 / TICK_HZ);
+  const blob = w3.pellets.find(p => p.owner === "a");
+  // Move the thrower well clear, or it simply eats the smaller player.
+  thrower.cells[0].x = 1000; thrower.cells[0].y = 1000;
+  const other = addPlayer(w3, { id: "b", name: "B" });
+  other.cells[0].mass = 40;
+  other.cells[0].x = blob.x; other.cells[0].y = blob.y;
+  const otherBefore = other.cells[0].mass;
+  stepWorld(w3, 1 / TICK_HZ);
+  check("another player can take it immediately",
+    other.cells[0].mass > otherBefore, `${otherBefore} -> ${other.cells[0].mass.toFixed(0)}`);
+}
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

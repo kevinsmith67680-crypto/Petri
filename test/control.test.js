@@ -184,6 +184,72 @@ check("an eject shows the blob on the very next frame", blobs() > beforeEject,
 for (let f = 0; f < 40; f++) sp.conn.update(1 / 60);
 check("unconfirmed ghosts expire", blobs() === 0, `${blobs()} left after 0.66s`);
 
+// The real thing: throw mass with a live server and watch it continuously.
+// The server grants a thrown blob immunity from its owner; a client that does
+// not know that eats its own blob, the server refuses, and it vanishes and
+// reappears about a second later.
+const ej = harness();
+ej.me.cells[0].mass = 200;
+ej.me.cells[0].x = 4400; ej.me.cells[0].y = 4400;
+stepWorld(ej.world, 1 / TICK_HZ);
+ej.push();
+ej.conn.sendAim(600, 0);
+for (let f = 0; f < 6; f++) { ej.conn.update(1 / 60); if (f % 3 === 2) { stepWorld(ej.world, 1 / TICK_HZ); ej.push(); } }
+
+const ownBlobs = () => ej.conn.getView().pellets.filter(p => p[3] && p[4]).length;
+ej.conn.sendAction("eject");
+queueAction(ej.world, "me", "eject");
+
+// A blink is present -> absent -> present. Being eaten later is absent and
+// staying absent, which is correct and must not count.
+let sawBlob = false, blinks = 0, wasAbsent = false, absentFrames = 0;
+for (let f = 0; f < 150; f++) {          // 2.5 seconds
+  ej.conn.update(1 / 60);
+  if (f % 3 === 0) { setAim(ej.world, "me", 600, 0); stepWorld(ej.world, 1 / TICK_HZ); ej.push(); }
+  const present = ownBlobs() > 0;
+  if (present) {
+    if (wasAbsent && sawBlob) blinks++;
+    sawBlob = true;
+    wasAbsent = false;
+  } else if (sawBlob) {
+    wasAbsent = true;
+    absentFrames++;
+  }
+}
+check("the thrown blob appears", sawBlob);
+
+// A moving pellet is transmitted once, with its velocity, and never re-sent.
+// The client must carry it forward itself. That loop went missing in an edit
+// and every blob sat frozen at its launch point while the server moved it —
+// which then put it behind the cell, where the eat test swallowed it.
+const mv = harness();
+mv.me.cells[0].mass = 200;
+mv.me.cells[0].x = 4400; mv.me.cells[0].y = 4400;
+stepWorld(mv.world, 1 / TICK_HZ);
+mv.push();
+setAim(mv.world, "me", 600, 0);
+queueAction(mv.world, "me", "eject");
+stepWorld(mv.world, 1 / TICK_HZ);
+mv.push();
+
+const clientBlob = () => mv.conn.getView().pellets.find(p => p[3]);
+const startedAt = clientBlob() ? clientBlob()[0] : null;
+check("the client has the blob", startedAt !== null);
+for (let f = 0; f < 18; f++) mv.conn.update(1 / 60);   // 0.3s, no new snapshots
+const movedTo = clientBlob() ? clientBlob()[0] : null;
+check("and carries it forward without being re-told",
+  movedTo !== null && movedTo - startedAt > 80,
+  movedTo === null ? "blob gone" : `${Math.round(startedAt)} -> ${Math.round(movedTo)}`);
+
+// Advance the server the same 0.3 seconds and compare like with like.
+for (let i = 0; i < 6; i++) stepWorld(mv.world, 1 / TICK_HZ);
+const serverBlob = mv.world.pellets.find(p => p.owner === "me");
+check("client and server agree on where it is",
+  serverBlob && Math.abs(movedTo - serverBlob.x) < 25,
+  serverBlob ? `client ${Math.round(movedTo)}, server ${Math.round(serverBlob.x)}` : "no server blob");
+check("and never blinks out and back", blinks === 0,
+  `${blinks} blink(s), ${absentFrames} absent frames total`);
+
 console.log("\n-- orbs vanish when you eat them --");
 
 // The client did not predict orb eating, so an eaten orb sat inside the cell
