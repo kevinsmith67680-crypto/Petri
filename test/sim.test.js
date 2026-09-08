@@ -11,7 +11,7 @@ import {
   createWorld, addPlayer, fillBots, stepWorld, setAim, queueAction,
   totalMass, centroid, leaderboard, TICK_HZ, WORLD, PELLETS, VIRUSES,
   radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
-  advancePellet, ejectLaunchSpeed, EJECT_KEEP, EJECT_MASS
+  advancePellet, ejectLaunchSpeed, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -149,10 +149,35 @@ console.log("\n-- ejected mass behaves like a projectile --");
   const afterEject = p1.cells[0].mass;
   check("ejecting costs exactly EJECT_MASS", Math.round(200 - afterEject) === EJECT_MASS,
     afterEject.toFixed(1));
-  for (let i = 0; i < 60; i++) { setAim(w1, "me", 600, 0); stepWorld(w1, 1 / TICK_HZ); }
-  check("driving forward for 3s does not reclaim it",
+  // The cooldown holds for its full length: nothing comes back during it.
+  // After that, a cell still driving forward will eventually catch up with
+  // its own throw — that is the deliberate trade-off of a short cooldown, and
+  // EJECT_OWNER_COOLDOWN is the dial if it should never happen.
+  for (let i = 0; i < Math.ceil(EJECT_OWNER_COOLDOWN * TICK_HZ); i++) {
+    setAim(w1, "me", 600, 0);
+    stepWorld(w1, 1 / TICK_HZ);
+  }
+  check("nothing is reclaimed during the cooldown",
     Math.abs(p1.cells[0].mass - afterEject) < 0.5 && !!w1.pellets.find(p => p.owner === "me"),
-    `mass ${p1.cells[0].mass.toFixed(1)}`);
+    `mass ${p1.cells[0].mass.toFixed(1)} after ${EJECT_OWNER_COOLDOWN}s`);
+
+  // And it must travel a visible distance, not dribble out. Measured against
+  // a cell that stays put, so this is the throw and not the chase.
+  {
+    const wS = createWorld(9, { size: 8800, pellets: 0, viruses: 0 });
+    const pS = addPlayer(wS, { id: "me", name: "M" });
+    pS.cells[0].mass = 200; pS.cells[0].x = 4400; pS.cells[0].y = 4400;
+    setAim(wS, "me", 900, 0);
+    queueAction(wS, "me", "eject");
+    stepWorld(wS, 1 / TICK_HZ);
+    setAim(wS, "me", 0, 0);                       // stand still and watch
+    for (let i = 0; i < 30; i++) stepWorld(wS, 1 / TICK_HZ);
+    const b = wS.pellets.find(p => p.owner === "me");
+    const rS = radiusOf(pS.cells[0].mass);
+    const clear = b ? (Math.hypot(b.x - pS.cells[0].x, b.y - pS.cells[0].y) - rS) / rS : 0;
+    check("the throw clears the cell by several radii", clear > 2.5,
+      `${clear.toFixed(1)} radii clear`);
+  }
 
   // But turning round and going back for it must work.
   const w2 = createWorld(9, { size: 8800, pellets: 0, viruses: 0 });
@@ -181,12 +206,16 @@ console.log("\n-- ejected mass behaves like a projectile --");
   setAim(w3, "a", 600, 0);
   queueAction(w3, "a", "eject");
   stepWorld(w3, 1 / TICK_HZ);
+  // Move the thrower away immediately: otherwise it chases its own throw down
+  // once the cooldown lapses, and there is nothing left to feed anyone with.
+  thrower.cells[0].x = 1000; thrower.cells[0].y = 1000;
+  setAim(w3, "a", 0, 0);
   // Let it come to rest: a blob still in flight is receding from a standing
   // player and cannot be caught, which is correct.
-  for (let i = 0; i < 20; i++) stepWorld(w3, 1 / TICK_HZ);
+  for (let i = 0; i < 60; i++) stepWorld(w3, 1 / TICK_HZ);
   const blob = w3.pellets.find(p => p.owner === "a");
-  // Move the thrower well clear, or it simply eats the smaller player.
-  thrower.cells[0].x = 1000; thrower.cells[0].y = 1000;
+  check("it comes fully to rest", blob && blob.vx === 0 && blob.vy === 0,
+    blob ? `vx ${blob.vx}` : "gone");
   const other = addPlayer(w3, { id: "b", name: "B" });
   other.cells[0].mass = 40;
   other.cells[0].x = blob.x; other.cells[0].y = blob.y;

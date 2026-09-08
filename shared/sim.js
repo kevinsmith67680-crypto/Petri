@@ -99,9 +99,9 @@ export const pelletRadius = p =>
 //                    inside a large one's mouth and is swallowed instantly.
 //   EJECT_SNAP       how sharply it decelerates. Higher means it arrives
 //                    faster and travels the same distance — a shot, not a lob.
-export const EJECT_CLEARANCE = 1.2;    // x cell radius
-export const EJECT_CLEAR_MIN = 30;     // plus this many units
-const EJECT_SNAP = 6.67;               // 1/e-folds per second of travel
+export const EJECT_CLEARANCE = 2.6;    // x cell radius
+export const EJECT_CLEAR_MIN = 90;     // plus this many units
+const EJECT_SNAP = 5.5;                // 1/e-folds per second of travel
 
 // Launch speed needed to come to rest at the intended clearance. Derived, not
 // guessed: with exponential decay the total travel is v0 / EJECT_SNAP.
@@ -112,7 +112,7 @@ export const ejectLaunchSpeed = cellRadius =>
 // can take it immediately. Long enough that a cell continuing forward sails
 // past rather than vacuuming it up, so recovering your own mass means turning
 // round and going back for it — a decision, not an accident.
-export const EJECT_OWNER_COOLDOWN = 1.2;
+export const EJECT_OWNER_COOLDOWN = 0.6;
 
 // Thrown mass can be reclaimed immediately — there is no immunity window.
 //

@@ -209,7 +209,10 @@ check("it is flagged as the thrower's own", blob && blob.mine === true);
 check("plain orbs carry no velocity and cost no extra bytes",
   ejSnap.added.filter(a => !a.big).every(a => a.vx === 0 && a.vy === 0));
 
-// Client extrapolation must match the server at any frame rate.
+// Client extrapolation must match the server at any frame rate. The thrower
+// stands still, or it chases its own throw down once the cooldown lapses and
+// there is nothing left to compare against.
+setAim(ej, "t", 0, 0);
 const cl = { x: blob.x, y: blob.y, vx: blob.vx, vy: blob.vy, mass: 13 };
 for (let i = 0; i < 60; i++) advancePellet(cl, 1 / 60);
 for (let i = 0; i < 20; i++) stepWorld(ej, 1 / TICK_HZ);
