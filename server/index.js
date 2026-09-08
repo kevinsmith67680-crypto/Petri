@@ -912,10 +912,44 @@ function scheduleTick() {
   nextTickAt += TICK_MS;
   const drift = Date.now() - nextTickAt;
   if (drift > 500) nextTickAt = Date.now();
-  setTimeout(() => { tick(); scheduleTick(); }, Math.max(0, nextTickAt - Date.now()));
+  setTimeout(() => { tick(); scheduleTick();
+
+// A tick that consistently overruns is the difference between a game that
+// feels right and one that does not, and it is invisible from the outside —
+// it shows up as players blaming their connection. Say so in the log.
+let lastOverruns = 0;
+setInterval(() => {
+  const since = tickCost.behind - lastOverruns;
+  lastOverruns = tickCost.behind;
+  const budget = 1000 / HZ;
+  if (since > HZ * 2) {           // more than ~3% of the last minute's ticks
+    console.warn(
+      `  SLOW    : ${since} of ~${HZ * 60} ticks overran their ${budget.toFixed(1)}ms budget ` +
+      `in the last minute (avg ${tickCost.avgMs.toFixed(1)}ms). ` +
+      `Lower TICK_HZ, lower BOTS, or move to a larger instance.`
+    );
+  }
+}, 60_000).unref?.(); }, Math.max(0, nextTickAt - Date.now()));
 }
 
 scheduleTick();
+
+// A tick that consistently overruns is the difference between a game that
+// feels right and one that does not, and it is invisible from the outside —
+// it shows up as players blaming their connection. Say so in the log.
+let lastOverruns = 0;
+setInterval(() => {
+  const since = tickCost.behind - lastOverruns;
+  lastOverruns = tickCost.behind;
+  const budget = 1000 / HZ;
+  if (since > HZ * 2) {           // more than ~3% of the last minute's ticks
+    console.warn(
+      `  SLOW    : ${since} of ~${HZ * 60} ticks overran their ${budget.toFixed(1)}ms budget ` +
+      `in the last minute (avg ${tickCost.avgMs.toFixed(1)}ms). ` +
+      `Lower TICK_HZ, lower BOTS, or move to a larger instance.`
+    );
+  }
+}, 60_000).unref?.();
 
 // The mass readout is display-only, but if it is ever mistaken for a payout
 // rate the exposure is enormous. Say so loudly at startup.

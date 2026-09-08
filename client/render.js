@@ -15,7 +15,10 @@ export const CAMERA_ZOOM = 1.5;   // 1 = original framing, 1.5 = 50% closer in
 // then the camera put the lag straight back, which is what a player actually
 // perceives because they are watching the centre of the screen. 25 is a 40ms
 // constant — still smooth, no longer sludge.
-const CAMERA_FOLLOW = 25;
+// The softness now comes from steering inertia in the simulation, so the
+// camera can be tight again without the picture feeling jerky. 24 keeps it
+// about 45ms behind the cell: present, not noticeable.
+const CAMERA_FOLLOW = 24;
 // Zoom stays gentle. It changes rarely and a snappy zoom is nauseating.
 const CAMERA_ZOOM_RATE = 4;
 

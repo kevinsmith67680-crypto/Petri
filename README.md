@@ -460,6 +460,16 @@ On a clean connection that is 23ms of lag removed for free, and on a bad one the
 
 **If you want more, raise the tick rate.** `TICK_HZ=30` halves the wait for the next server update and shrinks the buffer proportionally, at 1.5x the CPU. Measured at 2.97ms/tick for both rooms with 25 bots each, that is comfortable on a Standard instance and too tight on the free 0.1 CPU one — check `avgMs` against `budgetMs` in the overlay before committing.
 
+### Absorbing orbs, and why movement felt sharp
+
+**Eating an orb is now predicted.** It was the one interaction the client did not predict, so an eaten orb sat inside your cell for a round trip plus the interpolation buffer — about 190ms on a normal link, and much longer on a slow one. The client now runs the same overlap test the server does and hides the orb on the frame the cell covers it. If the server never confirms, the orb comes back after 0.8s rather than leaving a hole.
+
+**Orbs lingering "for a few seconds" was a stale clock.** The render clock offset was the smallest offset ever observed. One unusually fast early packet, or a server clock drifting relative to the browser's, pinned the render time seconds behind — and tombstoned orbs, removals and other players all rendered seconds late with it. It is now the smallest offset in the recent window, so it recovers instead of sticking.
+
+**Movement was sharp because a cell could reverse in a single frame.** Every twitch of the mouse became a hard corner, which is not how agar.io feels. Heading and speed now ease toward their targets with an 80ms time constant: one frame of opposite input barely moves the heading, and a full reversal takes about 300ms. It lives in `shared/sim.js` so the server and the client's prediction steer identically — client-only smoothing would have fought the correction every tick.
+
+With the simulation providing the softness, the camera went back to a tight 45ms follow. Softening both at once made the picture floaty.
+
 ### Why the moves felt late, and why the motion had a faint stutter
 
 **Split and eject are now predicted locally.** Pressing Space or W used to send the action and then show nothing until the server's snapshot came back — a full round trip, 80 to 200ms on a real link. The physics were fine; the *response* was late, and that lateness is what "unnatural" meant. The client now mirrors what the server will do on the same frame the key goes down: a provisional split piece with the right launch velocity, or a provisional blob. These are ghosts — dropped the moment the server's real cells arrive, or after 0.45s of simulated time if it never confirms. The server remains the only authority.
@@ -651,6 +661,28 @@ The logo sits in the pregame menu header, with a favicon and touch icon generate
 The server's MIME map needed `.png` adding. Without it images were served as `application/octet-stream`, which browsers will render in an `<img>` but will not accept as a favicon.
 
 **Two things to settle.** The internal package, folder and repo are still `petri` — only the user-facing name changed. Renaming those is a repo-wide operation and I have left it alone. And the tagline reads "EAT · GROW · CASH OUT", but cashing out was removed: there is no voluntary exit, only being paid for a top-5 finish. "EAT · GROW · GET PAID" would match the game as built.
+
+## Moving to a paid instance
+
+The free tier's 0.1 CPU could not hold a 20Hz tick with a full room: 100 bots was **84% of the budget**, so any garbage collection or network burst pushed it over, ticks arrived late and unevenly, and clients widened their buffers to compensate. A Standard instance (1 CPU) runs the same load at **8%**.
+
+Set these in the dashboard:
+
+| Variable | Value | Why |
+|---|---|---|
+| `TICK_HZ` | `30` | Halves how stale other players look, 85ms to 57ms. 13% of one CPU with a full room; do not do this on a free instance |
+| `BOTS` | **delete it** | Unset, each room fills to its mode's size — 100 for Standard, 50 for High stakes. Any value here overrides both |
+| `TRUST_PROXY` | `1` | Render terminates TLS in front of the app; without this every player looks like one IP and `MAX_CONN_PER_IP` locks out all but three |
+| `ALLOWED_ORIGINS` | your URL | WebSockets ignore the same-origin policy, so unset means anyone can point a client at your server |
+| `DATABASE_URL` | Supabase session pooler | Without it accounts and balances are in memory and lost on every deploy |
+
+`render.yaml` now says `plan: standard`. It said `plan: free`, which would have downgraded a hand-upgraded service the next time the blueprint was synced, and it also set `BOTS: 14` — worth checking the dashboard in case that was ever applied.
+
+The server now warns in the log when it is struggling, rather than leaving you to infer it from how the game feels:
+
+```
+SLOW : 74 of ~1800 ticks overran their 33.3ms budget in the last minute (avg 41.2ms).
+```
 
 ## Test mode
 

@@ -1,25 +1,53 @@
-# Render Blueprint. Commit this, then point Render at the repo.
+# Render Blueprint.
 #
-# The free plan spins the service down after 15 minutes without inbound
-# traffic and takes roughly a minute to wake, which disconnects anyone
-# connected at the time. Fine for showing people; move to a paid instance
-# before you rely on it.
+# IMPORTANT: this file can overwrite the dashboard. If you have upgraded the
+# instance by hand and this still said `plan: free`, re-syncing the blueprint
+# would put you back on the free tier — where 100 bots at 20Hz used 84% of the
+# tick budget and the service slept after 15 minutes idle.
 services:
   - type: web
     name: petri
     runtime: node
-    plan: free
+    # Standard: 1 CPU, 2GB, no spin-down. The free tier's 0.1 CPU cannot hold
+    # a 20Hz tick with a full room.
+    plan: standard
     buildCommand: npm install
     startCommand: node server/index.js
     healthCheckPath: /health
     envVars:
+      # Render terminates TLS in front of the app, so client IPs arrive in
+      # X-Forwarded-For. Without this every player looks like one address and
+      # MAX_CONN_PER_IP locks out all but three of them.
       - key: TRUST_PROXY
         value: "1"
-      - key: BOTS
-        value: "14"
+
+      # 30Hz halves how stale other players look (85ms -> 57ms) and costs 13%
+      # of one CPU with a full room. Do not raise this on a free instance.
+      - key: TICK_HZ
+        value: "30"
+
+      # BOTS is deliberately NOT set. Unset, each room fills to the size its
+      # mode is built for: 100 for Standard, 50 for High stakes. Setting it
+      # overrides both and is the reason a "100 player" test showed 25.
+
       - key: MAX_CONN_PER_IP
         value: "3"
-      # Set this once you know your client's origin, e.g.
-      # https://yourname.github.io
+
+      # Your own origin, e.g. https://petri.onrender.com — no trailing slash.
+      # WebSockets are not covered by the browser's same-origin policy, so
+      # unset means anyone can point a client at your server.
       - key: ALLOWED_ORIGINS
         sync: false
+
+      # Supabase session pooler string, port 5432. Without it accounts and
+      # balances live in memory and are lost on every deploy.
+      - key: DATABASE_URL
+        sync: false
+
+      # Google OAuth client id. Unset simply hides the button.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
+      # TEST_MODE=1 makes rounds start with a single ready player and fills the
+      # arena with bots. Set it in the dashboard while testing; leave it out of
+      # here so a blueprint sync can never enable it in production.

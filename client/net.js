@@ -22,7 +22,7 @@ import {
 } from "../shared/protocol.js";
 import {
   TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed,
-  EJECT_MASS, EJECT_KEEP, EJECT_SPEED, MAX_CELLS
+  EJECT_MASS, EJECT_KEEP, EJECT_SPEED, MAX_CELLS, PELLET_MASS, ORB_RADIUS
 } from "../shared/sim.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
@@ -89,6 +89,12 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   const ghostCells = [];      // { x, y, mass, vx, vy, age }
   const ghostBlobs = [];      // { x, y, vx, vy, age, ci }
   const GHOST_TTL = 0.45;     // seconds before an unconfirmed ghost is dropped
+
+  // Orbs the predicted cell has swallowed but the server has not yet
+  // confirmed. Hidden immediately; restored if the server disagrees. Without
+  // this an eaten orb sat inside the cell for ~190ms on a normal link — the
+  // one thing the client did not predict, and the most visible.
+  const EAT_TTL = 0.8;
   let authoritativeCount = 0; // cells the server last said were ours
 
   // Arena size for this room, learned from the first snapshot. Prediction has
@@ -165,8 +171,14 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       diag.snapWindow = localNow;
     }
     const offset = snap.time - localNow;
-    // Track the smallest observed offset: that is the least-delayed packet.
-    clockOffset = clockOffset === null ? offset : Math.min(clockOffset, offset);
+    // Least-delayed packet in the RECENT window, not of all time. An all-time
+    // minimum is sticky: one unusually fast early packet, or a server clock
+    // that drifts, leaves renderTime pinned seconds behind — and then every
+    // removal, tombstone and other player renders seconds late with it.
+    snap._offset = offset;
+    let best = offset;
+    for (const f of frames) if (f._offset !== undefined && f._offset < best) best = f._offset;
+    clockOffset = best;
 
     if (snap.world) worldSize = snap.world;
 
@@ -188,7 +200,11 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     }
     for (const id of snap.removed) {
       const p = pellets.get(id);
-      if (p) p.gone = snap.time;   // tombstone, not delete
+      if (!p) continue;
+      // Already hidden by prediction: drop it outright, there is nothing left
+      // for the tombstone's render-time fade to do.
+      if (p.eatenAt !== undefined) { pellets.delete(id); continue; }
+      p.gone = snap.time;          // tombstone, not delete
     }
     // Purge tombstones the render clock has already passed.
     for (const [id, p] of pellets) {
@@ -287,6 +303,30 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     const tx = cx + pendingAim.x, ty = cy + pendingAim.y;
 
     for (const p of predicted.values()) advanceCell(p, tx, ty, dt, worldSize);
+
+    // Same test the server uses, so the client rarely guesses wrong.
+    for (const cell of predicted.values()) {
+      const r = radiusOf(cell.mass);
+      const reach = r + ORB_RADIUS * 0.6;
+      const reach2 = reach * reach;
+      for (const o of pellets.values()) {
+        if (o.gone !== null || o.eatenAt !== undefined) continue;
+        const dx = o.x - cell.x; if (dx > reach || dx < -reach) continue;
+        const dy = o.y - cell.y; if (dy > reach || dy < -reach) continue;
+        if (dx * dx + dy * dy < reach2) {
+          o.eatenAt = 0;                       // age counter, in simulated seconds
+          cell.mass += o.big ? EJECT_KEEP : PELLET_MASS;
+        }
+      }
+    }
+    // A locally eaten orb the server never removed was a wrong guess: bring
+    // it back rather than leaving a hole in the field.
+    for (const o of pellets.values()) {
+      if (o.eatenAt !== undefined) {
+        o.eatenAt += dt;
+        if (o.eatenAt > EAT_TTL) o.eatenAt = undefined;
+      }
+    }
 
     for (let i = ghostCells.length - 1; i >= 0; i--) {
       const g = ghostCells[i];
@@ -432,6 +472,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       const visible = [];
       for (const p of pellets.values()) {
         if (p.gone !== null && p.gone <= renderTime) continue;
+        if (p.eatenAt !== undefined) continue;   // predicted eaten
         visible.push([p.x, p.y, p.ci, p.big ? 1 : 0, p.mine ? 1 : 0]);
       }
       for (const g of ghostBlobs) visible.push([g.x, g.y, 0, 1, 1]);

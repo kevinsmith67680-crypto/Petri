@@ -59,6 +59,16 @@ const CELL_LN = Math.log(CELL_DECAY);
 // Launch speed for a split piece of the given mass, units per second.
 export const splitLaunchSpeed = half => 780 + Math.sqrt(half) * 40;
 
+// Steering inertia. Without it a cell reverses direction in a single frame,
+// which is what "too sharp" means — every twitch of the mouse becomes a hard
+// corner. Heading and speed now ease toward their targets with an ~80ms time
+// constant: a full reversal takes about a quarter of a second, and small
+// cursor wobble is absorbed instead of drawn.
+//
+// Lives in the shared simulation so the server and the client's prediction
+// steer identically; a client-only smoothing would fight the correction.
+const STEER_RATE = 12;
+
 export const TICK_HZ = 20;           // authoritative server tick rate
 export const STAIN_COUNT = 7;        // palette slots; colours live client-side
 
@@ -316,14 +326,29 @@ export function advanceCell(c, tx, ty, dt, size = WORLD) {
   const dx = tx - c.x, dy = ty - c.y;
   const d = Math.hypot(dx, dy);
   const r = radiusOf(c.mass);
+
+  // Desired heading and speed this frame.
+  let wantX = 0, wantY = 0, wantSpeed = 0;
   if (d > 1) {
-    const speed = BASE_SPEED * Math.pow(c.mass, -0.24) * 60;
+    wantX = dx / d;
+    wantY = dy / d;
     // Ease off as the aim point enters the cell so it settles instead of
     // jittering around the target.
     const throttle = clamp(d / (r * 0.9), 0, 1);
-    c.x += (dx / d) * speed * throttle * dt;
-    c.y += (dy / d) * speed * throttle * dt;
+    wantSpeed = BASE_SPEED * Math.pow(c.mass, -0.24) * 60 * throttle;
   }
+
+  // Ease the actual heading and speed toward them. A cell with no steering
+  // state yet (first frame, or a ghost) adopts the target outright.
+  const k = 1 - Math.exp(-STEER_RATE * dt);
+  if (c.hx === undefined) { c.hx = wantX; c.hy = wantY; c.sp = wantSpeed; }
+  else {
+    c.hx += (wantX - c.hx) * k;
+    c.hy += (wantY - c.hy) * k;
+    c.sp += (wantSpeed - c.sp) * k;
+  }
+  c.x += c.hx * c.sp * dt;
+  c.y += c.hy * c.sp * dt;
   // Launch velocity from a split or a virus burst, coasting to a stop.
   // Integrated exactly (see advancePellet) so the client's prediction of a
   // split and the server's simulation of it agree at any frame rate.

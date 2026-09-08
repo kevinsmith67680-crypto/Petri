@@ -23,7 +23,8 @@ globalThis.WebSocket = class {
   fire(t, ev) { for (const fn of this.h[t] || []) fn(ev); }
 };
 
-const { createWorld, addPlayer, stepWorld, setAim, queueAction, TICK_HZ } = await import("../shared/sim.js");
+const { createWorld, addPlayer, stepWorld, setAim, queueAction, advanceCell, radiusOf, TICK_HZ } =
+  await import("../shared/sim.js");
 const { encodeSnapshot, createClientState } = await import("../shared/protocol.js");
 const { MODES } = await import("../shared/modes.js");
 const { createSocketConnection } = await import("../client/net.js");
@@ -182,6 +183,72 @@ check("an eject shows the blob on the very next frame", blobs() > beforeEject,
 // An unconfirmed ghost must not live for ever if the server never agrees.
 for (let f = 0; f < 40; f++) sp.conn.update(1 / 60);
 check("unconfirmed ghosts expire", blobs() === 0, `${blobs()} left after 0.66s`);
+
+console.log("\n-- orbs vanish when you eat them --");
+
+// The client did not predict orb eating, so an eaten orb sat inside the cell
+// for a round trip plus the interpolation buffer — and far longer if the
+// clock offset had gone stale.
+const ea = harness();
+ea.me.cells[0].mass = 60;
+ea.me.cells[0].x = 4400; ea.me.cells[0].y = 4400;
+const orb = ea.world.pellets[0];
+orb.x = 4520; orb.y = 4400;
+stepWorld(ea.world, 1 / TICK_HZ);       // rebuild the grid around it
+ea.push();
+
+const orbVisible = () =>
+  ea.conn.getView().pellets.some(p => Math.abs(p[0] - 4520) < 2 && Math.abs(p[1] - 4400) < 2);
+check("the orb is visible before we reach it", orbVisible());
+
+ea.conn.sendAim(600, 0);
+let hiddenWhileTouching = false, everTouched = false;
+for (let f = 0; f < 120; f++) {
+  ea.conn.update(1 / 60);
+  // A live server ticks too; without it the correction drags prediction back
+  // and the cell never arrives.
+  if (f % 3 === 0) { setAim(ea.world, "me", 600, 0); stepWorld(ea.world, 1 / TICK_HZ); ea.push(); }
+  const cell = ea.conn.getView().cells.find(c => c.mine);
+  const touching = cell && Math.abs(cell.x - 4520) < radiusOf(cell.m);
+  if (touching) {
+    everTouched = true;
+    if (!orbVisible()) { hiddenWhileTouching = true; }
+    break;
+  }
+}
+check("the cell reached the orb", everTouched);
+check("it disappears the moment the cell covers it", hiddenWhileTouching);
+
+console.log("\n-- the render clock does not go stale --");
+
+// An all-time minimum offset is sticky: one early fast packet, or a drifting
+// server clock, pinned renderTime seconds in the past — and every removal and
+// every other player rendered seconds late with it.
+const ck = harness();
+ck.push();
+const firstView = ck.conn.getView();
+check("a view exists", !!firstView);
+// Simulate the server clock running ahead of ours for a while.
+for (let i = 0; i < 40; i++) { stepWorld(ck.world, 1 / TICK_HZ); ck.push(); ck.conn.update(1 / 60); }
+const late = ck.conn.getView();
+check("the view is still tracking the newest snapshot",
+  Math.abs(late.time - ck.world.time) < 0.5,
+  `view ${late.time.toFixed(2)}s vs world ${ck.world.time.toFixed(2)}s`);
+
+console.log("\n-- steering is smooth, not instant --");
+
+// "Too sharp" was a cell that reversed direction in one frame. Heading now
+// eases, so a hard reversal takes a beat.
+const st = { x: 0, y: 0, mass: 20, vx: 0, vy: 0 };
+for (let i = 0; i < 60; i++) advanceCell(st, st.x + 600, st.y, 1 / 60, 8800);
+const goingRight = st.hx;
+advanceCell(st, st.x - 600, st.y, 1 / 60, 8800);
+check("one frame of opposite input does not flip the heading",
+  st.hx > 0.5, `heading ${st.hx.toFixed(2)} (was ${goingRight.toFixed(2)})`);
+let t = 0;
+while (st.hx > -0.95 && t < 1) { advanceCell(st, st.x - 600, st.y, 1 / 60, 8800); t += 1 / 60; }
+check("but a reversal completes in about a third of a second",
+  t > 0.15 && t < 0.5, `${(t * 1000).toFixed(0)} ms`);
 
 console.log("\n-- diagnostics --");
 
