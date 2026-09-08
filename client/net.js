@@ -102,6 +102,16 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // to clamp to the same bounds the server does or cells drift through walls.
   let worldSize = 0;
 
+  // Pings are sent from a timer rather than from inside the render frame.
+  // Measured in the frame loop, a busy main thread showed up as network
+  // latency: the send waited for a frame and the pong was handled on the next
+  // one, so up to two frames of local scheduling were counted as ping.
+  const pingTimer = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "ping", t: performance.now() }));
+    }
+  }, 2000);
+
   // How far behind the server to render, in seconds. One tick of buffer plus
   // however much the arrivals are actually spreading.
   function interpSeconds() {
@@ -473,10 +483,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
         diag.fps = diag.fps ? diag.fps * 0.9 + (1 / dt) * 0.1 : 1 / dt;
       }
 
-      if (now - lastPingAt > 2000 && socket.readyState === WebSocket.OPEN) {
-        lastPingAt = now;
-        socket.send(JSON.stringify({ type: "ping", t: now }));
-      }
+
     },
 
     // A method, not a getter: main.js calls conn.stats(). The two disagreed,
@@ -575,6 +582,6 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       }
     },
 
-    close() { socket.close(); }
+    close() { clearInterval(pingTimer); socket.close(); }
   };
 }

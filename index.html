@@ -86,6 +86,13 @@
   }
   .stats i{ font-style:normal; color:var(--muted); }
   .stats em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
+  /* The money figure is the one number in the readout that could be misread
+     as a payout, so it is tinted rather than left to blend in with mass and
+     rank. The unit is a separate element because setText writes textContent
+     and would wipe a child node on every update. */
+  .stats .value em{ color:var(--accent); }
+  .stats .value[hidden]{ display:none; }
+  .stats .unit{ font-weight:500; color:var(--muted); }
 
   /* ── leaderboard ── */
 
@@ -687,11 +694,14 @@
     <div><i>Rank</i><em id="statRank">—</em></div>
     <div><i>Cells eaten</i><em id="statCells">0</em></div>
     <div><i>Time</i><em id="statTime">0:00</em></div>
-  </div>
-  <div class="money" id="moneyRow" hidden>
-    <div><i>Mass value</i><em id="statValue">0.00</em></div>
-    <div><i>Staked</i><em id="statStaked">0.00</em></div>
-    <p>Indicative only. Payouts are your stake and anything you take from other players.</p>
+    <!-- Sits with Time rather than in its own block. "Staked" used to live
+         here too and was the same figure as the pot bar's "At risk", shown
+         twice a few centimetres apart. -->
+    <div class="value" id="moneyRow" hidden>
+      <!-- The unit is a sibling, not part of statValue's text: setText writes
+           textContent, which would wipe a child node on every update. -->
+      <i>Mass value</i><em id="statValue">0.00</em><span class="unit">USDC</span>
+    </div>
   </div>
 </div>
 

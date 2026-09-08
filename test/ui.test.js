@@ -144,6 +144,44 @@ check("signing out drops the stake back to practice", ui.getStake() === PRACTICE
 check("and hides the tiers again", !shown("stake1") && !shown("stake2"));
 check("with the sign-in line restored", note() === "Sign in to play for stakes.");
 
+console.log("\n-- the HUD does not rewrite unchanged DOM --");
+
+// Writing textContent invalidates style and layout even when the string is
+// identical. From 30 seconds remaining the clock also carries a CSS
+// animation, and rewriting an animating element every frame forces the
+// animation to be re-resolved — which is what made the game stutter at
+// exactly the half-minute mark.
+let clockWrites = 0;
+const clockEl = $("clockTime");
+let clockText = "";
+Object.defineProperty(clockEl, "textContent", {
+  get: () => clockText,
+  set: v => { clockWrites++; clockText = v; },
+  configurable: true
+});
+
+const frame = remaining => ui.update({
+  me: { orbs: 5, eaten: 0, mass: 100, alive: true, rank: 3, of: 20, id: 1 },
+  round: { phase: 1, remaining, number: 1 },
+  board: []
+}, 12.3, 0);
+
+for (let i = 0; i < 60; i++) frame(28);          // a second of frames, same value
+check("one second of identical frames writes the clock once",
+  clockWrites === 1, `${clockWrites} writes`);
+
+clockWrites = 0;
+for (let i = 0; i < 60; i++) frame(27);
+check("and writes again only when the second changes",
+  clockWrites === 1, `${clockWrites} writes`);
+
+// The class that starts the animation must also only be touched on change.
+let toggles = 0;
+const realToggle = $("roundClock").classList.toggle;
+$("roundClock").classList.toggle = (...a) => { toggles++; return realToggle.apply($("roundClock").classList, a); };
+for (let i = 0; i < 60; i++) frame(26);
+check("the ending class is not re-toggled every frame", toggles === 0, `${toggles} toggles`);
+
 console.log("\n-- connect() must set the flag on every path --");
 
 // A latching flag caused a real bug: the page connects as a guest before the

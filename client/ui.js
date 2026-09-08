@@ -45,7 +45,6 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     lobbyVeil: $("lobbyVeil"),
     money: $("moneyRow"),
     statValue: $("statValue"),
-    statStaked: $("statStaked"),
     specBar: $("specBar"),
     specName: $("specName")
   };
@@ -79,14 +78,33 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
 
   function hideSpectator() { el.specBar.hidden = true; }
 
+  // Writing textContent invalidates style and layout for that element even
+  // when the string is identical. The HUD is updated every frame, so most of
+  // those writes were pure waste — and on the clock it was actively harmful:
+  // from 30 seconds remaining that element also carries a CSS animation, and
+  // rewriting an animating element's text every frame forces the animation to
+  // be re-resolved 60 times a second. That is the stutter that appeared at
+  // exactly the half-minute mark.
+  const shown = new Map();
+  function setText(node, value) {
+    const v = String(value);
+    if (shown.get(node) === v) return;
+    shown.set(node, v);
+    node.textContent = v;
+  }
+  function setClass(node, name, on) {
+    if (node.classList.contains(name) === !!on) return;
+    node.classList.toggle(name, !!on);
+  }
+
   function renderClock(round) {
     // The lobby overlay owns the screen while waiting, so no clock there.
     if (round && round.phase === PHASE_LOBBY) { el.clock.hidden = true; return; }
     // PHASE_NONE means practice: no timer, so no clock.
     if (!round || round.phase !== PHASE_LIVE) { el.clock.hidden = true; return; }
     el.clock.hidden = false;
-    el.clockTime.textContent = mmss(round.remaining);
-    el.clock.classList.toggle("ending", round.remaining <= 30);
+    setText(el.clockTime, mmss(round.remaining));
+    setClass(el.clock, "ending", round.remaining <= 30);
   }
 
   let iAmReady = false;
@@ -137,10 +155,10 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   function update(view, elapsed, now) {
     if (!view) return;
     renderClock(view.round);
-    el.orbs.textContent = view.me.orbs;
-    el.cells.textContent = view.me.eaten;
-    el.mass.textContent = Math.round(view.me.mass);
-    el.time.textContent = mmss(elapsed);
+    setText(el.orbs, view.me.orbs);
+    setText(el.cells, view.me.eaten);
+    setText(el.mass, Math.round(view.me.mass));
+    setText(el.time, mmss(elapsed));
 
     // Live rounds only. In practice against bots there is no money involved,
     // so a cash figure there would be actively misleading.
@@ -149,20 +167,33 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     if (live) {
       // Derived from the mass in the snapshot, which the server owns. This is
       // a rendering of authoritative state, not a balance the client keeps.
-      el.statValue.textContent = formatUsdc(valueOfMass(view.me.mass));
-      el.statStaked.textContent = formatUsdc(account.pot);
+      setText(el.statValue, formatUsdc(valueOfMass(view.me.mass)));
     }
 
     if (now - hudAt < 400) return;
     hudAt = now;
 
-    el.rank.textContent = view.me.alive ? `${view.me.rank} of ${view.me.of}` : "—";
+    setText(el.rank, view.me.alive ? `${view.me.rank} of ${view.me.of}` : "—");
 
     if (settings.board) {
-      el.boardList.innerHTML = view.board.map((r, i) =>
-        `<li class="${r.id === view.me.id ? "you" : ""}">` +
-        `<span>${i + 1}. ${escapeHtml(r.name)}</span><b>${r.mass}</b></li>`
-      ).join("");
+      // Rebuilding ten list items reparses HTML and drops every existing node.
+      // Skip it when the rendered string has not changed.
+      // Mark the paid places and rule a line under fifth, so the boundary
+      // that decides who gets anything is visible at a glance.
+      const paidTo = view.round && view.round.phase === PHASE_LIVE ? 5 : 0;
+      const html = view.board.map((r, i) => {
+        const cls = [
+          r.id === view.me.id ? "you" : "",
+          paidTo && i < paidTo ? "paid" : "",
+          paidTo && i === paidTo - 1 && view.board.length > paidTo ? "cut" : ""
+        ].filter(Boolean).join(" ");
+        return `<li class="${cls}">` +
+          `<span>${i + 1}. ${escapeHtml(r.name)}</span><b>${r.mass}</b></li>`;
+      }).join("");
+      if (shown.get(el.boardList) !== html) {
+        shown.set(el.boardList, html);
+        el.boardList.innerHTML = html;
+      }
     }
   }
 
@@ -291,13 +322,18 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     const slowFps = stats.fps > 0 && stats.fps < 45;
     const slowPing = stats.ping > 120;
     const slowTick = stats.budgetMs > 0 && stats.srvMs > stats.budgetMs * 0.6;
-    box.innerHTML =
+    const html =
       `<div><span class="${slowFps ? "warn" : ""}">${stats.fps || "—"} fps</span></div>` +
       `<div><span class="${slowPing ? "warn" : ""}">${stats.ping >= 0 ? stats.ping + " ms ping" : "— ping"}</span></div>` +
       `<div><span class="${slowTick ? "warn" : ""}">${stats.srvMs >= 0 ? stats.srvMs.toFixed(1) : "—"} / ${stats.budgetMs || "—"} ms tick</span></div>` +
       `<div>${stats.interpMs != null ? stats.interpMs + " ms buffer" : ""}</div>` +
       `<div><span class="${stats.hz && stats.snapsPerSec > 0 && stats.snapsPerSec < stats.hz * 0.85 ? "warn" : ""}">` +
         `${stats.snapsPerSec >= 0 ? stats.snapsPerSec : "—"} / ${stats.hz || "—"} snapshots/s</span></div>`;
+    // Rebuilt every frame otherwise, which is five elements torn down and
+    // reparsed 60 times a second to show numbers that change once a second.
+    if (shown.get(box) === html) return;
+    shown.set(box, html);
+    box.innerHTML = html;
   }
 
   // A banner rather than a quiet note: test mode changes the economics and

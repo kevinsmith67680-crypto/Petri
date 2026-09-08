@@ -722,9 +722,13 @@ export function stepWorld(world, dt) {
       if (p.alive && p.cells.length) { p._m = totalMass(p); standings.push(p); }
     }
     standings.sort((a, b) => b._m - a._m);
+    // The denominator is everyone who started, not everyone still breathing.
+    // "3 of 12" halfway through a hundred-player round tells you nothing about
+    // the round you are actually in; "3 of 101" does.
+    const field = world.players.size;
     for (let i = 0; i < standings.length; i++) {
       standings[i].rank = i + 1;
-      standings[i].of = standings.length;
+      standings[i].of = field;
     }
   }
 
@@ -786,7 +790,7 @@ export function resetArena(world) {
 
 // ── read models ─────────────────────────────────────────────────────────────
 
-export function leaderboard(world, limit = 8) {
+export function leaderboard(world, limit = 10) {
   return [...world.players.values()]
     .filter(p => p.alive)
     .map(p => ({ id: p.id, name: p.name, mass: Math.round(totalMass(p)) }))

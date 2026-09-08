@@ -460,6 +460,22 @@ On a clean connection that is 23ms of lag removed for free, and on a bad one the
 
 **If you want more, raise the tick rate.** `TICK_HZ=30` halves the wait for the next server update and shrinks the buffer proportionally, at 1.5x the CPU. Measured at 2.97ms/tick for both rooms with 25 bots each, that is comfortable on a Standard instance and too tight on the free 0.1 CPU one — check `avgMs` against `budgetMs` in the overlay before committing.
 
+### The stutter at thirty seconds left
+
+The HUD was written on every frame: seven `textContent` assignments, a leaderboard rebuilt from an HTML string, and the performance overlay reparsed 60 times a second — all to display numbers that change about once a second. Setting `textContent` invalidates style and layout for that element even when the string is identical.
+
+That was waste everywhere, but on the clock it was actively harmful. At 30 seconds remaining the clock gains an `ending` class with a CSS animation, and rewriting an animating element's text 60 times a second forces the animation to be re-resolved each frame. Hence a stutter that appeared at exactly the half-minute mark and nowhere else.
+
+Every HUD write now goes through a guard that compares against the last value:
+
+| | Before | After |
+|---|---|---|
+| Text writes | 420/s | at most 7/s |
+| Leaderboard rebuilds | 150/s | only on change |
+| Overlay rebuilds | 60/s | only on change |
+
+`test/ui.test.js` asserts that a second of identical frames writes the clock once, and that the animation class is not re-toggled.
+
 ### Absorbing orbs, and why movement felt sharp
 
 **Eating an orb is now predicted.** It was the one interaction the client did not predict, so an eaten orb sat inside your cell for a round trip plus the interpolation buffer — about 190ms on a normal link, and much longer on a slow one. The client now runs the same overlap test the server does and hides the orb on the frame the cell covers it. If the server never confirms, the orb comes back after 0.8s rather than leaving a hole.
