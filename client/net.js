@@ -23,7 +23,7 @@ import {
 import {
   TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed,
   EJECT_MASS, EJECT_KEEP, MAX_CELLS, PELLET_MASS, ORB_RADIUS,
-  ejectLaunchSpeed, EJECT_OWNER_COOLDOWN
+  EJECT_SPEED, EJECT_OWNER_COOLDOWN
 } from "../shared/sim.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
@@ -397,12 +397,10 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       if (p.mass < EJECT_MASS * 2) continue;
       const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
       p.mass -= EJECT_MASS;
-      const r = radiusOf(p.mass);
-      const gap = r + radiusOf(EJECT_KEEP) * 0.35;
-      const speed = ejectLaunchSpeed(r);
+      const gap = radiusOf(p.mass) + radiusOf(EJECT_KEEP) * 0.35;
       ghostBlobs.push({
         x: p.x + (dx / d) * gap, y: p.y + (dy / d) * gap,
-        vx: (dx / d) * speed, vy: (dy / d) * speed, age: 0, ci
+        vx: (dx / d) * EJECT_SPEED, vy: (dy / d) * EJECT_SPEED, age: 0, ci
       });
     }
   }

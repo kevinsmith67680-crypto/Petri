@@ -11,7 +11,7 @@ import {
   createWorld, addPlayer, fillBots, stepWorld, setAim, queueAction,
   totalMass, centroid, leaderboard, TICK_HZ, WORLD, PELLETS, VIRUSES,
   radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
-  advancePellet, ejectLaunchSpeed, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN
+  advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -131,12 +131,15 @@ console.log("\n-- ejected mass behaves like a projectile --");
   // small cell rests inside a large one's reach and is swallowed instantly.
   for (const mass of [40, 200, 800, 3000]) {
     const r = radiusOf(mass);
-    const p = { x: r + blobR * 0.35, y: 0, vx: ejectLaunchSpeed(r), vy: 0, mass: EJECT_KEEP };
+    const p = { x: r + blobR * 0.35, y: 0, vx: EJECT_SPEED, vy: 0, mass: EJECT_KEEP };
     let t = 0;
     while (t < 3) { advancePellet(p, 1 / 60, 8800); t += 1 / 60; }
+    // One launch speed for everyone, so the clearance past the mouth is the
+    // same 233 units at every size — the starting point already scales.
+    const clearance = p.x - (r + blobR * 0.6);
     check(`a mass-${mass} cell throws clear of its own reach`,
-      p.x > r + blobR * 0.6 + 20,
-      `rests at ${p.x.toFixed(0)}, eats to ${(r + blobR * 0.6).toFixed(0)}`);
+      Math.abs(clearance - 233) < 3,
+      `rests at ${p.x.toFixed(0)}, ${clearance.toFixed(0)} clear`);
   }
 
   // Driving straight on must not hoover it back up.
@@ -175,7 +178,7 @@ console.log("\n-- ejected mass behaves like a projectile --");
     const b = wS.pellets.find(p => p.owner === "me");
     const rS = radiusOf(pS.cells[0].mass);
     const clear = b ? (Math.hypot(b.x - pS.cells[0].x, b.y - pS.cells[0].y) - rS) / rS : 0;
-    check("the throw clears the cell by several radii", clear > 2.5,
+    check("the throw clears a mass-200 cell by several radii", clear > 2.5,
       `${clear.toFixed(1)} radii clear`);
   }
 

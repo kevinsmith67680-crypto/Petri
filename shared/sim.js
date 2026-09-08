@@ -93,20 +93,18 @@ export const pelletRadius = p =>
 // Ejecting throws a projectile that shoots clear of the cell and parks just
 // outside its reach. Two constants shape it:
 //
-//   EJECT_CLEARANCE  how far past the eating edge it comes to rest, as a
-//                    multiple of the cell's radius plus a floor. It MUST
-//                    scale: a fixed distance that clears a small cell rests
-//                    inside a large one's mouth and is swallowed instantly.
-//   EJECT_SNAP       how sharply it decelerates. Higher means it arrives
-//                    faster and travels the same distance — a shot, not a lob.
-export const EJECT_CLEARANCE = 2.6;    // x cell radius
-export const EJECT_CLEAR_MIN = 90;     // plus this many units
+// One launch speed for every cell, as agar.io does it. Travel is therefore
+// constant at EJECT_SPEED / EJECT_SNAP = 237 units, and because the blob
+// spawns at the membrane the clearance past the mouth is constant too — 233
+// units whatever the cell's size. A mass-200 cell throws to 299 from centre.
+//
+// A fixed distance from the CENTRE would not work: it would rest inside a
+// large cell's reach. A fixed distance of TRAVEL does, because the starting
+// point already scales with the radius.
+export const EJECT_SPEED = 1304;       // world units per second at launch
 const EJECT_SNAP = 5.5;                // 1/e-folds per second of travel
 
-// Launch speed needed to come to rest at the intended clearance. Derived, not
-// guessed: with exponential decay the total travel is v0 / EJECT_SNAP.
-export const ejectLaunchSpeed = cellRadius =>
-  (cellRadius * EJECT_CLEARANCE + EJECT_CLEAR_MIN) * EJECT_SNAP;
+export const ejectLaunchSpeed = () => EJECT_SPEED;
 
 // The thrower cannot pick its own mass back up for this long. Everyone else
 // can take it immediately. Long enough that a cell continuing forward sails
@@ -490,7 +488,7 @@ function doEject(world, ent, tx, ty) {
     const gap = r + blobR * 0.35;
     const blob = makePellet(
       world, c.x + a.x * gap, c.y + a.y * gap,
-      EJECT_KEEP, a.x * ejectLaunchSpeed(r), a.y * ejectLaunchSpeed(r), c.ci
+      EJECT_KEEP, a.x * EJECT_SPEED, a.y * EJECT_SPEED, c.ci
     );
 
     blob.owner = ent.id;
