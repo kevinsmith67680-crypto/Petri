@@ -145,7 +145,15 @@ const LIMITS = {
 
 // Binary gameplay frames are 5 bytes; the only text frame is the join, which
 // carries a 16-character name. 128 is generous and rejects floods earlier.
-const MAX_PAYLOAD = 128;
+// Largest client frame we will accept. Gameplay messages are tiny — aim is 5
+// bytes, an action is 2 — but the join frame carries a 64-character session
+// token plus a display name of up to 16, and at 128 it did not fit: a join
+// measured 138 bytes and the server closed the socket the moment a player
+// tried to enter. Anyone with a long display name could never connect at all.
+//
+// 512 is still small enough to be useless to an attacker and leaves room for
+// the join frame to grow without silently breaking connections again.
+const MAX_PAYLOAD = 512;
 const LINGER_SEC = 6;         // how long your cells stay after you vanish
 
 // ── static files ────────────────────────────────────────────────────────────

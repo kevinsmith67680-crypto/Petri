@@ -116,6 +116,27 @@ s = await room("standard");
 check("Standard sheds its bots", s.inWorld <= 1, `${s.inWorld} left`);
 check("High stakes keeps its own", (await room("highstakes")).inWorld === 51);
 
+console.log("\n-- the join frame fits the payload limit --");
+
+// The limit is enforced by `ws` before our handler ever sees the frame, so an
+// oversized join closes the socket with no explanation. It happened: adding a
+// protocol field took the frame from 125 bytes to 138 against a 128 limit, and
+// a display name over ~12 characters had never fitted at all.
+{
+  const src = fs.readFileSync(path.join(root, "..", "server", "index.js"), "utf8");
+  const limit = Number(/const MAX_PAYLOAD = (\d+)/.exec(src)[1]);
+  const worst = JSON.stringify({
+    type: "join",
+    name: "x".repeat(16),            // NAME_MAX
+    stake: 2_000_000,
+    token: "a".repeat(64),           // session token
+    protocol: PROTOCOL_VERSION
+  });
+  const size = Buffer.byteLength(worst);
+  check("the largest legitimate join fits", size < limit, `${size} of ${limit} bytes`);
+  check("with room to grow", limit - size > 200, `${limit - size} bytes spare`);
+}
+
 console.log("\n-- a stale client is turned away --");
 
 // The client and server share a binary wire format. A browser holding an old
