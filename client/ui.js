@@ -50,7 +50,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   // The client holds no authority over money. This is a read-only echo of the
   // server ledger; every value here arrives from the server and is never
   // computed locally.
-  let account = { balance: 0, pot: 0, staked: false, demo: true };
+  let account = { balance: 0, pot: 0, stake: 0, staked: false, demo: true };
   let stake = PRACTICE;
   let signedIn = false;
   let wagerPossible = true;
@@ -379,8 +379,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
 
   function renderAccount() {
     el.bal.innerHTML = `${formatUsdc(account.balance)}<span>USDC</span>`;
-    el.potValue.textContent = formatUsdc(account.pot);
-    el.potBar.hidden = !(account.pot > 0);
+    // What this player staked in this game, and nothing else. The escrow can
+    // be larger — eating a staked rival transfers their pot to you — but that
+    // is winnings, not what you chose to put in.
+    el.potValue.textContent = formatUsdc(account.stake || 0);
+    el.potBar.hidden = !(account.stake > 0);
 
     // paintStakes drops an unaffordable selection back to practice itself.
     paintStakes();

@@ -137,6 +137,61 @@ console.log("\n-- the join frame fits the payload limit --");
   check("with room to grow", limit - size > 200, `${limit - size} bytes spare`);
 }
 
+console.log("\n-- the pot always equals the stake you chose --");
+
+// Every join used to escrow another stake without releasing the last one, so
+// reconnecting — after a dropped socket, or just pressing Start again — made
+// the "at risk" figure climb 1.00, 2.00, 3.00 while the player believed they
+// had staked once.
+{
+  const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "potter", password: "password123", displayName: "Potter" })
+  })).json().then(d => d.token);
+
+  const me = async () => (await (await fetch(`http://localhost:${PORT}/api/me`, {
+    headers: { Authorization: `Bearer ${tok}` }
+  })).json());
+
+  const enter = async stake => {
+    const ws = new FakeWS();
+    globalThis.__wss.emit("connection", ws, req);
+    await ws.deliver({ type: "join", name: "Potter", stake, token: tok, protocol: PROTOCOL_VERSION });
+    await settle();
+    return ws;
+  };
+
+  const opening = await me();
+  const total = opening.balance + opening.pot;
+  // Other tests have left players connected, so measure the change we cause.
+  const othersBefore =
+    (await room("standard")).players + (await room("highstakes")).players;
+
+  await enter(1_000_000);
+  let s1 = await me();
+  check("one join escrows exactly the stake", s1.pot === 1_000_000, `${s1.pot}`);
+
+  await enter(1_000_000);
+  await enter(1_000_000);
+  const s3 = await me();
+  check("three joins still escrow exactly the stake", s3.pot === 1_000_000, `${s3.pot}`);
+  check("and the balance is not drained", s3.balance + s3.pot === total,
+    `${s3.balance + s3.pot} vs ${total}`);
+
+  // Switching tiers must move the escrow, not add to it.
+  await enter(2_000_000);
+  const s4 = await me();
+  check("switching to the 2.00 tier escrows 2.00, not 3.00", s4.pot === 2_000_000, `${s4.pot}`);
+  check("money is conserved across the switch", s4.balance + s4.pot === total,
+    `${s4.balance + s4.pot} vs ${total}`);
+
+  // Four joins by one account must leave exactly one live connection.
+  const held =
+    (await room("standard")).players + (await room("highstakes")).players - othersBefore;
+  check("four joins leave exactly one live connection", held === 1,
+    `${held} added by this account`);
+}
+
 console.log("\n-- a stale client is turned away --");
 
 // The client and server share a binary wire format. A browser holding an old

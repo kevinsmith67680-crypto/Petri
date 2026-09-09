@@ -144,6 +144,25 @@ check("signing out drops the stake back to practice", ui.getStake() === PRACTICE
 check("and hides the tiers again", !shown("stake1") && !shown("stake2"));
 check("with the sign-in line restored", note() === "Sign in to play for stakes.");
 
+console.log("\n-- at risk shows the stake, not the escrow --");
+
+// The escrow grows when you eat a staked rival: their pot transfers to yours.
+// That is winnings, not what you chose to put in, and showing it made the
+// figure climb during a round for no reason the player could connect to.
+ui.setAccount({ balance: 4 * UNIT, pot: 1 * UNIT, stake: 1 * UNIT, staked: true, demo: true });
+check("shows the chosen stake", $("potValue").textContent === "1.00", $("potValue").textContent);
+check("and the bar is visible", $("potBar").hidden === false);
+
+ui.setAccount({ balance: 4 * UNIT, pot: 3 * UNIT, stake: 1 * UNIT, staked: true, demo: true });
+check("two kills later it still shows the stake",
+  $("potValue").textContent === "1.00", `${$("potValue").textContent} with a 3.00 escrow`);
+
+ui.setAccount({ balance: 3 * UNIT, pot: 2 * UNIT, stake: 2 * UNIT, staked: true, demo: true });
+check("a 2.00 tier shows 2.00", $("potValue").textContent === "2.00", $("potValue").textContent);
+
+ui.setAccount({ balance: 5 * UNIT, pot: 0, stake: 0, staked: false, demo: true });
+check("practice hides the bar entirely", $("potBar").hidden === true);
+
 console.log("\n-- the HUD does not rewrite unchanged DOM --");
 
 // Writing textContent invalidates style and layout even when the string is

@@ -287,7 +287,12 @@ async function pushAccount(ws, meta) {
   if (ws.readyState !== ws.OPEN || !meta.accountId) return;
   const snap = await backend.snapshot(meta.accountId);
   if (ws.readyState !== ws.OPEN) return;
-  ws.send(JSON.stringify({ type: "account", demo: !ramp.isReal, ...snap }));
+  // `pot` is the escrow, which grows when this player takes someone else's.
+  // `stake` is only ever what they put in themselves — that is what the HUD
+  // shows, so the figure never moves during a round.
+  ws.send(JSON.stringify({
+    type: "account", demo: !ramp.isReal, stake: meta.stake, ...snap
+  }));
 }
 
 const connectionsByIp = new Map();
@@ -327,6 +332,33 @@ function createRoom(mode) {
 
 const rooms = new Map(MODES.map(m => [m.id, createRoom(m)]));
 const roomForStake = stake => [...rooms.values()].find(r => r.mode.stake === stake) || null;
+
+// One live connection per account. Without this a second join escrowed
+// another stake on top of the first, so the "at risk" figure climbed 1.00 ->
+// 2.00 -> 3.00 while the player believed they had staked once. Reconnecting
+// after a dropped socket, or pressing Start again, was enough to trigger it.
+//
+// The newer connection wins: a player who refreshes must not be locked out of
+// their own game.
+function evictExistingConnection(accountId) {
+  for (const room of rooms.values()) {
+    for (const [ws, meta] of room.clients) {
+      if (meta.accountId !== accountId) continue;
+      // The close handler must not treat this as a player walking away: that
+      // would linger the cell and later refund an escrow we are about to
+      // reconcile ourselves.
+      meta.replaced = true;
+      meta.stake = PRACTICE;
+      room.clients.delete(ws);
+      removePlayer(room.world, meta.id);
+      room.lastEater.delete(meta.id);
+      try { ws.close(4001, "Replaced by a newer connection"); } catch { /* already gone */ }
+      pushLobby(room);
+      return true;
+    }
+  }
+  return false;
+}
 
 const readyCount = room => {
   let n = 0;
@@ -777,6 +809,17 @@ wss.on("connection", (ws, req) => {
       const displayName = authed.displayName;
       if (!ramp.isReal) await ramp.grant(meta.accountId);
 
+      // Drop any earlier connection for this account, then return whatever it
+      // left in escrow. Only after that is the new stake locked, so the pot is
+      // always exactly the stake the player chose — never a sum of attempts.
+      evictExistingConnection(meta.accountId);
+      try {
+        const before = await backend.snapshot(meta.accountId);
+        if (before.pot > 0) await backend.refund(meta.accountId);
+      } catch (err) {
+        console.error("clearing stale escrow:", err.message);
+      }
+
       try {
         await backend.lockStake(meta.accountId, stake);
       } catch (err) {
@@ -821,6 +864,7 @@ wss.on("connection", (ws, req) => {
         lobbyMax: room.lobbyMax,
         test: TEST_MODE,
         demo: !ramp.isReal,
+        stake,
         signedIn: true,
         displayName,
         ...(await backend.snapshot(meta.accountId))
@@ -855,7 +899,9 @@ wss.on("connection", (ws, req) => {
     const n = (connectionsByIp.get(ip) || 1) - 1;
     if (n <= 0) connectionsByIp.delete(ip); else connectionsByIp.set(ip, n);
 
-    if (meta.joined && room) {
+    // A replaced connection has already been reconciled by the join that
+    // replaced it; lingering here would refund a stake that is now live.
+    if (meta.joined && room && !meta.replaced) {
       pushLobby(room);
       syncBots(room);
       // Do not delete the player immediately. Vanishing on demand is a free

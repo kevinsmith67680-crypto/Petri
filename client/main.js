@@ -260,6 +260,9 @@ function onAccount(msg) {
   ui.setAccount({
     balance: msg.balance ?? 0,
     pot: msg.pot ?? 0,
+    // The server sends this player's own stake. The HUD shows it rather than
+    // the escrow, which grows with anything taken from other players.
+    stake: msg.stake ?? 0,
     staked: !!msg.staked,
     demo: msg.demo !== false
   });
