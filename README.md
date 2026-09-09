@@ -566,6 +566,18 @@ A server that cannot hold its tick feels identical to bad netcode from the playe
 
 `avgMs` well under `budgetMs` means the server is fine and any remaining lag is network. `avgMs` approaching or exceeding the budget, or `overruns` climbing steadily, means the instance is starved — on Render's free 0.1 CPU that happens quickly with bots in the arena. Lower `BOTS` or move up an instance size.
 
+## Stale clients
+
+The client and server share a binary wire format, so they must be the same build. A browser holding yesterday's `protocol.js` while the server runs today's decodes every snapshot out of alignment — cells at garbage positions, orbs that never appear. It looks like a rendering bug and is not.
+
+Two defences, because either alone can fail:
+
+**Code revalidates on every load.** The static server previously sent no cache headers at all, which leaves browsers to cache heuristically. HTML, JS and CSS now go out as `Cache-Control: no-cache` with an ETag, so a browser asks every time and gets a 304 when nothing changed. Images and fonts, which are not part of any contract, are held for a day.
+
+**The wire format is versioned.** `PROTOCOL_VERSION` in `shared/protocol.js` is sent on join; a mismatch is refused with "This page is out of date. Reload to get the latest version." Bump it whenever the binary layout changes — a new field in the snapshot header, a different pellet record, anything.
+
+If a player ever reports scattered opponents or missing orbs, a hard refresh is the first thing to try.
+
 ## Game modes
 
 Two independent rooms run side by side. Each has its own world, arena, lobby, round clock and connected clients. Only the ledger and the account store are shared, because a balance follows a player between modes while nothing else should.

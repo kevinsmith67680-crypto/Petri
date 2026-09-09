@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import {
-  MSG, decodeSnapshot, encodeAim, encodeAction, KEYFRAME_TICKS
+  MSG, decodeSnapshot, encodeAim, encodeAction, KEYFRAME_TICKS, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import {
   TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed,
@@ -125,7 +125,9 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // its guest connection.
 
   socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: MSG.JOIN, name, stake, token }));
+    socket.send(JSON.stringify({
+      type: MSG.JOIN, name, stake, token, protocol: PROTOCOL_VERSION
+    }));
   });
 
   socket.addEventListener("message", ev => {

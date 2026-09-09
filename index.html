@@ -69,30 +69,8 @@
   }
   .stats div{ display:flex; gap:7px; }
 
-  .money{
-    margin-top:14px; padding-top:12px;
-    border-top:1px solid var(--line);
-    max-width:280px; font-size:12.5px;
-  }
-  .money[hidden]{ display:none; }
-  .money div{ display:flex; gap:7px; margin-bottom:4px; }
-  .money i{ font-style:normal; color:var(--muted); }
-  .money em{
-    font-style:normal; font-weight:600; font-variant-numeric:tabular-nums;
-  }
-  .money em::after{ content:" USDC"; font-weight:400; font-size:10.5px; color:var(--muted); }
-  .money p{
-    margin-top:7px; font-size:10.5px; line-height:1.45; color:var(--muted);
-  }
   .stats i{ font-style:normal; color:var(--muted); }
   .stats em{ font-style:normal; font-weight:600; font-variant-numeric:tabular-nums; }
-  /* The money figure is the one number in the readout that could be misread
-     as a payout, so it is tinted rather than left to blend in with mass and
-     rank. The unit is a separate element because setText writes textContent
-     and would wipe a child node on every update. */
-  .stats .value em{ color:var(--accent); }
-  .stats .value[hidden]{ display:none; }
-  .stats .unit{ font-weight:500; color:var(--muted); }
 
   /* ── leaderboard ── */
 
@@ -622,10 +600,17 @@
   .pot[hidden]{ display:none; }
   .pot i{ font-style:normal; font-size:12px; color:var(--muted); }
   .pot b{ font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; }
+  /* The second group in the bar: "Mass value 2.09 USDC", divided from the
+     stake by a hairline. */
   .pot-note{
-    font-size:11px; color:var(--muted);
-    padding-left:12px; border-left:1px solid var(--line);
+    display:flex; align-items:baseline; gap:7px;
+    padding-left:14px; border-left:1px solid var(--line);
   }
+  /* Two money figures sit side by side here and only one of them is real.
+     The stake is what you can lose; the mass value is indicative. Tinting it
+     stops it reading as a second stake. */
+  .pot-note b{ color:var(--accent); }
+  .pot .unit{ font-size:11px; font-weight:500; color:var(--muted); }
 
   /* ── touch ── */
 
@@ -693,15 +678,6 @@
     <div><i>Mass</i><em id="statMass">20</em></div>
     <div><i>Rank</i><em id="statRank">—</em></div>
     <div><i>Cells eaten</i><em id="statCells">0</em></div>
-    <div><i>Time</i><em id="statTime">0:00</em></div>
-    <!-- Sits with Time rather than in its own block. "Staked" used to live
-         here too and was the same figure as the pot bar's "At risk", shown
-         twice a few centimetres apart. -->
-    <div class="value" id="moneyRow" hidden>
-      <!-- The unit is a sibling, not part of statValue's text: setText writes
-           textContent, which would wipe a child node on every update. -->
-      <i>Mass value</i><em id="statValue">0.00</em><span class="unit">USDC</span>
-    </div>
   </div>
 </div>
 
@@ -780,7 +756,11 @@
 <div class="pot" id="potBar" hidden>
   <i>At risk</i>
   <b id="potValue">0.00</b>
-  <span class="pot-note">Top 5 are paid</span>
+  <span class="pot-note">
+    <!-- The unit is a sibling, not part of statValue's text: setText writes
+         textContent and would wipe a child node on every update. -->
+    <i>Mass value</i><b id="statValue">0.00</b><span class="unit">USDC</span>
+  </span>
 </div>
 
 <div class="touch">

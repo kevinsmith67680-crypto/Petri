@@ -36,6 +36,13 @@ import {
 // so an oversized arena fails loudly rather than wrapping around as jitter.
 export const WORLD_LIMIT = MAX_WORLD;
 
+// Bump this whenever the binary layout changes: a new field in the snapshot
+// header, a different pellet record, anything. The client sends it on join and
+// the server refuses a mismatch, so a stale client gets told to reload instead
+// of silently decoding every frame two bytes out of alignment — which looks
+// like opponents scattered across the map and orbs that never appear.
+export const PROTOCOL_VERSION = 7;
+
 export const MSG = {
   JOIN: "join",        // text
   WELCOME: "welcome",  // text

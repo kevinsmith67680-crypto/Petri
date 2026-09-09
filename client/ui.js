@@ -16,7 +16,6 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     mass: $("statMass"),
     rank: $("statRank"),
     cells: $("statCells"),
-    time: $("statTime"),
     board: $("board"),
     boardList: $("boardList"),
     minimap: $("minimap"),
@@ -43,7 +42,6 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     clockTime: $("clockTime"),
     roundVeil: $("roundVeil"),
     lobbyVeil: $("lobbyVeil"),
-    money: $("moneyRow"),
     statValue: $("statValue"),
     specBar: $("specBar"),
     specName: $("specName")
@@ -158,12 +156,12 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     setText(el.orbs, view.me.orbs);
     setText(el.cells, view.me.eaten);
     setText(el.mass, Math.round(view.me.mass));
-    setText(el.time, mmss(elapsed));
 
     // Live rounds only. In practice against bots there is no money involved,
     // so a cash figure there would be actively misleading.
     const live = view.round && view.round.phase === PHASE_LIVE;
-    el.money.hidden = !live;
+    // Lives in the pot bar now, which is only shown when something is at
+    // stake — so a practice run never displays a cash figure at all.
     if (live) {
       // Derived from the mass in the snapshot, which the server owns. This is
       // a rendering of authoritative state, not a balance the client keeps.

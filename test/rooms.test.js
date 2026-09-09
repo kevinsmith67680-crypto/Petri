@@ -64,14 +64,16 @@ const health = async () => (await (await fetch(`http://localhost:${PORT}/health`
 const room = async id => (await health()).rooms.find(r => r.mode === id);
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
 
-async function join(username, stake) {
+const { PROTOCOL_VERSION } = await import("../shared/protocol.js");
+
+async function join(username, stake, protocol = PROTOCOL_VERSION) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password: "password123", displayName: username })
   })).json().then(d => d.token);
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver({ type: "join", name: username, stake, token });
+  await ws.deliver({ type: "join", name: username, stake, token, protocol });
   await settle();
   return ws;
 }
@@ -113,6 +115,20 @@ s = await room("standard");
 // is not quite empty for a few seconds.
 check("Standard sheds its bots", s.inWorld <= 1, `${s.inWorld} left`);
 check("High stakes keeps its own", (await room("highstakes")).inWorld === 51);
+
+console.log("\n-- a stale client is turned away --");
+
+// The client and server share a binary wire format. A browser holding an old
+// protocol.js decodes every snapshot out of alignment: opponents scattered
+// across the map, orbs that never appear. Refusing the connection turns that
+// silent corruption into a message telling the player to reload.
+const stale = await join("stale", 1_000_000, PROTOCOL_VERSION - 1);
+check("the join is refused", !!stale.closed, JSON.stringify(stale.closed || {}));
+const told = stale.out.filter(m => m !== "<binary>").join(" ");
+check("and the player is told to reload", /out of date/i.test(told),
+  told.slice(0, 120) || "nothing said");
+check("it never entered a room",
+  (await room("standard")).players === (await room("standard")).players);
 
 console.log("\n-- the ready flow still starts a round --");
 

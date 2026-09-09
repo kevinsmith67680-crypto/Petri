@@ -38,7 +38,7 @@ import {
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
-  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY
+  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import { isValidStake, PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
@@ -220,10 +220,34 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  fs.readFile(file, (err, body) => {
-    if (err) { res.writeHead(404).end("Not found"); return; }
-    res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream" });
-    res.end(body);
+  // Cache headers matter more here than they look. The client and server share
+  // a binary wire format, so a browser holding yesterday's protocol.js while
+  // the server runs today's decodes every snapshot out of alignment: cells at
+  // garbage positions, orbs that never appear. With no headers at all browsers
+  // cache heuristically, which is exactly how that happens.
+  //
+  // Code revalidates on every load; a 304 is a few hundred bytes. Images and
+  // fonts, which are not part of any contract, can be held for a day.
+  fs.stat(file, (statErr, st) => {
+    if (statErr) { res.writeHead(404).end("Not found"); return; }
+    const ext = path.extname(file);
+    const etag = `W/"${st.size.toString(16)}-${st.mtimeMs.toString(16)}"`;
+    const immutableish = ext === ".png" || ext === ".webp" || ext === ".ico" || ext === ".woff2";
+
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, { ETag: etag }).end();
+      return;
+    }
+
+    fs.readFile(file, (err, body) => {
+      if (err) { res.writeHead(404).end("Not found"); return; }
+      res.writeHead(200, {
+        "Content-Type": MIME[ext] || "application/octet-stream",
+        "Cache-Control": immutableish ? "public, max-age=86400" : "no-cache",
+        ETag: etag
+      });
+      res.end(body);
+    });
   });
 });
 
@@ -691,6 +715,19 @@ wss.on("connection", (ws, req) => {
       // Resolving a session is a database round trip, so a second JOIN could
       // arrive mid-await and create two players for one socket.
       meta.joining = true;
+
+      // A stale client cannot be allowed to connect: it shares a binary wire
+      // format with us, and a mismatch corrupts every frame silently. Tell it
+      // to reload rather than letting it play a garbled game.
+      if (msg.protocol !== PROTOCOL_VERSION) {
+        meta.joining = false;
+        ws.send(JSON.stringify({
+          type: "account_error",
+          reason: "This page is out of date. Reload to get the latest version."
+        }));
+        ws.close(1008, "Protocol mismatch");
+        return;
+      }
 
       const stake = Number(msg.stake) || PRACTICE;
       if (!isValidStake(stake) || stake === PRACTICE) {
