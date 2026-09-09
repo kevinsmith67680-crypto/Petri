@@ -921,6 +921,17 @@
   </div>
 </div>
 
+<!-- Shown when the connection is refused or drops. Without it the reason was
+     written into the pregame menu, which is hidden the moment you press Start
+     — so any refusal looked like a blank screen. -->
+<div class="veil" id="errVeil" hidden>
+  <div class="card">
+    <h2 id="errTitle">Disconnected</h2>
+    <p id="errText">The connection to the server was lost.</p>
+    <button id="btnErrAction" type="button">Reload</button>
+  </div>
+</div>
+
 <div class="veil" id="lobbyVeil" hidden>
   <div class="card">
     <h2>Lobby</h2>

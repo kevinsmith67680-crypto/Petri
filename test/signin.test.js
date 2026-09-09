@@ -166,6 +166,36 @@ console.log("\n-- picking a stake --");
 $("stake2").click();
 check("2.00 can be selected", $("stake2").getAttribute("aria-checked") === "true");
 
+console.log("\n-- a refusal is never silent --");
+
+// A refused connection used to write its reason into the pregame menu, which
+// is hidden the moment the player presses Start. The result was a blank arena
+// with the explanation sitting behind it, unreachable.
+{
+  const sockA = sockets[sockets.length - 1];
+  $("stake1").click();
+  $("btnStart").click();
+  await settle();
+  const live = sockets[sockets.length - 1];
+  live.handlers.message.forEach(fn => fn({
+    data: JSON.stringify({ type: "round_start", mode: "standard", number: 1, seconds: 120 })
+  }));
+  check("the game is running", $("startVeil").hidden === true);
+
+  live.handlers.message.forEach(fn => fn({
+    data: JSON.stringify({
+      type: "account_error", code: "stale",
+      reason: "This page is out of date. Reload to get the latest version."
+    })
+  }));
+  check("a refusal puts a visible overlay in front of the player",
+    $("errVeil").hidden === false);
+  check("and says what went wrong",
+    /out of date/i.test($("errText").textContent), $("errText").textContent);
+  check("offering the action that fixes it",
+    $("btnErrAction").textContent === "Reload", $("btnErrAction").textContent);
+}
+
 console.log("\n-- lobby and ready --");
 
 const sock = sockets[sockets.length - 1];

@@ -141,7 +141,19 @@ function connect(stake = PRACTICE) {
     socket.on("account", onAccount);
     socket.on("round", onRound);
     socket.on("welcome", w => ui.setTestMode(w.test));
-    socket.on("close", () => ui.setMode("Disconnected"));
+    socket.on("close", () => {
+      ui.setMode("Disconnected");
+      // Mid-round, a closed socket means the game has stopped and nothing on
+      // screen will ever change again. Say so.
+      if (running) {
+        ui.showError({
+          title: "Disconnected",
+          text: "The connection to the server was lost.",
+          action: "Reload"
+        });
+        running = false;
+      }
+    });
     socket.on("error", () => ui.setMode(`Could not reach ${url}`));
     // Must be set on BOTH paths. The page connects as a guest before the
     // stored session has been validated, so this flag starts false; without
@@ -227,7 +239,23 @@ function onRound(msg) {
 // Every figure shown to the player originates here, from the server ledger.
 // Nothing about the balance is computed client-side.
 function onAccount(msg) {
-  if (msg.type === "account_error") { ui.setRampNote(msg.reason); return; }
+  if (msg.type === "account_error") {
+    // Always note it in the menu, but if the player has already started the
+    // menu is hidden — so put it in front of them instead of leaving a blank
+    // arena with an explanation nobody can see.
+    ui.setRampNote(msg.reason);
+    if (running || msg.code === "stale") {
+      const stale = msg.code === "stale";
+      ui.showError({
+        title: stale ? "Out of date" : "Could not join",
+        text: msg.reason,
+        action: stale ? "Reload" : "Back to menu",
+        onAction: stale ? () => location.reload() : () => { ui.hideError(); ui.showStart(); }
+      });
+      running = false;
+    }
+    return;
+  }
   if (msg.type === "ramp_result") { ui.setRampNote(msg.reason || "Ramp unavailable."); return; }
   ui.setAccount({
     balance: msg.balance ?? 0,

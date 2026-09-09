@@ -76,6 +76,34 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
 
   function hideSpectator() { el.specBar.hidden = true; }
 
+  // A refusal or a dropped connection has to be visible wherever the player
+  // is. Previously the reason went to a note inside the pregame menu, which is
+  // hidden during a round, so the player just saw an empty arena.
+  function showError({ title, text, action, onAction }) {
+    $("errTitle").textContent = title;
+    $("errText").textContent = text;
+    const btn = $("btnErrAction");
+    btn.textContent = action || "Reload";
+    btn.onclick = onAction || (() => location.reload());
+    $("errVeil").hidden = false;
+    // It sits above everything, so nothing else should be competing with it.
+    el.startVeil.hidden = true;
+    el.lobbyVeil.hidden = true;
+    el.roundVeil.hidden = true;
+    el.overVeil.hidden = true;
+  }
+  function hideError() { $("errVeil").hidden = true; }
+
+  // Back to the pregame menu after a refusal that the player can act on —
+  // a full room, or not enough balance to cover the stake they picked.
+  function showStart() {
+    $("errVeil").hidden = true;
+    el.lobbyVeil.hidden = true;
+    el.roundVeil.hidden = true;
+    el.overVeil.hidden = true;
+    el.startVeil.hidden = false;
+  }
+
   // Writing textContent invalidates style and layout for that element even
   // when the string is identical. The HUD is updated every frame, so most of
   // those writes were pure waste — and on the clock it was actively harmful:
@@ -595,7 +623,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   return {
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
-    setAuthAvailable, showGoogle, setAuthError,
+    setAuthAvailable, showGoogle, setAuthError, showError, hideError, showStart,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },

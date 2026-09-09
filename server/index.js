@@ -722,7 +722,7 @@ wss.on("connection", (ws, req) => {
       if (msg.protocol !== PROTOCOL_VERSION) {
         meta.joining = false;
         ws.send(JSON.stringify({
-          type: "account_error",
+          type: "account_error", code: "stale",
           reason: "This page is out of date. Reload to get the latest version."
         }));
         ws.close(1008, "Protocol mismatch");
@@ -747,7 +747,7 @@ wss.on("connection", (ws, req) => {
       if (!authed) {
         meta.joining = false;
         ws.send(JSON.stringify({
-          type: "account_error",
+          type: "account_error", code: "auth",
           reason: "Sign in to play against other people. Guests play against bots."
         }));
         ws.close(1008, "Sign in required");
@@ -758,6 +758,7 @@ wss.on("connection", (ws, req) => {
         meta.joining = false;
         ws.send(JSON.stringify({
           type: "account_error",
+          code: "full",
           reason: `${room.mode.label} is full (${room.lobbyMax} players). Try the other mode.`
         }));
         ws.close(1013, "Room full");
@@ -776,7 +777,8 @@ wss.on("connection", (ws, req) => {
         // balance would go negative; the memory backend throws its own type.
         if (err instanceof InsufficientFunds || err.code === "23514") {
           ws.send(JSON.stringify({
-            type: "account_error", reason: "Not enough balance for that stake."
+            type: "account_error", code: "funds",
+            reason: "Not enough balance for that stake."
           }));
           ws.close(1008, "Insufficient funds");
           return;
