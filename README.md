@@ -582,13 +582,17 @@ A round ends, standings go up, and the next one begins. Three things used to bre
 
 A WebSocket drops for reasons that have nothing to do with the game: a Wi-Fi handover, a phone changing cell, a laptop waking, a proxy timing out an idle-looking socket. There was no recovery from any of it — one blip ended the session with "the connection to the server was lost".
 
-**The client now reconnects on its own.** The first retry is immediate — a socket dropped by a Wi-Fi handover or a proxy usually reopens at once, and waiting is time taken from a game the player is still trying to play. Backoff only widens once the server looks genuinely unreachable: 0, 150, 400, 800, 1500, 2500, 4000, 5000ms, giving up after 14 seconds rather than the 64 an exponential curve took.
+**The client now reconnects on its own.** The first retry is immediate — a socket dropped by a Wi-Fi handover or a proxy usually reopens at once, and waiting is time taken from a game the player is still trying to play. Backoff only widens once the server looks genuinely unreachable: 0, 100, 250, 500, 1000, 2000, 3000, 4000ms — four attempts inside the first second, giving up after 11 seconds rather than the 64 an exponential curve took.
+
+It also does not wait out a timer when the answer is already known: the browser's `online` and `focus` events, and a tab becoming visible, all trigger an immediate retry. A laptop waking or Wi-Fi returning reconnects at once rather than sitting through whatever backoff was pending.
 
 The banner waits 600ms before appearing, so a recovery that takes 150ms is never seen at all. State held from the dead socket is discarded first, because it describes a world nobody is describing any more; the server sends a keyframe on join, so there is nothing worth keeping. The last frame stays on screen while it works, and the full-screen error only appears once recovery has given up.
 
 **A close the client asked for is not a disconnection.** Swapping sockets to change stake, or signing out, used to emit a close event that the UI reported as "the connection to the server was lost" — a failure card for something that was working exactly as intended. Deliberate closes are now silent.
 
 Retrying is only safe because of the escrow fix above: the server evicts an account's older connection and returns its escrow before locking the new stake, so re-joining cannot charge twice. Without that, an automatic reconnect would have been a way to lose money.
+
+**"Sign in to play" was hiding database failures.** The session lookup was wrapped in `.catch(() => null)`, so a Supabase hiccup, a reset connection or a timeout all produced the same answer as a genuinely missing session — telling a signed-in player to sign in. Since that refusal is final, the client did not even retry. The two cases are now distinct: a missing session closes 1008 and is final; a failed lookup closes 1011, says "the server could not check your session", and is retried without putting a card in front of the player.
 
 **A refusal is not retried.** The client used to retry any close except a takeover, so a deliberate rejection — wrong stake, stale client, room full, connection cap — was repeated through the entire backoff before the player was told anything. Refreshing the page hit exactly this: the old socket was still registered server-side, the cap rejected the new one, and the reload crawled through eight attempts. Codes 1000, 1002, 1008, 1013 and 4001 are now final; only 1006, 1001 and 1011 are worth another go.
 

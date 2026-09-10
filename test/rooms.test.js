@@ -195,6 +195,38 @@ console.log("\n-- the pot always equals the stake you chose --");
     `${held} added by this account`);
 }
 
+console.log("\n-- a database blip is not a sign-in problem --");
+
+// resolveSession failures used to be swallowed into "sign in to play", which
+// told a signed-in player their session was missing whenever the database
+// hiccuped — and that refusal is final, so the client did not even retry.
+{
+  // The server does not export its Accounts instance, so the behaviour is
+  // induced on the prototype it was built from.
+  const { Accounts } = await import("../server/accounts.js");
+  const realResolve = Accounts.prototype.resolveSession;
+  Accounts.prototype.resolveSession = async () => { throw new Error("connection reset"); };
+
+  const ws = new FakeWS();
+  globalThis.__wss.emit("connection", ws, req);
+  await ws.deliver({
+    type: "join", name: "Blip", stake: 1_000_000,
+    token: "b".repeat(64), protocol: PROTOCOL_VERSION
+  });
+  await settle();
+
+  const said = ws.out.filter(m => m !== "<binary>").map(JSON.parse);
+  const err = said.find(m => m.type === "account_error");
+  check("it is reported as retryable, not as a sign-in failure",
+    err && err.code === "retry", err ? err.code : "nothing sent");
+  check("and the message does not blame the player",
+    err && !/sign in/i.test(err.reason), err ? err.reason : "—");
+  check("the socket closes with a retryable code",
+    ws.closed && ws.closed.code === 1011, JSON.stringify(ws.closed || {}));
+
+  Accounts.prototype.resolveSession = realResolve;
+}
+
 console.log("\n-- a stale client is turned away --");
 
 // The client and server share a binary wire format. A browser holding an old

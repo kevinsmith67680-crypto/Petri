@@ -830,7 +830,25 @@ wss.on("connection", (ws, req) => {
 
       // Identity comes from the session token, never from anything else the
       // client says. Guests play locally against bots and never reach here.
-      const authed = await accounts.resolveSession(msg.token).catch(() => null);
+      //
+      // "No such session" and "the lookup failed" are different answers and
+      // must not be collapsed. Swallowing the second into the first told a
+      // signed-in player to sign in whenever the database hiccuped — and
+      // because that refusal is final, the client did not even retry.
+      let authed = null;
+      try {
+        authed = await accounts.resolveSession(msg.token);
+      } catch (err) {
+        console.error("session lookup failed:", err.message);
+        meta.joining = false;
+        ws.send(JSON.stringify({
+          type: "account_error", code: "retry",
+          reason: "The server could not check your session. Retrying."
+        }));
+        // 1011 is a server fault, which the client treats as retryable.
+        ws.close(1011, "Session lookup failed");
+        return;
+      }
       if (!authed) {
         meta.joining = false;
         ws.send(JSON.stringify({

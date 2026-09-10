@@ -271,6 +271,10 @@ function onAccount(msg) {
     // menu is hidden — so put it in front of them instead of leaving a blank
     // arena with an explanation nobody can see.
     ui.setRampNote(msg.reason);
+    // A retryable fault is handled by the socket layer reopening; putting a
+    // card in front of the player would be wrong twice over — it is not their
+    // problem to solve, and it is about to fix itself.
+    if (msg.code === "retry") { ui.showReconnecting(1, 8); return; }
     if (running || msg.code === "stale") {
       const stale = msg.code === "stale";
       ui.showError({

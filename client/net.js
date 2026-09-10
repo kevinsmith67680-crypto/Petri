@@ -69,7 +69,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // the player is still trying to play. Backoff only matters once it is clear
   // the server is genuinely unreachable.
   const FINAL_CLOSE = new Set([1000, 1002, 1008, 1013, 4001]);
-  const BACKOFF = [0, 150, 400, 800, 1500, 2500, 4000, 5000];
+  const BACKOFF = [0, 100, 250, 500, 1000, 2000, 3000, 4000];
   const backoffMs = n => BACKOFF[n] ?? 5000;
 
   const listeners = {
@@ -157,6 +157,28 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // it: every online connection threw here, which left the client silently on
   // its guest connection.
 
+  let retryTimer = null;
+
+  // Waiting out a backoff after the network has demonstrably returned is time
+  // spent for nothing. The browser tells us when the connection comes back and
+  // when the tab is looked at again — both are far better signals than a timer.
+  function retryNow() {
+    if (closedByUs || retryTimer === null) return;
+    clearTimeout(retryTimer);
+    retryTimer = null;
+    open();
+  }
+
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("online", retryNow);
+    window.addEventListener("focus", retryNow);
+    if (typeof document !== "undefined" && document.addEventListener) {
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) retryNow();
+      });
+    }
+  }
+
   function open() {
     socket = new WebSocket(url);
     socket.binaryType = "arraybuffer";
@@ -202,7 +224,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       const wait = backoffMs(attempt);
       attempt++;
       emit("reconnecting", { attempt, of: MAX_ATTEMPTS, wait });
-      setTimeout(() => { if (!closedByUs) open(); }, wait);
+      retryTimer = setTimeout(() => { retryTimer = null; if (!closedByUs) open(); }, wait);
     });
 
     socket.addEventListener("error", e => emit("error", e));
@@ -665,6 +687,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     close() {
       closedByUs = true;
       clearInterval(pingTimer);
+      if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
       try { socket?.close(); } catch { /* already gone */ }
     }
   };
