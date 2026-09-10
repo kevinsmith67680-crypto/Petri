@@ -166,12 +166,13 @@ function connect(stake = PRACTICE) {
         running = false;
         return;
       }
-      // Mid-round, a closed socket means the game has stopped and nothing on
-      // screen will ever change again. Say so.
+      // Only reached once reconnection has exhausted its attempts — the
+      // socket layer retries silently and does not report a close we asked
+      // for. So by here the server really is unreachable.
       if (running) {
         ui.showError({
           title: "Disconnected",
-          text: "The connection to the server was lost.",
+          text: "Could not reach the server after several attempts.",
           action: "Reload"
         });
         running = false;

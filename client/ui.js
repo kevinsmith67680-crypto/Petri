@@ -94,13 +94,25 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   }
   function hideError() { $("errVeil").hidden = true; }
 
+  // Most drops recover in well under half a second. Showing a banner for that
+  // is noise, so it waits before appearing — a recovery the player never sees
+  // is the best kind.
+  let reconnectTimer = null;
   function showReconnecting(attempt, of) {
     setText($("reconnectBar"), attempt > 1
       ? `Reconnecting… (${attempt} of ${of})`
       : "Reconnecting…");
-    $("reconnectBar").hidden = false;
+    if ($("reconnectBar").hidden && reconnectTimer === null) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        $("reconnectBar").hidden = false;
+      }, 600);
+    }
   }
-  function hideReconnecting() { $("reconnectBar").hidden = true; }
+  function hideReconnecting() {
+    if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    $("reconnectBar").hidden = true;
+  }
 
   // Back to the pregame menu after a refusal that the player can act on —
   // a full room, or not enough balance to cover the stake they picked.

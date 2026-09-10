@@ -582,7 +582,11 @@ A round ends, standings go up, and the next one begins. Three things used to bre
 
 A WebSocket drops for reasons that have nothing to do with the game: a Wi-Fi handover, a phone changing cell, a laptop waking, a proxy timing out an idle-looking socket. There was no recovery from any of it — one blip ended the session with "the connection to the server was lost".
 
-**The client now reconnects on its own**, with exponential backoff from 250ms to 5s over eight attempts. State held from the dead socket is discarded first, because it describes a world nobody is describing any more; the server sends a keyframe on join, so there is nothing worth keeping. A banner reads "Reconnecting…" while it works and the last frame stays on screen. The full-screen error only appears once recovery has given up.
+**The client now reconnects on its own.** The first retry is immediate — a socket dropped by a Wi-Fi handover or a proxy usually reopens at once, and waiting is time taken from a game the player is still trying to play. Backoff only widens once the server looks genuinely unreachable: 0, 150, 400, 800, 1500, 2500, 4000, 5000ms, giving up after 14 seconds rather than the 64 an exponential curve took.
+
+The banner waits 600ms before appearing, so a recovery that takes 150ms is never seen at all. State held from the dead socket is discarded first, because it describes a world nobody is describing any more; the server sends a keyframe on join, so there is nothing worth keeping. The last frame stays on screen while it works, and the full-screen error only appears once recovery has given up.
+
+**A close the client asked for is not a disconnection.** Swapping sockets to change stake, or signing out, used to emit a close event that the UI reported as "the connection to the server was lost" — a failure card for something that was working exactly as intended. Deliberate closes are now silent.
 
 Retrying is only safe because of the escrow fix above: the server evicts an account's older connection and returns its escrow before locking the new stake, so re-joining cannot charge twice. Without that, an automatic reconnect would have been a way to lose money.
 

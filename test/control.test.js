@@ -359,10 +359,33 @@ console.log("\n-- a dropped connection recovers --");
   check("the welcome clears the reconnecting state", recovered === 1, `${recovered}`);
   check("and the view is live again", !!conn.getView());
 
+  // Closing on purpose — swapping sockets to change stake, or signing out —
+  // must not be reported as a disconnection. This fired the "connection lost"
+  // card every time the client reconnected deliberately.
+  const before = ended;
+  conn.close();
+  await new Promise(r => setTimeout(r, 50));
+  check("a deliberate close is not reported as a disconnection",
+    ended === before, `${ended - before} close events`);
+  check("and it does not try to reconnect", sockets.length === 2, `${sockets.length} sockets`);
+}
+
+{
   // A takeover must NOT be retried — it would fight the other tab.
-  sockets[1].fire("close", { code: 4001 });
+  sockets.length = 0;
+  const w2 = createWorld(12, MODES[0].world);
+  const p2 = addPlayer(w2, { id: "me", name: "Me" });
+  const conn2 = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  let ended2 = 0, retried = 0;
+  conn2.on("close", () => ended2++);
+  conn2.on("reconnecting", () => retried++);
+  sockets[0].fire("open");
+  sockets[0].fire("message", { data: JSON.stringify({ type: "welcome", nid: p2.nid, tickHz: TICK_HZ }) });
+  sockets[0].fire("close", { code: 4001 });
+  await new Promise(r => setTimeout(r, 100));
   check("a takeover ends the session instead of retrying",
-    ended === 1 && reconnecting === 1, `close ${ended}, reconnecting ${reconnecting}`);
+    ended2 === 1 && retried === 0, `close ${ended2}, reconnecting ${retried}`);
+  conn2.close();
 }
 
 console.log("\n-- diagnostics --");

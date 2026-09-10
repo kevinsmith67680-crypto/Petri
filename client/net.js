@@ -64,7 +64,12 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // lost". Reconnecting is safe now that the server evicts an account's older
   // connection and reuses its escrow, so re-joining cannot stake twice.
   const MAX_ATTEMPTS = 8;
-  const backoffMs = n => Math.min(5000, 250 * 2 ** n);
+  // The first retry is immediate: a socket dropped by a Wi-Fi handover or a
+  // proxy usually reopens at once, and 250ms of waiting is 250ms of a game
+  // the player is still trying to play. Backoff only matters once it is clear
+  // the server is genuinely unreachable.
+  const BACKOFF = [0, 150, 400, 800, 1500, 2500, 4000, 5000];
+  const backoffMs = n => BACKOFF[n] ?? 5000;
 
   const listeners = {
     event: [], welcome: [], close: [], error: [], account: [], round: [],
@@ -150,7 +155,11 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     socket.addEventListener("message", onMessage);
 
     socket.addEventListener("close", ev => {
-      if (closedByUs) { emit("close", ev); return; }
+      // A close we asked for is not a disconnection. The caller already knows
+      // — it is the one that called close() — and telling it again made the
+      // "connection lost" card appear every time the client swapped sockets
+      // to change stake or sign in.
+      if (closedByUs) return;
 
       // 4001 is the server handing this account to a newer connection — most
       // likely another tab. Reconnecting would fight it, so stop and say so.
