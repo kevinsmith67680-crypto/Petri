@@ -388,7 +388,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     const slowTick = stats.budgetMs > 0 && stats.srvMs > stats.budgetMs * 0.6;
     const html =
       `<div><span class="${slowFps ? "warn" : ""}">${stats.fps || "—"} fps</span></div>` +
-      `<div><span class="${slowPing ? "warn" : ""}">${stats.ping >= 0 ? stats.ping + " ms ping" : "— ping"}</span></div>` +
+      `<div><span class="${slowPing ? "warn" : ""}">${stats.ping >= 0 ? stats.ping + " ms ping" : "— ping"}` +
+        `${stats.pingSpread > 30 ? ` <span class="warn">±${stats.pingSpread}</span>` : ""}</span></div>` +
       `<div><span class="${slowTick ? "warn" : ""}">${stats.srvMs >= 0 ? stats.srvMs.toFixed(1) : "—"} / ${stats.budgetMs || "—"} ms tick</span></div>` +
       `<div>${stats.interpMs != null ? stats.interpMs + " ms buffer" : ""}</div>` +
       `<div><span class="${stats.hz && stats.snapsPerSec > 0 && stats.snapsPerSec < stats.hz * 0.85 ? "warn" : ""}">` +

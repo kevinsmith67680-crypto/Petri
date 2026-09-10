@@ -394,7 +394,7 @@ The performance overlay is **on by default in test mode** (bottom right). Every 
 | Reading | Healthy | If it's not |
 |---|---|---|
 | `fps` | 55–60 | **Your browser is the limit.** Turn off High resolution in settings (it is off by default — check it did not get switched on), close other tabs, try Chrome. |
-| `ping` | under 80 ms | **Distance to the server.** Render picks a region at creation and cannot change it. If you are in Europe and the service is in Oregon this is 150ms+ and nothing in the code fixes it. |
+| `ping` | under 80 ms | **Distance to the server.** Shown as the floor of the last twelve samples, with a ±spread beside it when samples vary by more than 30ms. Round trips are timed on the browser's main thread and a busy frame only ever *adds* to a sample, so the minimum is the closest available estimate of real network latency — reporting the latest sample instead is why the figure swung between 30 and 200 on a connection that had not changed. A large spread means local jitter, not distance. Render picks a region at creation and cannot change it. If you are in Europe and the service is in Oregon this is 150ms+ and nothing in the code fixes it. |
 | `snapshots/s` | equal to the Hz figure | **The server is starved.** It cannot hold its tick. On the free 0.1-CPU tier with 100 bots this was 40ms of a 50ms budget before the optimisations below; it is now ~11ms. If it still reads low, set `BOTS=50` or move off the free tier. |
 | `ms tick` | well under budget | Same cause as above, seen from the server's side. |
 
@@ -589,6 +589,10 @@ The banner waits 600ms before appearing, so a recovery that takes 150ms is never
 **A close the client asked for is not a disconnection.** Swapping sockets to change stake, or signing out, used to emit a close event that the UI reported as "the connection to the server was lost" — a failure card for something that was working exactly as intended. Deliberate closes are now silent.
 
 Retrying is only safe because of the escrow fix above: the server evicts an account's older connection and returns its escrow before locking the new stake, so re-joining cannot charge twice. Without that, an automatic reconnect would have been a way to lose money.
+
+**A refusal is not retried.** The client used to retry any close except a takeover, so a deliberate rejection — wrong stake, stale client, room full, connection cap — was repeated through the entire backoff before the player was told anything. Refreshing the page hit exactly this: the old socket was still registered server-side, the cap rejected the new one, and the reload crawled through eight attempts. Codes 1000, 1002, 1008, 1013 and 4001 are now final; only 1006, 1001 and 1011 are worth another go.
+
+`MAX_CONN_PER_IP` also rose from 3 to 8. Three was too tight for ordinary use: a refresh transiently doubles your count, and households and offices share one address behind NAT.
 
 **A takeover is not retried.** Close code 4001 means the server handed this account to a newer connection — almost always a second tab. Retrying would just fight it, so the session ends with "This account opened the game in another tab", and a button to take it back.
 

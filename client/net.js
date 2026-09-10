@@ -68,6 +68,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // proxy usually reopens at once, and 250ms of waiting is 250ms of a game
   // the player is still trying to play. Backoff only matters once it is clear
   // the server is genuinely unreachable.
+  const FINAL_CLOSE = new Set([1000, 1002, 1008, 1013, 4001]);
   const BACKOFF = [0, 150, 400, 800, 1500, 2500, 4000, 5000];
   const backoffMs = n => BACKOFF[n] ?? 5000;
 
@@ -92,6 +93,20 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // coat — a slow client, a slow server, or a slow network — and they need
   // different fixes, so each is measured separately.
   const diag = { ping: 0, jitter: 0, fps: 0, buffered: 0, srvMs: -1, snaps: 0, snapsPerSec: -1, snapWindow: 0 };
+
+  // Round trips are measured on the browser's main thread, so a busy frame
+  // adds to the sample. Scheduling delay only ever ADDS, never subtracts, so
+  // the smallest recent sample is the closest thing to the real network
+  // latency — reporting the last one instead is why the figure swung between
+  // 30 and 200 on a connection that had not changed.
+  const rtts = [];
+  const RTT_WINDOW = 12;
+  const recordRtt = ms => {
+    rtts.push(ms);
+    if (rtts.length > RTT_WINDOW) rtts.shift();
+  };
+  const floorRtt = () => (rtts.length ? Math.min(...rtts) : -1);
+  const spreadRtt = () => (rtts.length > 1 ? Math.max(...rtts) - Math.min(...rtts) : 0);
   let lastPingAt = 0;
   let lastArrival = 0;
 
@@ -128,7 +143,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "ping", t: performance.now() }));
     }
-  }, 2000);
+  }, 1000);
 
   // How far behind the server to render, in seconds. One tick of buffer plus
   // however much the arrivals are actually spreading.
@@ -161,9 +176,13 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       // to change stake or sign in.
       if (closedByUs) return;
 
-      // 4001 is the server handing this account to a newer connection — most
-      // likely another tab. Reconnecting would fight it, so stop and say so.
-      if (ev && ev.code === 4001) {
+      // A refusal is final: the server has already decided and told us why,
+      // so retrying just repeats the same rejection eight times. Only
+      // abnormal closes — 1006 dropped, 1001 going away, 1011 server fault —
+      // are worth another go.
+      //   1000 normal      1002 protocol fault    1008 policy (auth, stake,
+      //   1013 room full   4001 taken over         stale client)
+      if (ev && FINAL_CLOSE.has(ev.code)) {
         emit("close", ev);
         return;
       }
@@ -196,8 +215,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.type === "pong") {
         const rtt = performance.now() - msg.t;
-        // Smoothed: a single sample bounces enough to be unreadable.
-        diag.ping = diag.ping ? diag.ping * 0.7 + rtt * 0.3 : rtt;
+        recordRtt(rtt);
         if (typeof msg.srvMs === "number") diag.srvMs = msg.srvMs;
         if (msg.hz) serverHz = msg.hz;
         return;
@@ -551,7 +569,8 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     // which would have thrown the moment the performance overlay was opened.
     stats() {
       return {
-        ping: diag.ping ? Math.round(diag.ping) : -1,
+        ping: floorRtt() >= 0 ? Math.round(floorRtt()) : -1,
+        pingSpread: Math.round(spreadRtt()),
         srvMs: diag.srvMs,
         hz: serverHz,
         budgetMs: serverHz ? +(1000 / serverHz).toFixed(1) : 0,

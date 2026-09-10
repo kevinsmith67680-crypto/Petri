@@ -117,7 +117,12 @@ const ROUND_SECONDS_OVERRIDE = process.env.ROUND_SECONDS !== undefined
 // goes. Everyone else loses what they staked.
 const PAID_OVERRIDE = process.env.PAID_POSITIONS !== undefined
   ? Number(process.env.PAID_POSITIONS) : null;
-const MAX_CONN_PER_IP = Number(process.env.MAX_CONN_PER_IP) || 3;
+// Connections per IP. Three was too tight for ordinary use: a page refresh
+// leaves the old socket registered until the server notices it has gone, so
+// the reload was rejected at the handshake and the client retried its way
+// through the whole backoff before getting in. Households and offices also
+// share one address behind NAT.
+const MAX_CONN_PER_IP = Number(process.env.MAX_CONN_PER_IP) || 8;
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
@@ -452,6 +457,7 @@ const wss = new WebSocketServer({
     if (!originAllowed(info.req)) return done(false, 403, "Forbidden origin");
     const ip = ipOf(info.req);
     if ((connectionsByIp.get(ip) || 0) >= MAX_CONN_PER_IP) {
+      console.warn(`refused ${ip}: ${connectionsByIp.get(ip)} connections already`);
       return done(false, 429, "Too many connections");
     }
     done(true);

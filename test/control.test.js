@@ -388,6 +388,38 @@ console.log("\n-- a dropped connection recovers --");
   conn2.close();
 }
 
+console.log("\n-- a refusal is not retried --");
+
+// The client retried any close except a takeover, so a deliberate refusal —
+// wrong stake, stale client, room full — was repeated through the whole
+// backoff before the player was told. Refreshing the page hit this: the old
+// socket was still registered, the connection cap rejected the new one, and
+// the reload crawled through eight attempts.
+for (const [code, label] of [[1008, "policy"], [1013, "room full"], [1002, "protocol fault"], [1000, "normal"]]) {
+  sockets.length = 0;
+  const c = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  let retried = 0, done = 0;
+  c.on("reconnecting", () => retried++);
+  c.on("close", () => done++);
+  sockets[0].fire("open");
+  sockets[0].fire("close", { code });
+  await new Promise(r => setTimeout(r, 60));
+  check(`close ${code} (${label}) is final`, retried === 0 && done === 1,
+    `retried ${retried}, closed ${done}`);
+  c.close();
+}
+
+// But a dropped link still recovers.
+sockets.length = 0;
+const drop = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+let dropRetries = 0;
+drop.on("reconnecting", () => dropRetries++);
+sockets[0].fire("open");
+sockets[0].fire("close", { code: 1006 });
+await new Promise(r => setTimeout(r, 60));
+check("close 1006 (dropped) still retries", dropRetries === 1, `${dropRetries}`);
+drop.close();
+
 console.log("\n-- diagnostics --");
 
 const stats = h.conn.stats();
