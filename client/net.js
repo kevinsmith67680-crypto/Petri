@@ -53,10 +53,23 @@ const CORRECT_PER_SEC = 6;
 const SNAP_ERROR = 220;
 
 export function createSocketConnection({ url, name = "You", stake = 0, token = null } = {}) {
-  const socket = new WebSocket(url);
-  socket.binaryType = "arraybuffer";
+  // The socket is replaced on reconnect, so everything below closes over this
+  // variable rather than a fixed instance.
+  let socket = null;
+  let closedByUs = false;
+  let attempt = 0;
 
-  const listeners = { event: [], welcome: [], close: [], error: [], account: [], round: [] };
+  // A dropped connection used to end the session outright: one blip on the
+  // train, one Wi-Fi handover, and the game was over with "the connection was
+  // lost". Reconnecting is safe now that the server evicts an account's older
+  // connection and reuses its escrow, so re-joining cannot stake twice.
+  const MAX_ATTEMPTS = 8;
+  const backoffMs = n => Math.min(5000, 250 * 2 ** n);
+
+  const listeners = {
+    event: [], welcome: [], close: [], error: [], account: [], round: [],
+    reconnecting: [], reconnected: []
+  };
   const emit = (kind, payload) => listeners[kind].forEach(fn => fn(payload));
 
   const frames = [];              // recent snapshots for interpolation
@@ -107,7 +120,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // latency: the send waited for a frame and the pong was handled on the next
   // one, so up to two frames of local scheduling were counted as ping.
   const pingTimer = setInterval(() => {
-    if (socket.readyState === WebSocket.OPEN) {
+    if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "ping", t: performance.now() }));
     }
   }, 2000);
@@ -124,13 +137,50 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
   // it: every online connection threw here, which left the client silently on
   // its guest connection.
 
-  socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({
-      type: MSG.JOIN, name, stake, token, protocol: PROTOCOL_VERSION
-    }));
-  });
+  function open() {
+    socket = new WebSocket(url);
+    socket.binaryType = "arraybuffer";
 
-  socket.addEventListener("message", ev => {
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({
+        type: MSG.JOIN, name, stake, token, protocol: PROTOCOL_VERSION
+      }));
+    });
+
+    socket.addEventListener("message", onMessage);
+
+    socket.addEventListener("close", ev => {
+      if (closedByUs) { emit("close", ev); return; }
+
+      // 4001 is the server handing this account to a newer connection — most
+      // likely another tab. Reconnecting would fight it, so stop and say so.
+      if (ev && ev.code === 4001) {
+        emit("close", ev);
+        return;
+      }
+
+      if (attempt >= MAX_ATTEMPTS) { emit("close", ev); return; }
+
+      // Anything held from the old socket describes a world we are no longer
+      // being told about. The server sends a keyframe on join, so drop it.
+      frames.length = 0;
+      pellets.clear();
+      names.clear();
+      predicted.clear();
+      ghostCells.length = 0;
+      ghostBlobs.length = 0;
+      clockOffset = null;
+
+      const wait = backoffMs(attempt);
+      attempt++;
+      emit("reconnecting", { attempt, of: MAX_ATTEMPTS, wait });
+      setTimeout(() => { if (!closedByUs) open(); }, wait);
+    });
+
+    socket.addEventListener("error", e => emit("error", e));
+  }
+
+  function onMessage(ev) {
     // Text frames are control messages; binary frames are gameplay.
     if (typeof ev.data === "string") {
       let msg;
@@ -146,6 +196,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
       if (msg.type === MSG.WELCOME) {
         myNid = msg.nid;
         if (msg.tickHz) serverHz = msg.tickHz;
+        if (attempt > 0) { attempt = 0; emit("reconnected"); }
         emit("welcome", msg);
         emit("account", msg);
       } else if (msg.type === "account" || msg.type === "account_error" ||
@@ -167,10 +218,9 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     } catch (err) {
       if (++decodeErrors <= 3) console.warn("dropped snapshot:", err.message);
     }
-  });
+  }
 
-  socket.addEventListener("close", () => emit("close"));
-  socket.addEventListener("error", e => emit("error", e));
+  open();
 
   function applySnapshot(snap) {
     const localNow = performance.now() / 1000;
@@ -449,7 +499,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
   return {
     mode: "online",
-    get ready() { return socket.readyState === WebSocket.OPEN && frames.length > 0; },
+    get ready() { return socket?.readyState === WebSocket.OPEN && frames.length > 0; },
     get id() { return myNid; },
 
     on(kind, fn) { listeners[kind]?.push(fn); },
@@ -457,7 +507,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     sendAim(dx, dy) { pendingAim.x = dx; pendingAim.y = dy; },
 
     sendAction(action) {
-      if (socket.readyState !== WebSocket.OPEN) return;
+      if (socket?.readyState !== WebSocket.OPEN) return;
       const frame = encodeAction(action);
       if (!frame) return;
       socket.send(frame);
@@ -468,7 +518,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
     update(dt) {
       const now = performance.now();
-      if (now - lastAimSent >= 1000 / AIM_HZ && socket.readyState === WebSocket.OPEN) {
+      if (now - lastAimSent >= 1000 / AIM_HZ && socket?.readyState === WebSocket.OPEN) {
         lastAimSent = now;
         socket.send(encodeAim(Math.round(pendingAim.x), Math.round(pendingAim.y)));
       }
@@ -561,29 +611,33 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     // Money actions travel as text frames: they are rare, and keeping them off
     // the 20Hz binary path means the hot loop stays 5 bytes per message.
     sendSpectate(dir) {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "spectate", dir }));
       }
     },
 
     sendReady(ready) {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "ready", ready }));
       }
     },
 
     sendRename() {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "rename" }));
       }
     },
 
     sendRamp(action) {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "ramp", action }));
       }
     },
 
-    close() { clearInterval(pingTimer); socket.close(); }
+    close() {
+      closedByUs = true;
+      clearInterval(pingTimer);
+      try { socket?.close(); } catch { /* already gone */ }
+    }
   };
 }

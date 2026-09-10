@@ -94,6 +94,14 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   }
   function hideError() { $("errVeil").hidden = true; }
 
+  function showReconnecting(attempt, of) {
+    setText($("reconnectBar"), attempt > 1
+      ? `Reconnecting… (${attempt} of ${of})`
+      : "Reconnecting…");
+    $("reconnectBar").hidden = false;
+  }
+  function hideReconnecting() { $("reconnectBar").hidden = true; }
+
   // Back to the pregame menu after a refusal that the player can act on —
   // a full room, or not enough balance to cover the stake they picked.
   function showStart() {
@@ -645,7 +653,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     setAuthAvailable, showGoogle, setAuthError, showError, hideError, showStart,
-    renderIntermission, setNextReady,
+    renderIntermission, setNextReady, showReconnecting, hideReconnecting,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },

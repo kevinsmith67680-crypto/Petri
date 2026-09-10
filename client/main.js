@@ -141,8 +141,31 @@ function connect(stake = PRACTICE) {
     socket.on("account", onAccount);
     socket.on("round", onRound);
     socket.on("welcome", w => ui.setTestMode(w.test));
-    socket.on("close", () => {
+    socket.on("reconnecting", ({ attempt, of }) => {
+      // The game keeps its last frame on screen while this runs; it is a
+      // pause, not an ending.
+      ui.showReconnecting(attempt, of);
+      ui.setMode(`Reconnecting… (${attempt} of ${of})`);
+    });
+    socket.on("reconnected", () => {
+      ui.hideReconnecting();
+      ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
+    });
+    socket.on("close", ev => {
+      ui.hideReconnecting();
       ui.setMode("Disconnected");
+      // Another connection took this account over — almost always a second
+      // tab. Retrying would only fight it.
+      if (ev && ev.code === 4001) {
+        ui.showError({
+          title: "Playing elsewhere",
+          text: "This account opened the game in another tab or window.",
+          action: "Play here instead",
+          onAction: () => location.reload()
+        });
+        running = false;
+        return;
+      }
       // Mid-round, a closed socket means the game has stopped and nothing on
       // screen will ever change again. Say so.
       if (running) {

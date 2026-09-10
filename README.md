@@ -578,6 +578,16 @@ A round ends, standings go up, and the next one begins. Three things used to bre
 
 `startRound` became async because re-escrowing talks to the database, so `maybeStartRound` guards against starting twice while that is in flight.
 
+## Losing the connection
+
+A WebSocket drops for reasons that have nothing to do with the game: a Wi-Fi handover, a phone changing cell, a laptop waking, a proxy timing out an idle-looking socket. There was no recovery from any of it — one blip ended the session with "the connection to the server was lost".
+
+**The client now reconnects on its own**, with exponential backoff from 250ms to 5s over eight attempts. State held from the dead socket is discarded first, because it describes a world nobody is describing any more; the server sends a keyframe on join, so there is nothing worth keeping. A banner reads "Reconnecting…" while it works and the last frame stays on screen. The full-screen error only appears once recovery has given up.
+
+Retrying is only safe because of the escrow fix above: the server evicts an account's older connection and returns its escrow before locking the new stake, so re-joining cannot charge twice. Without that, an automatic reconnect would have been a way to lose money.
+
+**A takeover is not retried.** Close code 4001 means the server handed this account to a newer connection — almost always a second tab. Retrying would just fight it, so the session ends with "This account opened the game in another tab", and a button to take it back.
+
 ## Stale clients
 
 The client and server share a binary wire format, so they must be the same build. A browser holding yesterday's `protocol.js` while the server runs today's decodes every snapshot out of alignment — cells at garbage positions, orbs that never appear. It looks like a rendering bug and is not.

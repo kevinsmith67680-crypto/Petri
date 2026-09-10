@@ -117,6 +117,14 @@
   .diag b.warn{ color:#c4453b; }
   html[data-theme="dark"] .diag b.warn{ color:#f08a80; }
 
+  .reconnect{
+    position:fixed; top:0; left:0; right:0; z-index:25;
+    padding:7px 12px; text-align:center;
+    font-size:12.5px; font-weight:600; letter-spacing:.02em;
+    background:var(--accent); color:#fff;
+  }
+  .reconnect[hidden]{ display:none; }
+
   .perf{
     position:fixed; right:20px; bottom:20px; z-index:8;
     font-size:11px; line-height:1.6;
@@ -737,6 +745,10 @@
 <div class="testflag" id="testFlag" hidden>Test mode &mdash; demo credits, bot-filled arena</div>
 
 <div class="diag" id="diagBox" hidden></div>
+
+<!-- A reconnection is a pause, not a failure: a quiet banner rather than the
+     full-screen error, which only appears once recovery has given up. -->
+<div class="reconnect" id="reconnectBar" hidden>Reconnecting…</div>
 
 <div class="perf" id="perfBox" hidden></div>
 

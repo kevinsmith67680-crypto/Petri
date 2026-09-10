@@ -316,6 +316,55 @@ while (st.hx > -0.95 && t < 1) { advanceCell(st, st.x - 600, st.y, 1 / 60, 8800)
 check("but a reversal completes in about a third of a second",
   t > 0.15 && t < 0.5, `${(t * 1000).toFixed(0)} ms`);
 
+console.log("\n-- a dropped connection recovers --");
+
+// There was no reconnection logic at all: one blip and the session was over
+// with "the connection to the server was lost". Retrying is safe because the
+// server evicts an account's older connection and reuses its escrow, so
+// re-joining cannot stake twice.
+{
+  sockets.length = 0;
+  const w = createWorld(11, MODES[0].world);
+  const p = addPlayer(w, { id: "me", name: "Me" });
+  const cs = createClientState(0);
+  const conn = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+
+  let reconnecting = 0, recovered = 0, ended = 0;
+  conn.on("reconnecting", () => reconnecting++);
+  conn.on("reconnected", () => recovered++);
+  conn.on("close", () => ended++);
+
+  const bring = sock => {
+    sock.fire("open");
+    sock.fire("message", { data: JSON.stringify({ type: "welcome", nid: p.nid, tickHz: TICK_HZ }) });
+    stepWorld(w, 1 / TICK_HZ);
+    sock.fire("message", { data: encodeSnapshot(w, p, cs, null).slice().buffer });
+  };
+
+  bring(sockets[0]);
+  check("connected and receiving", !!conn.getView());
+
+  // The link drops unexpectedly.
+  sockets[0].fire("close", { code: 1006 });
+  check("it reports reconnecting rather than ending", reconnecting === 1 && ended === 0,
+    `reconnecting ${reconnecting}, close ${ended}`);
+
+  await new Promise(r => setTimeout(r, 400));
+  check("a fresh socket is opened", sockets.length === 2, `${sockets.length} sockets`);
+
+  bring(sockets[1]);
+  check("and it re-joins on connect",
+    sockets[1].sent.some(m => String(m).includes("join")),
+    sockets[1].sent.length ? String(sockets[1].sent[0]).slice(0, 40) : "sent nothing");
+  check("the welcome clears the reconnecting state", recovered === 1, `${recovered}`);
+  check("and the view is live again", !!conn.getView());
+
+  // A takeover must NOT be retried — it would fight the other tab.
+  sockets[1].fire("close", { code: 4001 });
+  check("a takeover ends the session instead of retrying",
+    ended === 1 && reconnecting === 1, `close ${ended}, reconnecting ${reconnecting}`);
+}
+
 console.log("\n-- diagnostics --");
 
 const stats = h.conn.stats();
