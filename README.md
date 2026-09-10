@@ -566,6 +566,18 @@ A server that cannot hold its tick feels identical to bad netcode from the playe
 
 `avgMs` well under `budgetMs` means the server is fine and any remaining lag is network. `avgMs` approaching or exceeding the budget, or `overruns` climbing steadily, means the instance is starved — on Render's free 0.1 CPU that happens quickly with bots in the arena. Lower `BOTS` or move up an instance size.
 
+## Between rounds
+
+A round ends, standings go up, and the next one begins. Three things used to break that.
+
+**The stake was settled and never re-locked.** `meta.stake` is cleared when a round settles, so from round two onward a player was in a paid room with nothing at risk — playing for free. The tier chosen at join is now kept as `meta.tier` for the life of the connection, and re-escrowed at the start of every round. Anyone who cannot cover it is un-readied and told, rather than quietly playing free.
+
+**Readiness was wiped.** Everyone was dropped into a lobby and asked again. It now survives the intermission, and `ready` is accepted while the standings are still on screen — so the standings card carries an "I'm in for the next round" button and a full lobby rolls straight on.
+
+**The countdown was static text.** "Next round starting…" never changed. It now ticks from the snapshot clock: "Next round in 12s".
+
+`startRound` became async because re-escrowing talks to the database, so `maybeStartRound` guards against starting twice while that is in flight.
+
 ## Stale clients
 
 The client and server share a binary wire format, so they must be the same build. A browser holding yesterday's `protocol.js` while the server runs today's decodes every snapshot out of alignment — cells at garbage positions, orbs that never appear. It looks like a rendering bug and is not.

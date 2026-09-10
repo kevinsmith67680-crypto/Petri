@@ -213,6 +213,9 @@ function onRound(msg) {
   if (msg.type === "round_end") {
     running = false;
     wasAlive = false;
+    // Readiness survives the intermission on the server, so the button starts
+    // from wherever the player left it rather than silently resetting.
+    ui.setNextReady(ready);
     ui.showRoundEnd({
       number: msg.number,
       standings: msg.standings,
@@ -337,6 +340,15 @@ document.getElementById("specLeave").addEventListener("click", () => {
     orbs: lastRunOrbs, peak: lastRunPeak, eaten: lastRunEaten,
     elapsed, best, rank: lastRank, of: lastOf
   });
+});
+
+// Opting in from the standings card. Same message as the lobby button, so
+// the server does not care which one was pressed.
+document.getElementById("btnNextReady").addEventListener("click", () => {
+  ready = !ready;
+  ui.setNextReady(ready);
+  ui.setReady(ready);
+  conn?.sendReady?.(ready);
 });
 
 document.getElementById("btnReady").addEventListener("click", () => {

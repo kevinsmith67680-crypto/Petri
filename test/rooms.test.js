@@ -43,6 +43,9 @@ const PORT = 8700 + (process.pid % 200);
 process.env.PORT = String(PORT);
 process.env.TEST_MODE = "1";
 delete process.env.BOTS;
+// Short rounds so a full cycle can be observed without a long wait.
+process.env.ROUND_SECONDS = "3";
+process.env.INTERMISSION_SECONDS = "1";
 
 await import("../server/index.js");
 await new Promise(r => setTimeout(r, 400));
@@ -215,6 +218,54 @@ const msgs = bob.out.slice(before).filter(m => m !== "<binary>");
 check("readying one player starts the round",
   msgs.some(m => m.includes("round_start")), msgs.join(" ").slice(0, 120) || "nothing");
 check("the room reports itself live", (await room("highstakes")).phase === "live");
+
+console.log("\n-- one round rolls into the next --");
+
+// The stake is settled when a round ends. Without re-escrowing at the start of
+// the next one, a player carried on staking nothing — playing a paid room for
+// free. Readiness also used to be wiped, so everyone had to opt in again.
+{
+  const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "runner", password: "password123", displayName: "Runner" })
+  })).json().then(d => d.token);
+  const money = async () => (await (await fetch(`http://localhost:${PORT}/api/me`, {
+    headers: { Authorization: `Bearer ${tok}` }
+  })).json());
+
+  const ws = new FakeWS();
+  globalThis.__wss.emit("connection", ws, req);
+  await ws.deliver({ type: "join", name: "Runner", stake: 1_000_000, token: tok, protocol: PROTOCOL_VERSION });
+  await settle();
+
+  const joined = await money();
+  check("joining escrows the stake", joined.pot === 1_000_000, `${joined.pot}`);
+
+  await ws.deliver({ type: "ready", ready: true });
+  await settle(300);
+  const texts = () => ws.out.filter(m => m !== "<binary>").map(JSON.parse);
+  check("round one starts", texts().some(m => m.type === "round_start"));
+
+  // Round (3s) then intermission (1s), with margin.
+  await settle(5000);
+  const rounds = texts().filter(m => m.type === "round_start").length;
+  check("round two starts without being asked again", rounds >= 2, `${rounds} rounds`);
+
+  // Polling HTTP races the round clock, so assert on what the server pushed:
+  // the re-stake happens during startRound and pushes an account update, so
+  // there must be one carrying a full escrow AFTER the first round ended.
+  const seq = texts();
+  const firstEnd = seq.findIndex(m => m.type === "round_end");
+  const restake = seq.slice(firstEnd).find(m => m.type === "account" && m.pot === 1_000_000);
+  check("round two is staked, not free", !!restake,
+    restake ? `pot ${restake.pot}` : "no re-stake was pushed");
+  check("and the stake reported is the tier chosen", restake && restake.stake === 1_000_000,
+    restake ? `stake ${restake.stake}` : "—");
+
+  const after = await money();
+  check("the balance paid for it", after.balance < joined.balance,
+    `${joined.balance} -> ${after.balance}`);
+}
 
 if (createdStub) {
   fs.rmSync(stubDir, { recursive: true, force: true });

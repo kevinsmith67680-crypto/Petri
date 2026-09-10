@@ -628,7 +628,8 @@ async function endRound(room) {
 function toLobby(room) {
   room.round.phase = PHASE_LOBBY;
   room.round.endsAt = Infinity;
-  for (const meta of room.clients.values()) meta.ready = false;
+  // Readiness is NOT cleared. Anyone who opted in while the standings were up
+  // stays in, so a full lobby rolls straight into the next round.
   for (const p of room.world.players.values()) {
     p.alive = false;
     p.cells = [];
@@ -639,11 +640,47 @@ function toLobby(room) {
 function maybeStartRound(room) {
   if (room.round.phase !== PHASE_LOBBY) return;
   if (readyCount(room) < room.lobbyMin) return;
-  startRound(room);
+  if (room.starting) return;           // re-staking is async; do not race it
+  room.starting = true;
+  startRound(room)
+    .catch(err => console.error("startRound:", err.message))
+    .finally(() => { room.starting = false; });
 }
 
-function startRound(room) {
+async function startRound(room) {
   const { world, round } = room;
+
+  // Re-escrow before anyone is spawned. The previous round's stake was settled
+  // at its end, so without this a player carried on into round two with
+  // nothing at risk — playing a paid room for free.
+  for (const [ws, meta] of room.clients) {
+    if (!meta.ready || !meta.accountId) continue;
+    if (meta.stake > PRACTICE || !meta.tier || meta.tier === PRACTICE) continue;
+    try {
+      await backend.lockStake(meta.accountId, meta.tier);
+      meta.stake = meta.tier;
+    } catch (err) {
+      // Out of funds: sit this one out rather than playing for free.
+      meta.ready = false;
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({
+          type: "account_error", code: "funds",
+          reason: "Not enough balance for another round at that stake."
+        }));
+      }
+      if (!(err instanceof InsufficientFunds) && err.code !== "23514") {
+        console.error("re-stake:", err.message);
+      }
+    }
+    await pushAccount(ws, meta);
+  }
+
+  // Everyone who could not pay has been un-readied, so check again.
+  if (readyCount(room) < room.lobbyMin && round.phase !== PHASE_INTERMISSION) {
+    pushLobby(room);
+    return;
+  }
+
   round.number++;
   round.phase = PHASE_LIVE;
   round.endsAt = world.time + room.roundSeconds;
@@ -729,7 +766,11 @@ wss.on("connection", (ws, req) => {
           if (msg.dir === "off") meta.spectateId = null;
           else cycleSpectate(room, meta, msg.dir === "prev" ? "prev" : "next");
         } else if (msg.type === "ready") {
-          if (room.round.phase !== PHASE_LOBBY) return;
+          // Also accepted during the intermission: deciding while the
+          // standings are still on screen means the next round can start the
+          // moment the clock runs out, instead of everyone being dropped into
+          // a lobby and asked again.
+          if (room.round.phase === PHASE_LIVE) return;
           meta.ready = msg.ready !== false;
           pushLobby(room);
           maybeStartRound(room);
@@ -841,6 +882,10 @@ wss.on("connection", (ws, req) => {
       meta.joining = false;
       meta.room = room;
       meta.stake = stake;
+      // The tier they chose, kept for the life of the connection. meta.stake
+      // is only the CURRENT round's escrow and is cleared at settlement, so
+      // without this a player carried on into round two staking nothing.
+      meta.tier = stake;
 
       const player = addPlayer(room.world, { id, name: displayName });
       meta.state = createClientState(nextClientId);   // staggers keyframes
@@ -947,6 +992,9 @@ function tickRoom(room, dt) {
     endRound(room).catch(err => console.error("endRound:", err.message));
   } else if (round.phase === PHASE_INTERMISSION && world.time >= round.endsAt) {
     toLobby(room);
+    // Anyone who opted in while the standings were up is already ready, so
+    // the next round can begin immediately rather than waiting to be asked.
+    maybeStartRound(room);
   }
 
   if (events.length) {

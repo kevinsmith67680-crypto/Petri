@@ -5,7 +5,7 @@
 
 import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
-import { PHASE_LIVE, PHASE_LOBBY } from "../shared/protocol.js";
+import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION } from "../shared/protocol.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -160,6 +160,23 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
 
   function hideLobby() { el.lobbyVeil.hidden = true; }
 
+  // Ticks the intermission countdown on the standings card from the snapshot
+  // clock, so the wait is visibly finite rather than a frozen "starting…".
+  function renderIntermission(round) {
+    if (!el.roundVeil || el.roundVeil.hidden) return;
+    if (!round || round.phase !== PHASE_INTERMISSION) return;
+    const left = Math.max(0, Math.ceil(round.remaining));
+    setText($("nextRound"), left > 0
+      ? `Next round in ${left}s`
+      : "Starting…");
+  }
+
+  function setNextReady(on) {
+    const btn = $("btnNextReady");
+    btn.setAttribute("aria-pressed", String(!!on));
+    setText(btn, on ? "In for the next round" : "I'm in for the next round");
+  }
+
   function showRoundEnd({ number, standings, nextIn, myName }) {
     // The round ending supersedes a death card: if you were eaten seconds
     // before the whistle, the standings are the more useful thing to see.
@@ -181,6 +198,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   function update(view, elapsed, now) {
     if (!view) return;
     renderClock(view.round);
+    renderIntermission(view.round);
     setText(el.orbs, view.me.orbs);
     setText(el.cells, view.me.eaten);
     setText(el.mass, Math.round(view.me.mass));
@@ -627,6 +645,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     setAuthAvailable, showGoogle, setAuthError, showError, hideError, showStart,
+    renderIntermission, setNextReady,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
