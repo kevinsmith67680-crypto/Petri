@@ -98,11 +98,15 @@ server/     index.js       authoritative tick loop + static file serving
             db/pg.js       Supabase/Postgres backend
             db/memory.js   in-memory backend, same interface
             db/migrations/ schema changes for databases already deployed
-assets/     favicon.svg    the mark, simplified for 16px
+assets/     logo-light.png header logo, dark wordmark
+            logo-dark.png  dark-theme variant, white wordmark
+            favicon.svg    the mark alone, simplified for 16px
             icon-32/180    PNG favicon and touch icon
-            logo*.png      superseded; the header logo is now inline SVG
-                           plus text in index.html, so it needs no
-                           per-theme file
+
+            Both logos were supplied flattened onto their own background
+            and were stripped back to transparency before committing:
+            neither baked-in colour matches the page (--bg is #f4f4f2,
+            not white), so as delivered each sat in a visible rectangle.
 
 client/     main.js        entry point: transport choice, input, render loop
             account.js     /api client and session token storage
