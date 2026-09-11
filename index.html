@@ -215,6 +215,10 @@
   .standings div.you span:first-child{ color:var(--accent); }
   .standings em{ font-style:normal; color:var(--muted); }
   .next{ margin-top:18px; font-size:13px; color:var(--muted); }
+  /* The countdown leads the standings card instead of trailing the button, so
+     it is read before the scores rather than after them. Scoped to the id
+     because .next is shared with the lobby hint, which is still a footnote. */
+  #nextRound{ margin-top:10px; font-weight:600; color:var(--text); }
 
   /* ── bottom-left corner stack ── */
 
@@ -962,19 +966,19 @@
 <div class="veil" id="roundVeil" hidden>
   <div class="card">
     <h2 id="roundTitle">Round over</h2>
+    <p class="next" id="nextRound">Next round starting…</p>
     <p id="roundBlurb">Ten minutes are up. The top five are paid; everyone else loses their stake.</p>
     <div class="standings" id="standingsList"></div>
     <!-- Opting in here, while the standings are still up, means the next
          round starts the moment the clock runs out instead of dropping
          everyone into a lobby and asking again. -->
     <button id="btnNextReady" type="button">I'm in for the next round</button>
-    <p class="next" id="nextRound">Next round starting…</p>
   </div>
 </div>
 
 <div class="veil" id="overVeil" hidden>
   <div class="card">
-    <h2>You were absorbed</h2>
+    <h2 id="overTitle">You were absorbed</h2>
     <p id="overLine">Something larger reached you.</p>
     <div class="final"><b id="finalOrbs">0</b><span>orbs absorbed</span></div>
     <div class="tally">
