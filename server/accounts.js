@@ -15,6 +15,8 @@
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 
+import { MIN_AGE, MAX_AGE, parseDob, ageOn } from "../shared/age.js";
+
 const scrypt = promisify(crypto.scrypt);
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
@@ -60,6 +62,32 @@ export function validateDisplayName(raw) {
     throw new AccountError("That name is reserved.");
   }
   return name;
+}
+
+// The age gate. Applied wherever an account is CREATED, never where one is
+// merely signed into: the check belongs to the act of opening an account, and
+// re-asking an existing player on every login would only invite them to learn
+// which answer gets them in.
+//
+// Returns the canonical YYYY-MM-DD to store. What is stored is the date the
+// player asserted, not a boolean — "we let them in" is not auditable, and a
+// later identity check has nothing to reconcile against.
+export function validateDateOfBirth(raw, now = new Date()) {
+  const dob = parseDob(raw);
+  if (!dob) throw new AccountError("Enter your date of birth.", "age");
+  if (dob.getTime() > now.getTime()) {
+    throw new AccountError("That date of birth is in the future.", "age");
+  }
+  const age = ageOn(dob, now);
+  if (age > MAX_AGE) throw new AccountError("Check that date of birth.", "age");
+  if (age < MIN_AGE) {
+    // Says what the rule is and nothing about how close they were. A message
+    // that reveals the margin is an instruction for the retry.
+    throw new AccountError(
+      `You must be ${MIN_AGE} or over to open an account.`, "underage"
+    );
+  }
+  return dob.toISOString().slice(0, 10);
 }
 
 export function validateUsername(raw) {
@@ -152,9 +180,20 @@ export class Accounts {
   // an existing user inherits their account. Accounts here hold no email at
   // all, so there is nothing to match against anyway. A Google sign-in is its
   // own account, keyed by the immutable `sub`.
-  async findOrCreateGoogle({ sub, name, givenName, email, ip = "unknown" }) {
+  async findOrCreateGoogle({ sub, name, givenName, email, dateOfBirth, ip = "unknown" }) {
     const existing = await this.repo.findAccountByGoogleSub(sub);
     if (existing) return existing;
+
+    // Past this line we are creating an account, not signing into one, so the
+    // age gate applies exactly as it does to the password path. Google asserts
+    // nothing about age, and a gate that only guarded the form would be no
+    // gate at all — this route creates accounts in one click.
+    if (!String(dateOfBirth ?? "").trim()) {
+      throw new AccountError(
+        "Confirm your date of birth to create an account.", "age_required"
+      );
+    }
+    const dob = validateDateOfBirth(dateOfBirth);
 
     const displayName = await this.uniqueDisplayName(
       givenName || name || (email ? email.split("@")[0] : "Player")
@@ -167,6 +206,7 @@ export class Accounts {
       displayName,
       password: null,          // no password: this account signs in via Google
       googleSub: sub,
+      dateOfBirth: dob,
       createdIp: ip
     });
   }
@@ -192,12 +232,16 @@ export class Accounts {
     return `Player ${Date.now().toString(36).slice(-5)}`;
   }
 
-  async signup({ username, password, displayName, ip = "unknown" }) {
+  async signup({ username, password, displayName, dateOfBirth, ip = "unknown" }) {
     const user = validateUsername(username);
     if (String(password ?? "").length < PASSWORD_MIN) {
       throw new AccountError(`Password must be at least ${PASSWORD_MIN} characters.`);
     }
     const name = validateDisplayName(displayName || username);
+    // Before the uniqueness queries and before hashing: scrypt costs ~100ms on
+    // the same thread the game loop runs on, and an ineligible signup should
+    // not buy any of it.
+    const dob = validateDateOfBirth(dateOfBirth);
 
     if (await this.byUsername(user)) throw new AccountError("That username is taken.", "taken");
     if (await this.displayNameTaken(name)) throw new AccountError("That display name is taken.", "taken");
@@ -209,6 +253,7 @@ export class Accounts {
         username: user,
         displayName: name,
         password: await this.hash(password),
+        dateOfBirth: dob,
         createdIp: ip
       });
     } catch (err) {

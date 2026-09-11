@@ -72,7 +72,7 @@ const { PROTOCOL_VERSION } = await import("../shared/protocol.js");
 async function join(username, stake, protocol = PROTOCOL_VERSION) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password: "password123", displayName: username })
+    body: JSON.stringify({ username, password: "password123", displayName: username, dateOfBirth: "1990-01-01" })
   })).json().then(d => d.token);
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
@@ -149,7 +149,7 @@ console.log("\n-- the pot always equals the stake you chose --");
 {
   const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: "potter", password: "password123", displayName: "Potter" })
+    body: JSON.stringify({ username: "potter", password: "password123", displayName: "Potter", dateOfBirth: "1990-01-01" })
   })).json().then(d => d.token);
 
   const me = async () => (await (await fetch(`http://localhost:${PORT}/api/me`, {
@@ -259,7 +259,7 @@ console.log("\n-- one round rolls into the next --");
 {
   const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: "runner", password: "password123", displayName: "Runner" })
+    body: JSON.stringify({ username: "runner", password: "password123", displayName: "Runner", dateOfBirth: "1990-01-01" })
   })).json().then(d => d.token);
   const money = async () => (await (await fetch(`http://localhost:${PORT}/api/me`, {
     headers: { Authorization: `Bearer ${tok}` }

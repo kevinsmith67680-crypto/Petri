@@ -59,12 +59,25 @@ export async function createPool(connectionString) {
 // The rest of the codebase speaks camelCase; Postgres speaks snake_case.
 // Converting in one place keeps that difference from leaking everywhere.
 
+// A `date` column carries a calendar day and no timezone, but node-postgres
+// hands it back as a Date at LOCAL midnight. Reading that with toISOString()
+// shifts the day backwards anywhere east of UTC — which on a date of birth is
+// how someone's birthday moves and, one day a year, their age with it. Read
+// the local components back out instead, which is what was stored.
+const pad = n => String(n).padStart(2, "0");
+const toIsoDate = value => {
+  if (!value) return null;
+  if (!(value instanceof Date)) return String(value).slice(0, 10);
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+};
+
 const toAccount = row => row && {
   id: row.id,
   username: row.username,
   displayName: row.display_name,
   password: row.password,
   googleSub: row.google_sub || null,
+  dateOfBirth: toIsoDate(row.date_of_birth),
   createdAt: new Date(row.created_at).getTime(),
   createdIp: row.created_ip,
   nameChangedAt: row.name_changed_at ? new Date(row.name_changed_at).getTime() : 0
@@ -125,12 +138,12 @@ export class PgRepo {
     return toAccount(rows[0]) || null;
   }
 
-  async insertAccount({ username, displayName, password, googleSub = null, createdIp }) {
+  async insertAccount({ username, displayName, password, googleSub = null, dateOfBirth = null, createdIp }) {
     try {
       const { rows } = await this.pool.query(
-        `insert into petri.accounts (username, display_name, password, google_sub, created_ip)
-         values ($1, $2, $3, $4, $5) returning *`,
-        [username, displayName, password, googleSub, createdIp]
+        `insert into petri.accounts (username, display_name, password, google_sub, date_of_birth, created_ip)
+         values ($1, $2, $3, $4, $5, $6) returning *`,
+        [username, displayName, password, googleSub, dateOfBirth, createdIp]
       );
       return toAccount(rows[0]);
     } catch (err) {

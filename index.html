@@ -861,6 +861,12 @@
             <label for="fName">Display name</label>
             <input id="fName" type="text" autocomplete="nickname" maxlength="16">
           </div>
+          <!-- max is set from shared/age.js at runtime, so the picker cannot
+               offer an ineligible day. The server still decides. -->
+          <div class="field" id="fDobWrap" hidden>
+            <label for="fDob">Date of birth</label>
+            <input id="fDob" type="date" autocomplete="bday">
+          </div>
           <div class="field">
             <label for="fPass">Password</label>
             <input id="fPass" type="password" autocomplete="current-password" maxlength="128">

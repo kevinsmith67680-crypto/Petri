@@ -73,12 +73,15 @@ export function createAccountClient({ base = "" } = {}) {
       catch { return null; }
     },
 
-    async signup(username, password, displayName) {
+    async signup(username, password, displayName, dateOfBirth) {
       return adopt(await call("signup", {
-        method: "POST", body: { username, password, displayName }
+        method: "POST", body: { username, password, displayName, dateOfBirth }
       }));
     },
 
+    // Deliberately takes no date of birth. The age gate belongs to creating an
+    // account, not to returning to one, and asking again on every sign-in only
+    // teaches a player which answer gets them in.
     async login(username, password) {
       return adopt(await call("login", { method: "POST", body: { username, password } }));
     },
@@ -94,8 +97,12 @@ export function createAccountClient({ base = "" } = {}) {
       return call("config");
     },
 
-    async google(credential) {
-      return adopt(await call("google", { method: "POST", body: { credential } }));
+    // dateOfBirth is ignored by the server unless this credential creates a new
+    // account; signing in to an existing one never consults it.
+    async google(credential, dateOfBirth) {
+      return adopt(await call("google", {
+        method: "POST", body: { credential, dateOfBirth }
+      }));
     },
 
     async stats() {

@@ -498,8 +498,20 @@ function setupGoogle(clientId) {
           try {
             // The credential is an ID token. It is worth nothing until the
             // server verifies its signature — nothing here reads its contents.
-            applyAuth(await api.google(credential));
+            // The declared date rides along because this one click can create
+            // an account; the server ignores it when signing in to one.
+            applyAuth(await api.google(credential, ui.authDob()));
           } catch (err) {
+            // No account yet and no date declared. Google asserts nothing about
+            // age, so there is nowhere else this could have come from: send
+            // them to the field rather than leaving a refusal with no remedy.
+            if (err.code === "age_required") {
+              ui.focusDob();
+              ui.setAuthError(
+                "Enter your date of birth to create an account with Google."
+              );
+              return;
+            }
             ui.setAuthError(err.message || "Google sign-in failed.");
           }
         }
