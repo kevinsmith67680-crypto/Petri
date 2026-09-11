@@ -101,7 +101,10 @@ server/     index.js       authoritative tick loop + static file serving
 assets/     logo-light.png header logo, dark wordmark
             logo-dark.png  dark-theme variant, white wordmark
             favicon.svg    the mark alone, simplified for 16px
-            icon-32/180    PNG favicon and touch icon
+            icon-32/180    PNG favicon and touch icon, cropped from the
+                           mark in logo-light.png. The touch icon is
+                           opaque on purpose: iOS composites onto a tile
+                           and renders a transparent one black.
 
             Both logos were supplied flattened onto their own background
             and were stripped back to transparency before committing:
