@@ -4,11 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>CellRush</title>
+<!-- SVG first; browsers that understand it prefer it and get a mark that is
+     sharp at every size. The PNG stays for those that do not. -->
+<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="./assets/icon-32.png">
 <link rel="apple-touch-icon" href="./assets/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Baloo+2:wght@700;800&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg:      #f4f4f2;
@@ -447,15 +450,23 @@
     display:flex; align-items:center; justify-content:space-between;
     gap:17.5px; flex-wrap:wrap; margin-bottom:20px;
   }
-  .brand{ line-height:0; }
-  /* Two files rather than a CSS filter: the wordmark is near-black and the
-     mark is violet, and no single filter lifts one without wrecking the
-     other. The dark variant lifts only the dark pixels, on a smooth ramp so
-     the gradient in the C has no visible seam. */
-  .logo{ display:block; width:215px; height:auto; }
-  .logo.dark{ display:none; }
-  html[data-theme="dark"] .logo.light{ display:none; }
-  html[data-theme="dark"] .logo.dark{ display:block; }
+  /* The logo is drawn rather than loaded: an inline SVG mark plus real text.
+     That is what makes it theme-correct without a second file — the wordmark
+     takes var(--text) and flips with everything else, where the old pair of
+     PNGs needed a hand-tuned dark variant because a near-black wordmark is
+     invisible on a dark ground and no single CSS filter lifts it without
+     wrecking the violet mark beside it.
+
+     The mark itself needs no variant: the gradient is mid-tone and vivid, and
+     the bite is a real hole, so whatever is behind the logo shows through it
+     in either theme. */
+  .brand{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .logo-mark{ display:block; width:132px; height:auto; }
+  .logo-word{
+    font-family:"Baloo 2", "Archivo", ui-rounded, system-ui, sans-serif;
+    font-weight:800; font-size:53px; line-height:1;
+    letter-spacing:-.015em; color:var(--text);
+  }
 
   .panes{
     display:grid; grid-template-columns:1.05fr 1fr;
@@ -641,7 +652,8 @@
     .card{ padding:24px 28px 22px; }
     .pane{ padding:25px 27.5px; }
     .head{ margin-bottom:15px; }
-    .logo{ width:165px; }
+    .logo-mark{ width:101px; }
+    .logo-word{ font-size:41px; }
     .block{ padding:13.8px 0; }
     .block p{ font-size:16.2px; }
     .facts, .keys{ font-size:16.2px; }
@@ -789,10 +801,36 @@
 
     <div class="head">
       <h1 class="brand">
-        <img class="logo light" src="./assets/logo.png"
-             alt="CellRush" width="540" height="538">
-        <img class="logo dark" src="./assets/logo-dark.png"
-             alt="" aria-hidden="true" width="540" height="538">
+        <!-- aria-hidden because the wordmark below is real text: the accessible
+             name comes from that, so announcing the mark too would say it
+             twice. -->
+        <svg class="logo-mark" viewBox="0 0 128 104" role="img" aria-hidden="true"
+             xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="engulfsBody" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#a34ee8"/>
+              <stop offset="1" stop-color="#f92a94"/>
+            </linearGradient>
+          </defs>
+          <!-- Body: a full circle with a wedge taken out of the right. The
+               wedge is a genuine hole rather than a filled shape, so the page
+               shows through it and the mark needs no per-theme variant. -->
+          <path fill="url(#engulfsBody)"
+                d="M44 52 L77.1 26.1 A42 42 0 1 0 77.1 77.9 Z"/>
+          <ellipse cx="27" cy="31" rx="9" ry="13" fill="#fff" opacity=".3"
+                   transform="rotate(-32 27 31)"/>
+          <circle cx="45" cy="34" r="9" fill="#fff"/>
+          <circle cx="47.4" cy="35" r="5.4" fill="#141433"/>
+          <circle cx="65" cy="28" r="8" fill="#fff"/>
+          <circle cx="67.1" cy="29" r="4.8" fill="#141433"/>
+          <!-- Swallowed orbs, matching the pellet colours in the arena. -->
+          <circle cx="104" cy="22" r="9" fill="#ffc82e"/>
+          <circle cx="95" cy="46" r="10" fill="#29b6f6"/>
+          <circle cx="117" cy="43" r="8.5" fill="#22c55e"/>
+          <circle cx="108" cy="63" r="9.5" fill="#f9553b"/>
+          <circle cx="92" cy="73" r="6" fill="#e838e0"/>
+        </svg>
+        <span class="logo-word">engulfs</span>
       </h1>
       <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
     </div>
