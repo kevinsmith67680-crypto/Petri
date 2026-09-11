@@ -344,6 +344,36 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     $("stStreak").textContent = stats.longestStreak;
   }
 
+  // The heading used to be a fixed "You were absorbed" in the markup, so a run
+  // that led the arena until the last second read exactly like one that died
+  // first with nothing. It names the position actually reached instead.
+  //
+  // No money language here, deliberately. Being eaten forfeits the stake
+  // whatever position you held — only survivors place — and this same card is
+  // shown in practice, where there is no stake at all. A heading that hinted at
+  // placing would therefore be wrong twice over.
+  function deathCopy(rank, of, orbs) {
+    const ranked = rank > 0 && of > 0;
+    if (ranked && rank === 1) {
+      return {
+        title: "Absorbed in the lead",
+        line: `You were top of ${of} when something larger reached you.`
+      };
+    }
+    if (ranked) {
+      return {
+        title: `Absorbed in ${ordinal(rank)}`,
+        line: `You were ${ordinal(rank)} of ${of} when something larger reached you.`
+      };
+    }
+    return {
+      title: "You were absorbed",
+      line: orbs === 0
+        ? "Something larger reached you before you absorbed anything."
+        : "Something larger reached you."
+    };
+  }
+
   function showDeath({ orbs, peak, eaten, elapsed, best, rank, of }) {
     $("finalOrbs").textContent = orbs;
     $("finalMass").textContent = Math.round(peak);
@@ -351,9 +381,9 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     $("finalPos").textContent = rank ? `${ordinal(rank)} of ${of}` : "—";
     $("finalTime").textContent = mmss(elapsed);
     $("finalBest").textContent = `${best} orbs`;
-    $("overLine").textContent = orbs === 0
-      ? "Something larger reached you before you absorbed anything."
-      : "Something larger reached you.";
+    const { title, line } = deathCopy(rank, of, orbs);
+    $("overTitle").textContent = title;
+    $("overLine").textContent = line;
     el.overVeil.hidden = false;
     $("btnAgain").focus();
   }
