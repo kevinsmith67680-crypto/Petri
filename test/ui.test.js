@@ -226,5 +226,44 @@ check("every early return from connect() is accounted for",
   `${(connectFn.match(/setWagerAvailable\(/g) || []).length} calls, ` +
   `${(connectFn.match(/return /g) || []).length} returns`);
 
+// ── round-end heading ───────────────────────────────────────────────────────
+//
+// Surviving to the whistle and being absorbed before it are different results
+// and must not share a heading. Only survivors appear in the standings, so the
+// presence of our own row is what separates the two.
+
+console.log("\n-- round end --");
+
+const roundTitle = () => $("roundTitle").textContent;
+const placings = [
+  { name: "Ada", mass: 900, position: 1, paid: true },
+  { name: "Kev", mass: 700, position: 2, paid: true },
+  { name: "Bo", mass: 500, position: 3, paid: true }
+];
+const endRound = myName =>
+  ui.showRoundEnd({ number: 4, standings: placings, nextIn: 12, myName });
+
+endRound("Bo");
+check("a survivor is told the position they finished on",
+  roundTitle() === "You finished 3rd", roundTitle());
+
+endRound("Ada");
+check("first place reads as first",
+  roundTitle() === "You finished 1st", roundTitle());
+
+// Absorbed before the whistle: no row of our own, so claiming a position here
+// would invent one the player never held.
+endRound("Ghost");
+check("someone absorbed before the whistle is not given a position",
+  roundTitle() === "Round 4 over", roundTitle());
+
+ui.showRoundEnd({ number: 4, standings: [], nextIn: 12, myName: "Bo" });
+check("an empty board falls back to the plain heading",
+  roundTitle() === "Round 4 over", roundTitle());
+
+endRound(undefined);
+check("a missing display name cannot match a row",
+  roundTitle() === "Round 4 over", roundTitle());
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

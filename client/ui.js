@@ -201,7 +201,18 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     // The round ending supersedes a death card: if you were eaten seconds
     // before the whistle, the standings are the more useful thing to see.
     el.overVeil.hidden = true;
-    $("roundTitle").textContent = `Round ${number} over`;
+    // Only survivors are listed, so a row of our own means we were still
+    // standing at the whistle — and the position on it is the one the round
+    // actually finished on. Anyone absorbed before then has no row and keeps
+    // the plain heading; the card they were just shown already said so.
+    //
+    // No denominator: standings counts who was LEFT, not who started, so
+    // "3rd of 9" would read as a far smaller result than a hundred-player
+    // round actually was.
+    const mine = standings.find(r => r.name === myName);
+    $("roundTitle").textContent = mine
+      ? `You finished ${ordinal(mine.position)}`
+      : `Round ${number} over`;
     $("standingsList").innerHTML = standings.length
       ? standings.map(r =>
           `<div class="${r.name === myName ? "you" : ""}${r.paid ? " paid" : ""}">` +
