@@ -10,4 +10,7 @@
 // browser will block the connection as mixed content.
 // ---------------------------------------------------------------------------
 
-export const SERVER_URL = "";   // e.g. "wss://petri-server.onrender.com"
+// Empty is correct for engulfs.io: one host serves the page and the game
+// server, so the client connects back to whatever served it. Only set this if
+// the client is ever split onto static hosting — e.g. "wss://engulfs.io".
+export const SERVER_URL = "";
