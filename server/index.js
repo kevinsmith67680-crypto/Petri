@@ -159,7 +159,9 @@ const LIMITS = {
 // 512 is still small enough to be useless to an attacker and leaves room for
 // the join frame to grow without silently breaking connections again.
 const MAX_PAYLOAD = 512;
-const LINGER_SEC = 6;         // how long your cells stay after you vanish
+// How long your cells stay in the arena after you vanish, motionless and
+// edible. Also the window in which a reconnect gets them back.
+const LINGER_SEC = envInt("LINGER_SEC", 6);
 
 // ── static files ────────────────────────────────────────────────────────────
 
@@ -207,7 +209,11 @@ const server = http.createServer(async (req, res) => {
         botTarget: r.bots,
         // Everything in the world: humans plus however many bots are
         // currently standing in for the rest of the lobby.
-        inWorld: r.world.players.size
+        inWorld: r.world.players.size,
+        // Bodies whose owner dropped, still standing and still edible. A
+        // number that does not come back down is a reconnect that failed to
+        // reclaim its own run.
+        lingering: r.lingering.length
       })),
       demo: !ramp.isReal,
       storage: DATABASE_URL ? "postgres" : "memory",
@@ -363,6 +369,90 @@ function evictExistingConnection(accountId) {
     }
   }
   return false;
+}
+
+// Picking your own body back up after a dropped socket.
+//
+// A reconnect used to cost the run even when it took 200ms: the old player was
+// deleted and a new one spawned at starting mass, while the body you had spent
+// the round growing sat lingering in the arena for somebody else to eat. The
+// escrow went round the houses too — refunded, then locked again — for a stake
+// that had never stopped being at risk.
+//
+// So if the account that just joined is one of this room's lingering players,
+// and its cells are still standing, hand them back. The player object is the
+// same object: mass, cells, score and nid all continue. Only the connection id
+// changes, because ids are per-socket.
+//
+// This is not an escape hatch. The body was motionless and edible for the
+// whole outage, so anyone who caught it kept the kill; all this changes is
+// what happens when nobody did.
+
+// Step one: take this account off the lingering list, wherever it is, and say
+// what was left behind. Claiming MUST happen on every rejoin, resumed or not.
+//
+// The sweep below refunds a lingering entry when its timer runs out, and it
+// refunds whatever is in escrow AT THAT MOMENT — which, after a rejoin, is the
+// stake for the run now being played. So a player who reconnected within the
+// linger window had their live stake handed back a few seconds later and
+// carried on with nothing at risk. Rejoining on a different tier did it too,
+// because the stale entry sat in the room they left.
+function claimLingering(accountId) {
+  if (!accountId) return null;
+  for (const room of rooms.values()) {
+    const i = room.lingering.findIndex(l => l.accountId === accountId);
+    if (i === -1) continue;
+    const { id: oldId } = room.lingering[i];
+    room.lingering.splice(i, 1);
+    return { room, oldId, player: room.world.players.get(oldId) || null };
+  }
+  return null;
+}
+
+// Step two: move a claimed body onto the new connection, or clear it away if
+// it cannot be resumed. Returns the player to carry on as, or null to join
+// from scratch.
+function resumeLingering(claim, room, newId) {
+  if (!claim) return null;
+
+  const { room: oldRoom, oldId, player } = claim;
+  const usable =
+    oldRoom === room &&                     // same tier; a switch is a new run
+    room.round.phase === PHASE_LIVE &&      // nothing to come back to otherwise
+    player && player.alive && player.cells.length;
+
+  if (!usable) {
+    // Eaten while away, a tier change, or the round moved on. Clear the old
+    // body out now rather than leaving it for a sweep that no longer owns it.
+    if (player) {
+      removePlayer(oldRoom.world, oldId);
+      oldRoom.lastEater.delete(oldId);
+      syncBots(oldRoom);
+    }
+    return null;
+  }
+
+  room.world.players.delete(oldId);
+  player.id = newId;
+  room.world.players.set(newId, player);
+
+  // lastEater holds player ids on both sides: whoever bit us, and whoever we
+  // bit. Leaving the old id behind would misdirect a settlement.
+  const biter = room.lastEater.get(oldId);
+  if (biter !== undefined) {
+    room.lastEater.delete(oldId);
+    room.lastEater.set(newId, biter);
+  }
+  for (const [victim, killer] of room.lastEater) {
+    if (killer === oldId) room.lastEater.set(victim, newId);
+  }
+
+  // Anyone spectating this body is still watching the same player, so follow
+  // it to its new id rather than bumping their camera on to the next cell.
+  for (const other of room.clients.values()) {
+    if (other.spectateId === oldId) other.spectateId = newId;
+  }
+  return player;
 }
 
 const readyCount = room => {
@@ -878,15 +968,25 @@ wss.on("connection", (ws, req) => {
       // left in escrow. Only after that is the new stake locked, so the pot is
       // always exactly the stake the player chose — never a sum of attempts.
       evictExistingConnection(meta.accountId);
-      try {
-        const before = await backend.snapshot(meta.accountId);
-        if (before.pot > 0) await backend.refund(meta.accountId);
-      } catch (err) {
-        console.error("clearing stale escrow:", err.message);
+
+      // A resumed run is already paid for. Its stake never left escrow, so
+      // refunding and re-locking it would be two database round trips spent
+      // to arrive back where we started — and two round trips is most of how
+      // long a reconnect takes.
+      const claim = claimLingering(meta.accountId);
+      const resumed = resumeLingering(claim, room, id);
+
+      if (!resumed) {
+        try {
+          const before = await backend.snapshot(meta.accountId);
+          if (before.pot > 0) await backend.refund(meta.accountId);
+        } catch (err) {
+          console.error("clearing stale escrow:", err.message);
+        }
       }
 
       try {
-        await backend.lockStake(meta.accountId, stake);
+        if (!resumed) await backend.lockStake(meta.accountId, stake);
       } catch (err) {
         meta.joining = false;
         // Postgres raises a check-constraint violation (23514) when the
@@ -911,14 +1011,19 @@ wss.on("connection", (ws, req) => {
       // without this a player carried on into round two staking nothing.
       meta.tier = stake;
 
-      const player = addPlayer(room.world, { id, name: displayName });
+      const player = resumed || addPlayer(room.world, { id, name: displayName });
+      // A rename can land while the socket is down.
+      if (resumed) player.name = displayName;
       meta.state = createClientState(nextClientId);   // staggers keyframes
+      // The run never stopped, so the player is already in it rather than
+      // waiting to be let in.
+      meta.ready = !!resumed;
       room.clients.set(ws, meta);
       syncBots(room);
       pushLobby(room);
 
       // Arrivals wait in the lobby rather than dropping into a live round.
-      if (room.round.phase !== PHASE_LIVE) {
+      if (!resumed && room.round.phase !== PHASE_LIVE) {
         player.alive = false;
         player.cells = [];
       }
