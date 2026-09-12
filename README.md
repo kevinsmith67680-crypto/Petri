@@ -1,4 +1,4 @@
-# engulfs
+# Engulfs
 
 An agar.io-style game split into a shared simulation, an authoritative server, and a thin client.
 
