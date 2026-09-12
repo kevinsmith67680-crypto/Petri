@@ -19,7 +19,7 @@ globalThis.WebSocket = class {
   constructor(url) { this.url = url; this.readyState = 1; this.h = {}; this.sent = []; sockets.push(this); }
   addEventListener(t, fn) { (this.h[t] ||= []).push(fn); }
   send(d) { this.sent.push(d); }
-  close() { this.readyState = 3; }
+  close(code, reason) { this.readyState = 3; this.closeCode = code; this.closeReason = reason; }
   fire(t, ev) { for (const fn of this.h[t] || []) fn(ev); }
 };
 
@@ -419,6 +419,65 @@ sockets[0].fire("close", { code: 1006 });
 await new Promise(r => setTimeout(r, 60));
 check("close 1006 (dropped) still retries", dropRetries === 1, `${dropRetries}`);
 drop.close();
+
+console.log("\n-- a connection that has gone quiet is not waited out --");
+
+// The reconnect used to start only when the browser fired "close", and for the
+// failures players actually hit — a Wi-Fi handover, a tower switch, a laptop
+// waking, a proxy dropping an idle socket — the browser does not fire that
+// until its own TCP timeout, tens of seconds later. The socket reads OPEN the
+// whole time, so the game simply froze. Detection, not reconnection, was most
+// of the wait.
+//
+// The deadlines are passed in here so the test does not spend the real 2.5s.
+{
+  sockets.length = 0;
+  const w = createWorld(13, MODES[0].world);
+  const p = addPlayer(w, { id: "me", name: "Me" });
+  const cs = createClientState(0);
+  const conn = createSocketConnection({
+    url: "ws://x", name: "Me", stake: 1e6, token: "t",
+    stallMs: 400, joinStallMs: 400
+  });
+
+  let retried = 0, ended = 0;
+  conn.on("reconnecting", () => retried++);
+  conn.on("close", () => ended++);
+
+  sockets[0].fire("open");
+  sockets[0].fire("message", { data: JSON.stringify({ type: "welcome", nid: p.nid, tickHz: TICK_HZ }) });
+  stepWorld(w, 1 / TICK_HZ);
+  sockets[0].fire("message", { data: encodeSnapshot(w, p, cs, null).slice().buffer });
+  check("connected and receiving", !!conn.getView());
+
+  // Traffic stops here. The socket goes on reporting OPEN and fires nothing,
+  // which is exactly what a dead link looks like from JavaScript.
+  await new Promise(r => setTimeout(r, 300));
+  check("a gap shorter than the deadline is left alone",
+    retried === 0 && sockets.length === 1, `retries ${retried}, sockets ${sockets.length}`);
+
+  await new Promise(r => setTimeout(r, 500));
+  check("but silence past it is treated as a disconnection, with no close event",
+    retried === 1, `${retried} retries`);
+  check("a replacement socket is opened", sockets.length === 2, `${sockets.length} sockets`);
+  check("and the stale one is closed with a retryable code",
+    sockets[0].closeCode === 4002, String(sockets[0].closeCode));
+
+  // The abandoned socket says goodbye late, as a browser's does. Acting on it
+  // would tear down the healthy connection that replaced it.
+  sockets[0].fire("close", { code: 1006 });
+  await new Promise(r => setTimeout(r, 60));
+  check("its late close does not disturb the replacement",
+    retried === 1 && ended === 0 && sockets.length === 2,
+    `retries ${retried}, closes ${ended}, sockets ${sockets.length}`);
+
+  // And the replacement recovers normally.
+  sockets[1].fire("open");
+  sockets[1].fire("message", { data: JSON.stringify({ type: "welcome", nid: p.nid, tickHz: TICK_HZ }) });
+  check("the replacement re-joins", sockets[1].sent.some(m => String(m).includes("join")));
+
+  conn.close();
+}
 
 console.log("\n-- diagnostics --");
 

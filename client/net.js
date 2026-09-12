@@ -48,11 +48,38 @@ const TOMBSTONE_SEC = 1.0;                 // keep eaten pellets this long past 
 // the client drifts; too high and every correction is a visible twitch.
 const CORRECT_PER_SEC = 6;
 
+// How long a connection may carry nothing at all before we treat it as gone.
+//
+// Nothing used to notice a socket that had stopped carrying data. The retry
+// began only when the browser fired "close", and for the failures players
+// actually hit — a Wi-Fi handover, a tower switch, a laptop waking, a proxy
+// dropping an idle socket — the browser does not fire that until its own TCP
+// timeout, which is tens of seconds. The socket reads OPEN the whole time and
+// the game just freezes. Detection, not reconnection, was most of the wait.
+//
+// Once joined the feed is continuous: a snapshot every tick plus a pong every
+// second. Two and a half seconds of total silence is fifty missed frames — a
+// dead link, not a slow one.
+const STALL_MS = 2500;
+
+// Before the welcome there is deliberately nothing to hear: the server is
+// doing an account lookup and a stake, which is a database round trip or
+// several. Give the join its own, longer window.
+const JOIN_STALL_MS = 8000;
+
+// Ours, and deliberately outside FINAL_CLOSE so the usual retry path runs.
+const STALL_CODE = 4002;
+
 // Past this the client is not wrong, it is out of date — a split, a virus
 // pop, or a teleport after respawn. Snap rather than slide across the arena.
 const SNAP_ERROR = 220;
 
-export function createSocketConnection({ url, name = "You", stake = 0, token = null } = {}) {
+export function createSocketConnection({
+  url, name = "You", stake = 0, token = null,
+  // Exposed so the tests can drive a stall without waiting seconds of
+  // real time for one. Nothing in the app passes them.
+  stallMs = STALL_MS, joinStallMs = JOIN_STALL_MS
+} = {}) {
   // The socket is replaced on reconnect, so everything below closes over this
   // variable rather than a fixed instance.
   let socket = null;
@@ -159,6 +186,15 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
 
   let retryTimer = null;
 
+  // A socket we have given up on can still deliver its close event seconds
+  // later, long after its replacement is live. Each socket remembers the
+  // generation it was opened in so a straggler cannot tear down a healthy
+  // connection on its way out.
+  let generation = 0;
+  let lastFrameAt = 0;
+  let heard = false;        // anything at all received on this socket yet
+  const msNow = () => performance.now();
+
   // Waiting out a backoff after the network has demonstrably returned is time
   // spent for nothing. The browser tells us when the connection comes back and
   // when the tab is looked at again — both are far better signals than a timer.
@@ -174,61 +210,108 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     window.addEventListener("focus", retryNow);
     if (typeof document !== "undefined" && document.addEventListener) {
       document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) retryNow();
+        if (document.hidden) return;
+        lastFrameAt = msNow();   // the throttled gap is not the link's fault
+        retryNow();
       });
     }
   }
 
   function open() {
-    socket = new WebSocket(url);
-    socket.binaryType = "arraybuffer";
+    const gen = ++generation;
+    const ws = new WebSocket(url);
+    socket = ws;
+    ws.binaryType = "arraybuffer";
+    lastFrameAt = msNow();
+    heard = false;
 
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({
         type: MSG.JOIN, name, stake, token, protocol: PROTOCOL_VERSION
       }));
     });
 
-    socket.addEventListener("message", onMessage);
+    ws.addEventListener("message", ev => {
+      // A socket we abandoned may still hand us a frame it had already
+      // buffered. Folding that into the world would undo the reset the
+      // replacement just did.
+      if (gen !== generation) return;
+      lastFrameAt = msNow();
+      heard = true;
+      onMessage(ev);
+    });
 
-    socket.addEventListener("close", ev => {
+    ws.addEventListener("close", ev => {
       // A close we asked for is not a disconnection. The caller already knows
       // — it is the one that called close() — and telling it again made the
       // "connection lost" card appear every time the client swapped sockets
       // to change stake or sign in.
-      if (closedByUs) return;
-
-      // A refusal is final: the server has already decided and told us why,
-      // so retrying just repeats the same rejection eight times. Only
-      // abnormal closes — 1006 dropped, 1001 going away, 1011 server fault —
-      // are worth another go.
-      //   1000 normal      1002 protocol fault    1008 policy (auth, stake,
-      //   1013 room full   4001 taken over         stale client)
-      if (ev && FINAL_CLOSE.has(ev.code)) {
-        emit("close", ev);
-        return;
-      }
-
-      if (attempt >= MAX_ATTEMPTS) { emit("close", ev); return; }
-
-      // Anything held from the old socket describes a world we are no longer
-      // being told about. The server sends a keyframe on join, so drop it.
-      frames.length = 0;
-      pellets.clear();
-      names.clear();
-      predicted.clear();
-      ghostCells.length = 0;
-      ghostBlobs.length = 0;
-      clockOffset = null;
-
-      const wait = backoffMs(attempt);
-      attempt++;
-      emit("reconnecting", { attempt, of: MAX_ATTEMPTS, wait });
-      retryTimer = setTimeout(() => { retryTimer = null; if (!closedByUs) open(); }, wait);
+      //
+      // A superseded generation is not one either: it is the late goodbye of
+      // a socket the stall watchdog already replaced.
+      if (closedByUs || gen !== generation) return;
+      lost(ev);
     });
 
-    socket.addEventListener("error", e => emit("error", e));
+    ws.addEventListener("error", e => { if (gen === generation) emit("error", e); });
   }
+
+  // Everything that has to happen once the connection is gone, whether the
+  // browser told us or the watchdog below worked it out first.
+  function lost(ev) {
+    // A refusal is final: the server has already decided and told us why,
+    // so retrying just repeats the same rejection eight times. Only
+    // abnormal closes — 1006 dropped, 1001 going away, 1011 server fault —
+    // are worth another go.
+    //   1000 normal      1002 protocol fault    1008 policy (auth, stake,
+    //   1013 room full   4001 taken over         stale client)
+    if (ev && FINAL_CLOSE.has(ev.code)) {
+      emit("close", ev);
+      return;
+    }
+
+    if (attempt >= MAX_ATTEMPTS) { emit("close", ev); return; }
+
+    // Anything held from the old socket describes a world we are no longer
+    // being told about. The server sends a keyframe on join, so drop it.
+    frames.length = 0;
+    pellets.clear();
+    names.clear();
+    predicted.clear();
+    ghostCells.length = 0;
+    ghostBlobs.length = 0;
+    clockOffset = null;
+
+    const wait = backoffMs(attempt);
+    attempt++;
+    emit("reconnecting", { attempt, of: MAX_ATTEMPTS, wait });
+    retryTimer = setTimeout(() => { retryTimer = null; if (!closedByUs) open(); }, wait);
+  }
+
+  // The watchdog. Checked often enough that the deadline means what it says.
+  const stallTimer = setInterval(() => {
+    if (closedByUs || !socket || socket.readyState !== WebSocket.OPEN) return;
+
+    // A hidden tab is throttled to about one timer a minute and stops
+    // rendering entirely, so silence there says nothing about the link.
+    if (typeof document !== "undefined" && document.hidden) {
+      lastFrameAt = msNow();
+      return;
+    }
+
+    if (msNow() - lastFrameAt < (heard ? stallMs : joinStallMs)) return;
+
+    // Do not wait for the close event. Calling close() on a socket whose TCP
+    // is already gone leaves it in CLOSING until the browser's own timeout —
+    // which is the delay this whole mechanism exists to remove. Abandon it
+    // and start the next one now; its goodbye, if it ever comes, is ignored
+    // by the generation check above.
+    const dead = socket;
+    generation++;
+    socket = null;
+    try { dead.close(STALL_CODE, "No data"); } catch { /* already gone */ }
+    lost({ code: STALL_CODE, reason: "No data from the server" });
+  }, 250);
 
   function onMessage(ev) {
     // Text frames are control messages; binary frames are gameplay.
@@ -687,6 +770,7 @@ export function createSocketConnection({ url, name = "You", stake = 0, token = n
     close() {
       closedByUs = true;
       clearInterval(pingTimer);
+      clearInterval(stallTimer);
       if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
       try { socket?.close(); } catch { /* already gone */ }
     }
