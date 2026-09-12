@@ -190,7 +190,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      // Readable from anywhere on purpose. It carries no secrets, and the one
+      // case where a client most needs it — a page served from one host
+      // talking to a game server on another, where the origin allowlist is
+      // most likely to be what is refusing the socket — is exactly the case
+      // where the request is cross-origin and would otherwise be blocked.
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store"
+    });
     res.end(JSON.stringify({
       ok: true,
       players: [...rooms.values()].reduce((n, r) => n + r.clients.size, 0),
@@ -217,6 +226,39 @@ const server = http.createServer(async (req, res) => {
       })),
       demo: !ramp.isReal,
       storage: DATABASE_URL ? "postgres" : "memory",
+      // Whether a WebSocket handshake FROM THIS CALLER would be accepted, and
+      // if not, which guard would turn it away.
+      //
+      // A rejected upgrade reaches the browser as a bare close with no code
+      // and no reason, so a client cannot tell a server it cannot reach from
+      // one that is refusing it — and neither can you, from the outside. Both
+      // look like "could not reach the server after several attempts". This is
+      // the same two checks verifyClient runs, answered over plain HTTP where
+      // the answer can actually be read.
+      socket: (() => {
+        const ip = ipOf(req);
+        const held = connectionsByIp.get(ip) || 0;
+        // A browser sends NO Origin header on a same-origin fetch, so this
+        // request cannot be used to work out the page's origin. Judging it
+        // would answer "refused, no origin" for every healthy same-host
+        // deployment that has an allowlist set — a confident wrong answer,
+        // which is worse than none. The page names its own origin instead.
+        // Safe, because this is a report and never an access decision: the
+        // real check runs in verifyClient against headers the browser sets.
+        const origin = url.searchParams.get("origin") || req.headers.origin || null;
+        return {
+          origin,
+          originAsked: !!url.searchParams.get("origin"),
+          wouldAccept: originIsAllowed(origin, req.headers.host),
+          matchesHost: originMatchesHost(origin, req.headers.host),
+          originsConfigured: ALLOWED_ORIGINS.length > 0,
+          ip,
+          trustProxy: TRUST_PROXY,
+          connections: held,
+          maxPerIp: MAX_CONN_PER_IP,
+          atCap: held >= MAX_CONN_PER_IP
+        };
+      })(),
       tick: {
         hz: HZ,
         budgetMs: +(1000 / HZ).toFixed(1),
@@ -504,13 +546,43 @@ function ipOf(req) {
   return req.socket.remoteAddress || "unknown";
 }
 
-function originAllowed(req) {
+// Is this request coming from a page this very server handed out? A browser
+// sets Host from the URL being opened and Origin from the page doing the
+// opening, so the two agree only for a same-origin request. Ports count:
+// localhost:8080 and localhost:9000 are different origins.
+function originMatchesHost(origin, host) {
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === String(host).toLowerCase();
+  } catch {
+    return false;                             // not a URL, so not ours
+  }
+}
+
+function originIsAllowed(origin, host) {
   if (!ALLOWED_ORIGINS.length) return true;   // unset = dev, allow anything
-  const origin = req.headers.origin;
   // No Origin header means a non-browser client. Once you have set an
   // allowlist, that is exactly what you are trying to keep out.
-  return !!origin && ALLOWED_ORIGINS.includes(origin);
+  if (!origin) return false;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+
+  // A page this server served can always talk back to it. The allowlist is
+  // here to stop SOMEBODY ELSE'S page pointing a client at us, and a
+  // same-origin request is by definition not that — evil.com opening a socket
+  // to us sends Host: our-host with Origin: https://evil.com, which does not
+  // match. Nothing is given away: a non-browser client that can forge Host
+  // could forge Origin too, so this was never the defence against one.
+  //
+  // Without it the allowlist can lock the game out of a host the server
+  // itself serves — a Render URL, a preview deploy, the apex when only www is
+  // listed, a machine on the LAN — and the failure is invisible from the
+  // outside: the page loads, the socket is refused during the handshake, and
+  // the browser is told only that it closed. Every cause looks like a flaky
+  // network from there.
+  return originMatchesHost(origin, host);
 }
+
+const originAllowed = req => originIsAllowed(req.headers.origin, req.headers.host);
 
 // Names are rendered into the leaderboard and onto cells. ui.js escapes HTML,
 // but strip control characters here too so nothing weird reaches other players.
@@ -544,7 +616,14 @@ const wss = new WebSocketServer({
   // WebSockets are not covered by the browser's same-origin policy, so if you
   // care where connections come from you have to check it yourself.
   verifyClient(info, done) {
-    if (!originAllowed(info.req)) return done(false, 403, "Forbidden origin");
+    if (!originAllowed(info.req)) {
+      console.warn(
+        `refused origin ${info.req.headers.origin || "(none sent)"} for host ` +
+        `${info.req.headers.host || "(none)"}: not in ALLOWED_ORIGINS ` +
+        `(${ALLOWED_ORIGINS.join(", ")}) and not same-origin`
+      );
+      return done(false, 403, "Forbidden origin");
+    }
     const ip = ipOf(info.req);
     if ((connectionsByIp.get(ip) || 0) >= MAX_CONN_PER_IP) {
       console.warn(`refused ${ip}: ${connectionsByIp.get(ip)} connections already`);
@@ -1092,7 +1171,14 @@ wss.on("connection", (ws, req) => {
   ws.on("error", () => { try { ws.close(); } catch {} });
 });
 
-// Ping every 30s; anything that misses two rounds is gone.
+// Ping every 10s; anything that misses two rounds is gone.
+//
+// This was 30s, which meant a hard-killed connection — a closed laptop, a
+// dropped link, a browser that navigated away without a clean close — held
+// its slot for up to a minute. That slot counts against MAX_CONN_PER_IP, so a
+// player who reloaded a few times in a row could be refused at the handshake
+// by their own abandoned sockets, and a refused handshake tells the browser
+// nothing at all. Ten seconds costs one frame per client per ten seconds.
 setInterval(() => {
   for (const room of rooms.values()) {
     for (const [ws, meta] of room.clients) {
@@ -1101,7 +1187,7 @@ setInterval(() => {
       try { ws.ping(); } catch {}
     }
   }
-}, 30000);
+}, 10000);
 
 // ── tick ────────────────────────────────────────────────────────────────────
 

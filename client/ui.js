@@ -94,6 +94,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     el.overVeil.hidden = true;
   }
   function hideError() { $("errVeil").hidden = true; }
+  // Replace the text of a card already on screen. The socket layer shows its
+  // card the moment it gives up, because the player is looking at a dead
+  // arena and should not wait — but the real reason has to be fetched, so it
+  // arrives a moment later and swaps itself in.
+  function setErrorText(text) { setText($("errText"), text); }
 
   // Most drops recover in well under half a second. Showing a banner for that
   // is noise, so it waits before appearing — a recovery the player never sees
@@ -727,7 +732,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   return {
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
-    setAuthAvailable, showGoogle, setAuthError, showError, hideError, showStart,
+    setAuthAvailable, showGoogle, setAuthError, showError, setErrorText, hideError, showStart,
     renderIntermission, setNextReady, showReconnecting, showConnecting, hideReconnecting,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
