@@ -479,6 +479,39 @@ function frame(now) {
   renderer.draw(null, camera, th, settings);
 }
 
+// A Google credential the server refused because the account it would create
+// has no declared age. Held so that picking a date finishes the sign-in there
+// and then, rather than sending the player back to the Google button.
+//
+// Safe to keep: it is a signed ID token that the server verifies on every
+// request, it is already in this tab's memory from the callback, and it is
+// dropped the moment it succeeds or is refused for age.
+let pendingGoogleCredential = null;
+
+// Finishing the held sign-in the instant a date is chosen is the whole point
+// of keeping the credential, so this listens on the field rather than on a
+// button — there is no separate submit for the Google path.
+document.getElementById("fDob")?.addEventListener("change", async () => {
+  if (!pendingGoogleCredential || !api) return;
+  const dob = document.getElementById("fDob").value;
+  if (!dob) return;
+  try {
+    applyAuth(await api.google(pendingGoogleCredential, dob));
+    pendingGoogleCredential = null;
+  } catch (err) {
+    // Under 18 is final, so the credential goes; a token that has since
+    // expired needs a fresh press of the button and says so. Anything else
+    // (a mistyped year, a blip) keeps it, so correcting the date is enough.
+    if (err.code === "underage") pendingGoogleCredential = null;
+    if (err.code === "credentials") {
+      pendingGoogleCredential = null;
+      ui.setAuthError("That Google sign-in expired. Press the Google button again.");
+      return;
+    }
+    ui.setAuthError(err.message || "Google sign-in failed.");
+  }
+});
+
 // Loads Google Identity Services on demand and hands it the button container.
 // The script is only fetched when the server says a client id is configured,
 // so a deployment without Google pulls nothing from Google at all.
@@ -502,13 +535,17 @@ function setupGoogle(clientId) {
             // an account; the server ignores it when signing in to one.
             applyAuth(await api.google(credential, ui.authDob()));
           } catch (err) {
-            // No account yet and no date declared. Google asserts nothing about
-            // age, so there is nowhere else this could have come from: send
-            // them to the field rather than leaving a refusal with no remedy.
+            // First Google sign-in, so this would CREATE an account, and Google
+            // asserts nothing about age. Hold the credential and finish the job
+            // as soon as a date is picked: telling someone to enter a date and
+            // silently requiring them to click Google a second time is a dead
+            // end, because the button will not always mint a fresh credential
+            // on demand and nothing on screen said to press it again.
             if (err.code === "age_required") {
+              pendingGoogleCredential = credential;
               ui.focusDob();
               ui.setAuthError(
-                "Enter your date of birth to create an account with Google."
+                "Almost there — enter your date of birth and your account will be created."
               );
               return;
             }
