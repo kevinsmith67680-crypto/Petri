@@ -128,6 +128,45 @@ function serverUrl() {
   return (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 }
 
+// A refused WebSocket handshake reaches the browser as a bare close: no code
+// worth reading, no reason, nothing to tell an unreachable server from one
+// that is deliberately turning this page away. Both arrive as "could not
+// reach the server after several attempts", which sends the player off to
+// check their network over a problem in the server's own configuration.
+//
+// So ask. /health runs the same two checks the handshake does and answers
+// them over plain HTTP, which does get through.
+async function whyRefused(wsUrl) {
+  try {
+    const base = wsUrl.replace(/^ws/, "http").replace(/\/+$/, "");
+    // Name our own origin. A browser sends no Origin header on a same-origin
+    // fetch, so without this the server would be answering about a request
+    // that appears to have no origin at all — and with an allowlist set that
+    // reads as "refused", on a deployment where nothing is wrong.
+    const mine = encodeURIComponent(location.origin || "");
+    const res = await fetch(`${base}/health?origin=${mine}`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const s = (await res.json()).socket;
+    if (!s) return null;
+
+    if (s.wouldAccept === false) {
+      return `The server is running, but it is refusing connections from ${
+        s.origin || "a page that sent no origin"
+      }. Add that origin to ALLOWED_ORIGINS on the server, or open the game from a host it already allows.`;
+    }
+    if (s.atCap) {
+      return `The server is running, but it already holds ${s.connections} connection${
+        s.connections === 1 ? "" : "s"
+      } from your address and its limit is ${s.maxPerIp}. Close the game's other tabs, or wait about twenty seconds for the old ones to be cleared.`;
+    }
+    // Reachable, and it says it would take the socket. Whatever is in the way
+    // sits between the two — a proxy or tunnel that does not pass upgrades.
+    return "The server is running and would accept the connection, so something between this page and it is not passing WebSocket upgrades.";
+  } catch {
+    return null;                 // genuinely unreachable, or blocked by CORS
+  }
+}
+
 function connect(stake = PRACTICE) {
   // Signed-in players join the shared arena. Everyone else runs the same
   // simulation locally against bots. The server enforces this too — this
@@ -201,6 +240,13 @@ function connect(stake = PRACTICE) {
           action: "Reload"
         });
         running = false;
+        // The card is up immediately because the player is staring at a dead
+        // arena. If the server can tell us why, say so in place of the guess.
+        if (socket.gaveUpTrying()) {
+          whyRefused(url).then(why => {
+            if (why) ui.setErrorText(why);
+          });
+        }
         return;
       }
       // Not in a game, so a card over the arena would be the wrong shape. But
@@ -210,6 +256,9 @@ function connect(stake = PRACTICE) {
       if (socket.gaveUpTrying()) {
         ui.setWagerAvailable(false,
           "Could not reach the game server. Practice against bots works offline.");
+        whyRefused(url).then(why => {
+          if (why) ui.setRampNote(why);
+        });
       }
     });
     socket.on("error", () => ui.setMode(`Could not reach ${url}`));

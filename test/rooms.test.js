@@ -46,6 +46,12 @@ delete process.env.BOTS;
 // Short rounds so a full cycle can be observed without a long wait.
 process.env.ROUND_SECONDS = "3";
 process.env.INTERMISSION_SECONDS = "1";
+// An allowlist that names somewhere else entirely. This is the production
+// shape of the bug: the list is correct for the domain and wrong for every
+// other host the same server answers on. Joins in this file are driven
+// straight into the connection handler, so they do not pass verifyClient
+// and are unaffected.
+process.env.ALLOWED_ORIGINS = "https://engulfs.io,https://www.engulfs.io";
 
 await import("../server/index.js");
 await new Promise(r => setTimeout(r, 400));
@@ -297,6 +303,88 @@ console.log("\n-- one round rolls into the next --");
   const after = await money();
   check("the balance paid for it", after.balance < joined.balance,
     `${joined.balance} -> ${after.balance}`);
+}
+
+console.log("\n-- the origin guard cannot lock out the server's own page --");
+
+// A refused handshake reaches the browser as a bare close: no code worth
+// reading, no reason. So when ALLOWED_ORIGINS did not happen to name the host
+// a player was on, the page loaded, the socket was refused, and the only thing
+// anyone could see was "could not reach the server after several attempts" —
+// pointing at the network, over a line of configuration.
+//
+// The allowlist is there to stop somebody else's page pointing a client at
+// this server. A page this server itself served is not that, so it is always
+// allowed, and the list can no longer exclude a host the server answers on:
+// a Render URL, a preview deploy, the apex when only www was listed, a
+// machine on the LAN.
+//
+// Asserted through /health, which runs the same two checks the handshake does
+// and reports them where they can actually be read.
+{
+  const ask = async (headers, query = "") => {
+    const r = await fetch(`http://localhost:${PORT}/health${query}`, { headers });
+    return (await r.json()).socket;
+  };
+  const host = `localhost:${PORT}`;
+
+  check("an allowlist is in force", (await ask({ Host: host })).originsConfigured === true);
+
+  const own = await ask({ Origin: `http://${host}`, Host: host });
+  check("its own page is recognised as same-origin", own.matchesHost === true,
+    JSON.stringify(own.origin));
+  // The decisive case. This host is nowhere in the allowlist, and before the
+  // fix that was enough to refuse every socket while the page carried on
+  // loading perfectly.
+  check("and is accepted even though the allowlist names another host",
+    own.wouldAccept === true, JSON.stringify(own.origin));
+
+  const foreign = await ask({ Origin: "https://evil.example", Host: host });
+  check("another site's page is not same-origin", foreign.matchesHost === false);
+  check("and is refused", foreign.wouldAccept === false);
+
+  const listed = await ask({ Origin: "https://engulfs.io", Host: host });
+  check("an origin on the list is still accepted outright",
+    listed.wouldAccept === true && listed.matchesHost === false,
+    `allowed ${listed.wouldAccept}, matches host ${listed.matchesHost}`);
+
+  // Ports are part of an origin: a page on another port of the same machine
+  // is a different site and must not ride in on the hostname.
+  const otherPort = await ask({ Origin: `http://localhost:${PORT + 1}`, Host: host });
+  check("a different port is a different origin", otherPort.matchesHost === false,
+    `${PORT + 1} vs ${PORT}`);
+  check("and is refused", otherPort.wouldAccept === false);
+
+  const noOrigin = await ask({ Host: host });
+  check("a request with no origin is not same-origin", noOrigin.matchesHost === false);
+  check("and is refused once a list is set", noOrigin.wouldAccept === false);
+
+  const junk = await ask({ Origin: "not a url", Host: host });
+  check("an unparseable origin is not same-origin", junk.matchesHost === false);
+  check("and is refused", junk.wouldAccept === false);
+
+  // A browser sends NO Origin header on a same-origin fetch, so a page asking
+  // this question about itself has to name its own origin. Judging the bare
+  // request instead answers "refused, no origin" for every healthy same-host
+  // deployment with a list set — a confident wrong answer, which is worse
+  // than none. It cost me a false diagnosis before I noticed.
+  const named = await ask({ Host: host }, `?origin=${encodeURIComponent(`http://${host}`)}`);
+  check("a named origin is the one judged", named.origin === `http://${host}`,
+    String(named.origin));
+  check("it says the origin was supplied", named.originAsked === true);
+  check("and the same-host verdict is reached without an Origin header",
+    named.matchesHost === true && named.wouldAccept === true,
+    `matchesHost ${named.matchesHost}, wouldAccept ${named.wouldAccept}`);
+
+  const namedForeign = await ask({ Host: host }, "?origin=https%3A%2F%2Fevil.example");
+  check("a named foreign origin is still refused", namedForeign.wouldAccept === false);
+
+  // The rest of the verdict, which is the other thing that silently refuses a
+  // handshake and the other thing nobody could see.
+  check("it reports the connection cap", typeof own.maxPerIp === "number", `${own.maxPerIp}`);
+  check("and whether this caller is at it", own.atCap === false,
+    `${own.connections} of ${own.maxPerIp}`);
+  check("and whether the proxy header is trusted", own.trustProxy === false);
 }
 
 if (createdStub) {

@@ -66,7 +66,8 @@ globalThis.document = {
 globalThis.location = {
   search: "?mode=online",
   protocol: "http:",
-  host: "localhost:8080"
+  host: "localhost:8080",
+  origin: "http://localhost:8080"
 };
 globalThis.performance = { now: () => Date.now() };
 globalThis.requestAnimationFrame = noop;
@@ -100,6 +101,8 @@ globalThis.WebSocket = class {
 
 const ACCOUNT = { id: "u1", username: "ada", displayName: "Ada", provider: "password" };
 const signupBodies = [];
+// What /health should say about whether it would accept a socket from us.
+let healthSocket = null;
 let signedInOnServer = false;
 
 globalThis.fetch = async (url, opts = {}) => {
@@ -108,6 +111,8 @@ globalThis.fetch = async (url, opts = {}) => {
     ok: status < 400, status, json: async () => body
   });
 
+  // The client appends its own origin, so this is not an exact path.
+  if (path.includes("/health")) return json(200, { ok: true, socket: healthSocket });
   if (path.endsWith("/api/config")) return json(200, { googleClientId: null, demo: true });
   if (path.endsWith("/api/me")) {
     return signedInOnServer
@@ -219,6 +224,20 @@ console.log("\n-- a refusal is never silent --");
     /out of date/i.test($("errText").textContent), $("errText").textContent);
   check("offering the action that fixes it",
     $("btnErrAction").textContent === "Reload", $("btnErrAction").textContent);
+
+  // The socket closes straight after the refusal. The close handler has its
+  // own card — "could not reach the server after several attempts" — and the
+  // only thing keeping it from landing on top of this one is that the refusal
+  // cleared `running` first. That is load-bearing and worth pinning: a
+  // refused stake or a full room must never be reported as a network fault.
+  (live.handlers.close || []).forEach(fn => fn({ code: 1008 }));
+  await settle();
+  check("the close does not overwrite the reason",
+    /out of date/i.test($("errText").textContent), $("errText").textContent);
+  check("and does not blame the connection",
+    !/could not reach/i.test($("errText").textContent), $("errText").textContent);
+  check("the action that fixes it is still offered",
+    $("btnErrAction").textContent === "Reload", $("btnErrAction").textContent);
 }
 
 console.log("\n-- lobby and ready --");
@@ -281,6 +300,49 @@ console.log("\n-- creating an account carries the date of birth --");
     JSON.stringify(sent));
   check("so the account was created, not refused",
     !$("authError").textContent, $("authError").textContent);
+}
+
+console.log("\n-- a refusal the browser cannot see is explained anyway --");
+
+// A rejected WebSocket handshake reaches the browser as a bare close: no code
+// worth reading, no reason. So a server that is up and deliberately turning
+// this page away looks exactly like one that is not there, and the player was
+// told "could not reach the server after several attempts" — sent to check
+// their network over a line of the server's own configuration.
+//
+// /health runs the same two checks the handshake does and answers them over
+// plain HTTP, which does get through. This walks the real retry schedule to
+// its end, about eleven seconds; faking the schedule would test the fake.
+{
+  healthSocket = {
+    origin: "https://staging.example",
+    originAsked: true, wouldAccept: false, matchesHost: false,
+    originsConfigured: true,
+    ip: "203.0.113.7", trustProxy: true,
+    connections: 0, maxPerIp: 8, atCap: false
+  };
+
+  let handled = sockets.length;
+  $("stake1").click();
+  $("btnStart").click();
+  await settle();
+
+  const deadline = Date.now() + 25000;
+  const named = () => /staging\.example/.test($("errText").textContent);
+  while (Date.now() < deadline && !named()) {
+    if (sockets.length > handled) {
+      const sock = sockets[handled++];
+      (sock.handlers.close || []).forEach(fn => fn({ code: 1006 }));
+    }
+    await new Promise(r => setTimeout(r, 25));
+  }
+
+  check("every attempt failed and the card came up", $("errVeil").hidden === false);
+  check("it names the origin the server is refusing", named(), $("errText").textContent);
+  check("it does not blame the connection",
+    !/could not reach/i.test($("errText").textContent), $("errText").textContent);
+  check("and it names the setting to change",
+    /ALLOWED_ORIGINS/.test($("errText").textContent), $("errText").textContent);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

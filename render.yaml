@@ -30,8 +30,14 @@ services:
       # mode is built for: 100 for Standard, 50 for High stakes. Setting it
       # overrides both and is the reason a "100 player" test showed 25.
 
+      # Three was too tight to survive ordinary use. A hard-killed socket
+      # holds its slot until the server's heartbeat notices, so reloading a
+      # few times in a row could refuse a player at the handshake with their
+      # own abandoned connections — and a refused handshake reaches the
+      # browser as nothing but "closed", which reads as a broken network.
+      # Two people behind one household address hit three on their own.
       - key: MAX_CONN_PER_IP
-        value: "3"
+        value: "8"
 
       # WebSockets are not covered by the browser's same-origin policy, so
       # UNSET MEANS ANY ORIGIN IS ACCEPTED — anyone can point their own client
