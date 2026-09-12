@@ -9,6 +9,7 @@ RUN npm install --omit=dev
 COPY shared ./shared
 COPY server ./server
 COPY client ./client
+COPY assets ./assets
 COPY index.html ./
 
 ENV PORT=8080
