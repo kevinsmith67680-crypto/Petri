@@ -111,7 +111,11 @@ export async function handleApi(req, res, ctx) {
         throw err;
       }
 
-      const account = await accounts.findOrCreateGoogle({ ...profile, ip });
+      // dateOfBirth is only consulted when this creates an account; a Google
+      // sign-in to an existing one ignores it entirely.
+      const account = await accounts.findOrCreateGoogle({
+        ...profile, dateOfBirth: body.dateOfBirth, ip
+      });
       if (!ramp.isReal) await ramp.grant(account.id);
       const token = await accounts.createSession(account.id);
       return send(res, 200, { token, ...(await shape(account)) }), true;
@@ -176,6 +180,9 @@ export async function handleApi(req, res, ctx) {
       const status = err.code === "unauthorised" ? 401
         : err.code === "throttled" ? 429
         : err.code === "taken" ? 409
+        // Not 400: the request was well formed and understood, and the answer
+        // is still no. A retry with the same body will always be refused.
+        : err.code === "underage" ? 403
         : 400;
       send(res, status, { error: err.message, code: err.code });
       return true;

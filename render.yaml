@@ -33,11 +33,18 @@ services:
       - key: MAX_CONN_PER_IP
         value: "3"
 
-      # Your own origin, e.g. https://petri.onrender.com — no trailing slash.
       # WebSockets are not covered by the browser's same-origin policy, so
-      # unset means anyone can point a client at your server.
+      # UNSET MEANS ANY ORIGIN IS ACCEPTED — anyone can point their own client
+      # at this server. It is pinned here rather than left to the dashboard
+      # precisely because the insecure state is the empty one: a blueprint sync
+      # onto a fresh service would otherwise come up wide open.
+      #
+      # Exact string match, no trailing slash, comma separated. The apex and
+      # www are different origins; if you ever stop serving www, dropping it
+      # here costs nothing, but omitting one you DO serve breaks the game on it
+      # while the page still loads — the socket is refused at the handshake.
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: "https://engulfs.io,https://www.engulfs.io"
 
       # Supabase session pooler string, port 5432. Without it accounts and
       # balances live in memory and are lost on every deploy.

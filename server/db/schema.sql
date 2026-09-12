@@ -36,6 +36,11 @@ create table if not exists petri.accounts (
   -- Google's stable per-user subject claim. Never the email address: emails
   -- change ownership, and keying accounts to one invites takeover.
   google_sub        text,
+  -- Self-declared at signup and stored as the asserted calendar day rather
+  -- than a pass/fail flag: "we let them in" reconciles against nothing if the
+  -- account is later identity-checked. Nullable only because accounts created
+  -- before the age gate existed have none — see migration 006.
+  date_of_birth     date,
   created_at        timestamptz not null default now(),
   created_ip        text,
   name_changed_at   timestamptz

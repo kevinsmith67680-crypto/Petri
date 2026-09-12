@@ -6,6 +6,7 @@
 import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
 import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION } from "../shared/protocol.js";
+import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -201,7 +202,18 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     // The round ending supersedes a death card: if you were eaten seconds
     // before the whistle, the standings are the more useful thing to see.
     el.overVeil.hidden = true;
-    $("roundTitle").textContent = `Round ${number} over`;
+    // Only survivors are listed, so a row of our own means we were still
+    // standing at the whistle — and the position on it is the one the round
+    // actually finished on. Anyone absorbed before then has no row and keeps
+    // the plain heading; the card they were just shown already said so.
+    //
+    // No denominator: standings counts who was LEFT, not who started, so
+    // "3rd of 9" would read as a far smaller result than a hundred-player
+    // round actually was.
+    const mine = standings.find(r => r.name === myName);
+    $("roundTitle").textContent = mine
+      ? `You finished ${ordinal(mine.position)}`
+      : `Round ${number} over`;
     $("standingsList").innerHTML = standings.length
       ? standings.map(r =>
           `<div class="${r.name === myName ? "you" : ""}${r.paid ? " paid" : ""}">` +
@@ -593,10 +605,12 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     $("tabSignIn").setAttribute("aria-selected", String(next === "login"));
     $("tabSignUp").setAttribute("aria-selected", String(next === "signup"));
     $("fNameWrap").hidden = next !== "signup";
+    $("fDobWrap").hidden = next !== "signup";
     $("fPass").setAttribute("autocomplete", next === "signup" ? "new-password" : "current-password");
     $("btnAuth").textContent = next === "signup" ? "Create account" : "Sign in";
     $("authHint").textContent = next === "signup"
-      ? "Password must be at least 8 characters. Your display name is what appears on your cell."
+      ? `You must be ${MIN_AGE} or over to open an account. Password must be at least 8 ` +
+        "characters, and your display name is what appears on your cell."
       : "Play against bots without an account. Sign in to face other players.";
     $("authError").textContent = "";
   }
@@ -648,7 +662,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
       await auth?.[mode === "signup" ? "signup" : "login"](
         $("fUser").value,
         $("fPass").value,
-        $("fName").value
+        $("fName").value,
+        $("fDob").value
       );
     } catch (e) {
       err.textContent = e.message || "Something went wrong.";
@@ -660,9 +675,15 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   }
 
   $("btnAuth").addEventListener("click", submitAuth);
-  for (const id of ["fUser", "fPass", "fName"]) {
+  for (const id of ["fUser", "fPass", "fName", "fDob"]) {
     $(id).addEventListener("keydown", e => { if (e.key === "Enter") submitAuth(); });
   }
+
+  // Bounds the picker so an ineligible day cannot be chosen in the first
+  // place. Cosmetic — a date input's max is trivially bypassed, and the server
+  // rejects independently — but it turns a refusal into something the form
+  // simply never offers.
+  $("fDob").setAttribute("max", latestEligibleDob());
 
   $("btnSignOut").addEventListener("click", () => auth?.signOut());
 
@@ -701,6 +722,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
     getStake: () => stake,
-    isSignedIn: () => signedIn
+    isSignedIn: () => signedIn,
+    // The Google button lives outside this form but can still CREATE an
+    // account, so the caller has to be able to hand the declared date over
+    // with the credential. Empty unless the player is on the signup tab.
+    authDob: () => (mode === "signup" ? $("fDob").value : ""),
+    focusDob: () => { setAuthMode("signup"); $("fDob").focus(); }
   };
 }

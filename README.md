@@ -2,6 +2,8 @@
 
 An agar.io-style game split into a shared simulation, an authoritative server, and a thin client.
 
+Live at **https://engulfs.io** — one host serving both the client and the game server (Option A below).
+
 ## Running it locally
 
 ```bash
@@ -34,13 +36,23 @@ That is fine for showing people. For anything you care about, the paid tier remo
 
 There is also a `Dockerfile`, so Fly.io, Railway, or any VPS work the same way. On a VPS put Caddy or nginx in front for TLS.
 
+#### Changing the domain
+
+Nothing in the code carries a hostname — `SERVER_URL` is empty, so the client connects back to whatever served the page. A domain move is three pieces of configuration, and two of them fail in ways that are easy to misread:
+
+1. **Render** — add the domain to the service, point DNS at it, let Render issue the certificate.
+2. **`ALLOWED_ORIGINS`** — every origin you serve, exact match, no trailing slash. Miss one and the page loads normally while the game never connects: the socket is refused at the handshake, not on a request you would see in the console as a failed fetch. The apex and `www` are separate entries.
+3. **Google's Authorised JavaScript origins** — add the new origin in the Cloud console. The client id itself does not change. Forget this and every other route in and out of the site works, while the Google button alone fails.
+
+During a cutover, keep the old origin in `ALLOWED_ORIGINS` until nobody is on it. Removing it drops anyone mid-round — and in a paid room, mid-stake.
+
 ### Option B — client on GitHub Pages, server elsewhere
 
 Useful if you want the offline game on a free static URL and only pay for the multiplayer box.
 
 1. Push to GitHub. Copy `docs/pages-workflow.yml.example` to `.github/workflows/pages.yml` — it is shipped outside `.github/` because a classic access token cannot push workflow files unless it also carries the `workflow` scope, and the push fails outright if it does. Add that scope first. Then enable Pages in the repo settings with "GitHub Actions" as the source.
 2. Deploy the server separately (Option A's host).
-3. Set `SERVER_URL` in `client/config.js` to the server's address, e.g. `wss://petri.onrender.com`, and push again.
+3. Set `SERVER_URL` in `client/config.js` to the server's address, e.g. `wss://engulfs.io`, and push again.
 
 Two things will bite you here:
 
@@ -86,10 +98,18 @@ server/     index.js       authoritative tick loop + static file serving
             db/pg.js       Supabase/Postgres backend
             db/memory.js   in-memory backend, same interface
             db/migrations/ schema changes for databases already deployed
-assets/     logo.png       brand mark, light backgrounds
-            logo-dark.png  dark-theme variant, dark pixels lifted
-            mark.png       the C alone, no wordmark
-            icon-32/180    favicon and touch icon
+assets/     logo-light.png header logo, dark wordmark
+            logo-dark.png  dark-theme variant, white wordmark
+            favicon.svg    the mark alone, simplified for 16px
+            icon-32/180    PNG favicon and touch icon, cropped from the
+                           mark in logo-light.png. The touch icon is
+                           opaque on purpose: iOS composites onto a tile
+                           and renders a transparent one black.
+
+            Both logos were supplied flattened onto their own background
+            and were stripped back to transparency before committing:
+            neither baked-in colour matches the page (--bg is #f4f4f2,
+            not white), so as delivered each sat in a visible rectangle.
 
 client/     main.js        entry point: transport choice, input, render loop
             account.js     /api client and session token storage
@@ -267,7 +287,7 @@ Two specific weaknesses worth naming:
 
 Set `GOOGLE_CLIENT_ID` and a Google button appears above the password form. Unset, the button is hidden and the Google Identity Services script is never even fetched.
 
-**Setup.** Google Cloud console → APIs & Services → Credentials → Create OAuth client ID → Web application. Add your origin (`http://localhost:8080` for local, your Render URL for production) to **Authorised JavaScript origins**. No redirect URI and **no client secret** are needed: this uses the ID-token flow, where Google hands the browser a signed token and the server verifies it. The client id is public — it appears in the page of every site that uses one — so the client fetches it from `GET /api/config` rather than duplicating it in `client/config.js`.
+**Setup.** Google Cloud console → APIs & Services → Credentials → Create OAuth client ID → Web application. Add your origin (`http://localhost:8080` for local, `https://engulfs.io` for production) to **Authorised JavaScript origins**. No redirect URI and **no client secret** are needed: this uses the ID-token flow, where Google hands the browser a signed token and the server verifies it. The client id is public — it appears in the page of every site that uses one — so the client fetches it from `GET /api/config` rather than duplicating it in `client/config.js`.
 
 **The security-critical part is the signature check.** A Google ID token is a JWT, and its middle segment is plain JSON containing a user id — trivially decoded, trivially rewritten. A server that reads that payload without verifying the signature will log an attacker in as anyone they name. `server/google.js` verifies, in order: the RS256 signature against Google's published keys, the issuer, that `aud` is *our* client id so a token minted for another site is refused, expiry with a minute of skew, and `email_verified`.
 

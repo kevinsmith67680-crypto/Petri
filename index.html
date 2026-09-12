@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>CellRush</title>
+<!-- SVG first; browsers that understand it prefer it and get a mark that is
+     sharp at every size. The PNG stays for those that do not. -->
+<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="./assets/icon-32.png">
 <link rel="apple-touch-icon" href="./assets/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -447,11 +450,16 @@
     display:flex; align-items:center; justify-content:space-between;
     gap:17.5px; flex-wrap:wrap; margin-bottom:20px;
   }
+  /* Two artworks rather than one recoloured: the wordmark is near-black in one
+     and white in the other, and no CSS filter lifts it without also wrecking
+     the violet mark beside it.
+
+     Both files were flattened against their own background before being
+     committed — a white one and a dark purple one — so each was stripped back
+     to real transparency. Without that the logo sits in a visible rectangle,
+     because neither baked-in background matches the page: --bg is #f4f4f2
+     here, not white, and #0d0d0e in dark, not the artwork's purple-black. */
   .brand{ line-height:0; }
-  /* Two files rather than a CSS filter: the wordmark is near-black and the
-     mark is violet, and no single filter lifts one without wrecking the
-     other. The dark variant lifts only the dark pixels, on a smooth ramp so
-     the gradient in the C has no visible seam. */
   .logo{ display:block; width:215px; height:auto; }
   .logo.dark{ display:none; }
   html[data-theme="dark"] .logo.light{ display:none; }
@@ -789,10 +797,15 @@
 
     <div class="head">
       <h1 class="brand">
-        <img class="logo light" src="./assets/logo.png"
-             alt="CellRush" width="540" height="538">
+        <!-- Only one is ever displayed, but both are in the markup so the swap
+             is instant on a theme toggle rather than fetching at the moment of
+             the switch. The dark copy is aria-hidden and alt-empty: the light
+             one already carries the accessible name, and two would announce
+             the brand twice. -->
+        <img class="logo light" src="./assets/logo-light.png"
+             alt="engulfs" width="660" height="516">
         <img class="logo dark" src="./assets/logo-dark.png"
-             alt="" aria-hidden="true" width="540" height="538">
+             alt="" aria-hidden="true" width="660" height="530">
       </h1>
       <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
     </div>
@@ -860,6 +873,12 @@
           <div class="field" id="fNameWrap" hidden>
             <label for="fName">Display name</label>
             <input id="fName" type="text" autocomplete="nickname" maxlength="16">
+          </div>
+          <!-- max is set from shared/age.js at runtime, so the picker cannot
+               offer an ineligible day. The server still decides. -->
+          <div class="field" id="fDobWrap" hidden>
+            <label for="fDob">Date of birth</label>
+            <input id="fDob" type="date" autocomplete="bday">
           </div>
           <div class="field">
             <label for="fPass">Password</label>

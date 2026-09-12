@@ -46,7 +46,7 @@ export class MemoryRepo {
     return this.store.all("accounts").find(a => a.googleSub === sub) || null;
   }
 
-  async insertAccount({ username, displayName, password, googleSub = null, createdIp }) {
+  async insertAccount({ username, displayName, password, googleSub = null, dateOfBirth = null, createdIp }) {
     // Re-check under the same tick the write happens, mirroring the unique
     // index the database enforces.
     if (await this.findAccountByUsername(username)) {
@@ -60,7 +60,7 @@ export class MemoryRepo {
     }
     const account = {
       id: crypto.randomUUID(),
-      username, displayName, password, googleSub,
+      username, displayName, password, googleSub, dateOfBirth,
       createdAt: Date.now(),
       createdIp,
       nameChangedAt: 0

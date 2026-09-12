@@ -31,8 +31,8 @@ async function runContract(name, backend) {
   const accounts = new Accounts(backend, { nameCooldownMs: 0 });
 
   const uA = `a${uniq()}`, uB = `b${uniq()}`;
-  const ada = await accounts.signup({ username: uA, password: "lovelace1843", displayName: `Ada ${uniq()}` });
-  const bob = await accounts.signup({ username: uB, password: "hopper19061", displayName: `Bob ${uniq()}` });
+  const ada = await accounts.signup({ username: uA, password: "lovelace1843", displayName: `Ada ${uniq(), dateOfBirth: "1990-01-01"}` });
+  const bob = await accounts.signup({ username: uB, password: "hopper19061", displayName: `Bob ${uniq(), dateOfBirth: "1990-01-01"}` });
   check("signup returns a uuid", /^[0-9a-f-]{36}$/.test(ada.id), ada.id);
 
   check("lookup by username", (await backend.findAccountByUsername(uA))?.id === ada.id);
