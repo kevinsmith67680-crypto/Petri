@@ -468,6 +468,24 @@
   html[data-theme="dark"] .logo.light{ display:none; }
   html[data-theme="dark"] .logo.dark{ display:block; }
 
+  .menu-foot{
+    margin-top:18px; padding-top:14px; border-top:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+    gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--muted);
+  }
+  .menu-foot nav{ display:flex; gap:18px; }
+  .menu-foot a{ color:var(--muted); text-decoration:none; }
+  .menu-foot a:hover{ color:var(--text); text-decoration:underline; }
+  .menu-foot a:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; border-radius:2px; }
+  /* On a touch screen the bare 12.5px text is about a 20px tap target, well
+     under the ~44px people can actually hit. Padded only for coarse pointers,
+     and pulled back out with a negative margin so the footer does not grow a
+     row taller on a mouse-driven screen where it was already fine. */
+  @media (pointer:coarse){
+    .menu-foot nav{ gap:6px; margin:-15px -12px -15px 0; }
+    .menu-foot a{ padding:15px 12px; }
+  }
+
   .panes{
     display:grid; grid-template-columns:1.05fr 1fr;
     /* Cards keep their own height instead of stretching to match. Two boxes
@@ -956,6 +974,16 @@
       </section>
 
     </div>
+
+    <!-- target="_blank" so a player mid-lobby does not lose their place in it
+         by reading the terms. -->
+    <footer class="menu-foot">
+      <span>18+ only. Play responsibly.</span>
+      <nav>
+        <a href="./legal/terms.html" target="_blank" rel="noopener">Terms &amp; Conditions</a>
+        <a href="./legal/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+      </nav>
+    </footer>
   </div>
 </div>
 

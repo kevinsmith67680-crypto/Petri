@@ -1,0 +1,110 @@
+/* ---------------------------------------------------------------------------
+   Styling for the policy pages.
+
+   A separate stylesheet rather than the game's inline block: these are long
+   scrolling documents, where index.html deliberately locks scrolling and fixes
+   the viewport for the canvas. The colour tokens are copied so the pages match
+   the game, and they follow the system theme, because the game's own theme
+   toggle is in-memory and does not survive a navigation.
+   --------------------------------------------------------------------------- */
+
+:root{
+  --bg:      #f4f4f2;
+  --panel:   #ffffff;
+  --text:    #000000;
+  --muted:   #7a7a78;
+  --line:    rgba(0,0,0,.11);
+  --accent:  #7a56a8;
+  --note-bg: #f6f1dd;
+  --note-fg: #4a3b0d;
+  --note-ln: #d8c47e;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:      #0d0d0e;
+    --panel:   #191a1c;
+    --text:    #f4f4f3;
+    --muted:   #8c8c8a;
+    --line:    rgba(255,255,255,.13);
+    --accent:  #a884e0;
+    --note-bg: #3a3216;
+    --note-fg: #f0dfa4;
+    --note-ln: #5c4f22;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d0d0e; --panel:#191a1c; --text:#f4f4f3; --muted:#8c8c8a;
+  --line:rgba(255,255,255,.13); --accent:#a884e0;
+  --note-bg:#3a3216; --note-fg:#f0dfa4; --note-ln:#5c4f22;
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+
+body{
+  background:var(--bg); color:var(--text);
+  font-family:"Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing:antialiased;
+  line-height:1.65;
+  padding:56px 24px 96px;
+}
+
+.doc{ width:min(720px, 100%); margin:0 auto; }
+
+.back{
+  display:inline-flex; align-items:center; gap:7px;
+  font-size:13px; font-weight:600; color:var(--muted);
+  text-decoration:none; margin-bottom:28px;
+}
+.back:hover{ color:var(--text); }
+
+h1{ font-size:34px; font-weight:600; letter-spacing:-.03em; line-height:1.1; }
+.updated{ margin-top:8px; font-size:13px; color:var(--muted); }
+
+h2{
+  margin-top:38px; margin-bottom:10px;
+  font-size:19px; font-weight:600; letter-spacing:-.01em;
+  padding-bottom:8px; border-bottom:1px solid var(--line);
+}
+h3{ margin-top:22px; margin-bottom:6px; font-size:15px; font-weight:600; }
+
+p{ margin-top:11px; font-size:15px; }
+ul{ margin-top:11px; padding-left:20px; font-size:15px; }
+li{ margin-top:5px; }
+a{ color:var(--accent); }
+
+strong{ font-weight:600; }
+
+table{
+  margin-top:14px; width:100%; border-collapse:collapse; font-size:14px;
+}
+th, td{
+  text-align:left; vertical-align:top;
+  padding:9px 12px 9px 0; border-bottom:1px solid var(--line);
+}
+th{ font-weight:600; width:34%; }
+td{ color:var(--muted); }
+
+/* The draft banner. Loud on purpose: these are unreviewed documents on a
+   product that intends to handle real money, and that must not be mistaken
+   for a finished policy by anyone reading or shipping it. */
+.draft{
+  margin-top:22px; padding:14px 16px;
+  background:var(--note-bg); color:var(--note-fg);
+  border:1px solid var(--note-ln); border-radius:6px;
+  font-size:13.5px; line-height:1.6;
+}
+.draft b{ display:block; margin-bottom:4px; font-weight:600; letter-spacing:.02em; }
+
+.foot{
+  margin-top:48px; padding-top:18px; border-top:1px solid var(--line);
+  font-size:13px; color:var(--muted);
+}
+.foot a{ color:var(--muted); }
+.foot a:hover{ color:var(--text); }
+
+@media (max-width:600px){
+  body{ padding:36px 18px 72px; }
+  h1{ font-size:27px; }
+  th{ width:auto; display:block; padding-bottom:2px; }
+  td{ display:block; padding-top:0; padding-bottom:12px; }
+}

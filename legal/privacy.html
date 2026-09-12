@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Engulfs</title>
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/icon-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/icon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./legal.css">
+</head>
+<body>
+<main class="doc">
+
+  <a class="back" href="../index.html">&larr; Back to the game</a>
+
+  <h1>Privacy Policy</h1>
+  <p class="updated">Draft — not yet in force. Last edited 12 September 2026.</p>
+
+  <div class="draft">
+    <b>DRAFT — NOT LEGAL ADVICE</b>
+    This document was prepared from the source code and has not been reviewed by
+    a lawyer. Engulfs intends to handle real money, which brings gambling,
+    money-transmission and data-protection obligations that vary by
+    jurisdiction. Do not publish or rely on this as a finished policy until a
+    qualified adviser has reviewed it, and until the operating entity and the
+    territories served are settled.
+  </div>
+
+  <h2>1. Who we are</h2>
+  <p>
+    Engulfs is an online multiplayer game operated at
+    <a href="https://engulfs.io">engulfs.io</a>. The operating legal entity, its
+    registered address and a contact address for privacy enquiries are
+    <strong>still to be confirmed</strong> and must be inserted before this
+    policy is published.
+  </p>
+
+  <h2>2. What we collect</h2>
+  <p>
+    The list below is taken from the database schema rather than written from a
+    template, so it describes what the software actually stores.
+  </p>
+
+  <h3>Account</h3>
+  <table>
+    <tr><th>Username</th><td>Chosen by you at sign-up. Used to sign in.</td></tr>
+    <tr><th>Display name</th><td>Shown on your cell and on the leaderboard, so it is visible to other players.</td></tr>
+    <tr><th>Password</th><td>Stored only as a scrypt hash with a per-account salt. The password itself is never stored and cannot be recovered from what we hold.</td></tr>
+    <tr><th>Google account identifier</th><td>If you sign in with Google, we store the stable identifier Google issues for you (its <code>sub</code> claim).</td></tr>
+    <tr><th>Date of birth</th><td>Declared by you at sign-up to confirm you are 18 or over. Stored as the date you entered.</td></tr>
+    <tr><th>IP address</th><td>The address you created the account from.</td></tr>
+    <tr><th>Timestamps</th><td>When the account was created, and when the display name was last changed.</td></tr>
+  </table>
+
+  <p>
+    <strong>We do not store your email address.</strong> This is deliberate. If
+    you sign in with Google we key your account to Google's immutable identifier
+    and never to your email, because email addresses change hands and matching
+    accounts by email is a known route to account takeover.
+  </p>
+
+  <h3>Sessions</h3>
+  <p>
+    When you sign in we issue a session token that expires after 30 days. Only a
+    SHA-256 hash of that token is stored on the server, so a copy of our database
+    would not hand anyone your live session. The token itself is held in your
+    browser's local storage so you stay signed in, and is removed when you sign
+    out.
+  </p>
+
+  <h3>Play and money</h3>
+  <table>
+    <tr><th>Match history</th><td>One row per life: how long you survived, your finishing position, how many players were in the arena, orbs absorbed, players eaten, peak mass, how the life ended, who eliminated you, and the stake and payout involved.</td></tr>
+    <tr><th>Career totals</th><td>Matches played, wins, time played, best position, longest streak and similar figures, derived from your match history.</td></tr>
+    <tr><th>Balance and escrow</th><td>Your balance and any amount currently staked, held as whole counts of micro-USDC.</td></tr>
+    <tr><th>Ledger</th><td>An append-only record of every movement of money — stakes, claims, cash-outs, forfeits and refunds. Nothing in this table is ever updated or deleted, because an audit trail that can be rewritten is not an audit trail.</td></tr>
+  </table>
+
+  <h3>What we do not collect</h3>
+  <ul>
+    <li>No advertising or analytics trackers, and no third-party cookies.</li>
+    <li>No email addresses, as above.</li>
+    <li>No payment card details. We do not take card payments.</li>
+    <li>No location data beyond what an IP address implies.</li>
+  </ul>
+
+  <h2>3. Why we hold it, and on what basis</h2>
+  <table>
+    <tr><th>To run your account</th><td>Necessary to provide the service you asked for.</td></tr>
+    <tr><th>To run matches and settle stakes</th><td>Necessary to perform our contract with you. The match and ledger records are what make a disputed settlement resolvable.</td></tr>
+    <tr><th>To confirm you are 18 or over</th><td>Necessary for compliance, and a condition of offering wagering at all.</td></tr>
+    <tr><th>To keep the game fair and secure</th><td>Our legitimate interest in preventing multiple accounts, abuse and fraud. This is why the sign-up IP address is kept and why connections per address are limited.</td></tr>
+  </table>
+
+  <h2>4. Who we share it with</h2>
+  <p>
+    We do not sell your data and we do not share it for advertising. It reaches
+    these parties only because they run the infrastructure the game needs:
+  </p>
+  <table>
+    <tr><th>Render</th><td>Hosts the game server and serves the site.</td></tr>
+    <tr><th>Supabase / PostgreSQL</th><td>Stores accounts, balances, the ledger and match history.</td></tr>
+    <tr><th>Google</th><td>Only if you choose Sign in with Google. Google tells us your identifier and display name; we do not send Google anything about your play.</td></tr>
+  </table>
+  <p>
+    We may also disclose information where the law requires it, or to
+    investigate fraud or abuse of the game.
+  </p>
+
+  <h2>5. What other players can see</h2>
+  <p>
+    Your <strong>display name</strong> is visible to other players during a
+    match, in the end-of-round standings and on public leaderboards. Nothing
+    else about your account is shown to them — not your username, not your
+    balance, not your match history.
+  </p>
+
+  <h2>6. How long we keep it</h2>
+  <p>
+    Sessions expire after 30 days and are swept automatically. Accounts, match
+    history and ledger entries are kept while your account exists.
+  </p>
+  <p>
+    Ledger entries are the exception to deletion: they are a financial audit
+    record, and where money has actually moved we may be required to retain them
+    even after an account closes. <strong>Specific retention periods are still
+    to be set</strong> and depend on the jurisdiction ultimately chosen.
+  </p>
+
+  <h2>7. Your rights</h2>
+  <p>
+    Depending on where you live you may have the right to see the data we hold
+    about you, to correct it, to have it deleted, to object to processing, or to
+    receive a copy in a portable form. Deleting an account removes its sessions
+    and its match history; ledger entries may be retained as described above.
+  </p>
+  <p>
+    <strong>A contact route for these requests must be added before publication</strong>,
+    along with the supervisory authority you may complain to.
+  </p>
+
+  <h2>8. Security</h2>
+  <ul>
+    <li>Passwords are hashed with scrypt using a per-account salt and compared in constant time.</li>
+    <li>Session tokens are stored only as hashes.</li>
+    <li>Sign-in attempts are rate limited per account and per IP address.</li>
+    <li>Database tables live in their own schema, kept out of the one Supabase exposes over HTTP, so account and balance rows are not reachable with a public key.</li>
+    <li>The game server is authoritative: your client cannot move itself, change its mass, or assert a result.</li>
+  </ul>
+  <p>
+    No system is perfectly secure, and the account system is described in our own
+    source as scaffolding rather than audited authentication. We would tell you
+    plainly if that changed, and we would tell you if a breach affected you.
+  </p>
+
+  <h2>9. Children</h2>
+  <p>
+    Engulfs is for adults. You must be 18 or over to open an account, and we ask
+    for your date of birth at sign-up. That is a declaration, not verification:
+    it records what you told us and does not prove your age. If we learn that an
+    account belongs to someone under 18 we will close it.
+  </p>
+
+  <h2>10. Changes</h2>
+  <p>
+    If this policy changes materially we will say so on the site before the
+    change takes effect.
+  </p>
+
+  <div class="foot">
+    <a href="./terms.html">Terms &amp; Conditions</a> &nbsp;·&nbsp;
+    <a href="../index.html">Back to the game</a>
+  </div>
+
+</main>
+</body>
+</html>
