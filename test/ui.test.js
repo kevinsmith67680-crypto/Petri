@@ -217,14 +217,21 @@ const connectFn = mainSrc.slice(
   mainSrc.indexOf("\nfunction onEvent")
 );
 check("connect() enables wagering on the online path",
-  /setWagerAvailable\(true\)/.test(connectFn));
+  /setWagerAvailable\(true[,)]/.test(connectFn));
 check("connect() disables it on the local path",
   /setWagerAvailable\(false/.test(connectFn));
-check("every early return from connect() is accounted for",
-  (connectFn.match(/setWagerAvailable\(/g) || []).length ===
-  (connectFn.match(/return /g) || []).length,
-  `${(connectFn.match(/setWagerAvailable\(/g) || []).length} calls, ` +
-  `${(connectFn.match(/return /g) || []).length} returns`);
+
+// Counting calls against the word "return" used to stand in for this. It
+// stopped meaning anything once one of the calls moved inside a socket
+// callback, where it reports an unreachable server rather than settling a
+// path out of the function — the count went to four against three returns
+// while every path was still correct. So check the exits themselves.
+for (const exit of ["return socket;", "return local;", "return createLocalConnection("]) {
+  const i = connectFn.indexOf(exit);
+  check(`"${exit}" settles wagering before it leaves`,
+    i > 0 && /setWagerAvailable\(/.test(connectFn.slice(Math.max(0, i - 900), i)),
+    i > 0 ? "" : "exit not found — has connect() been restructured?");
+}
 
 // ── round-end heading ───────────────────────────────────────────────────────
 //

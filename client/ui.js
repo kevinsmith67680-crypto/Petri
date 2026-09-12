@@ -99,16 +99,23 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   // is noise, so it waits before appearing — a recovery the player never sees
   // is the best kind.
   let reconnectTimer = null;
-  function showReconnecting(attempt, of) {
-    setText($("reconnectBar"), attempt > 1
-      ? `Reconnecting… (${attempt} of ${of})`
-      : "Reconnecting…");
+  function showBanner(text) {
+    setText($("reconnectBar"), text);
     if ($("reconnectBar").hidden && reconnectTimer === null) {
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         $("reconnectBar").hidden = false;
       }, 600);
     }
+  }
+  function showReconnecting(attempt, of) {
+    showBanner(attempt > 1 ? `Reconnecting… (${attempt} of ${of})` : "Reconnecting…");
+  }
+  // A connection that has never been live is not being re-established, and
+  // saying so was actively misleading: the word arrived on a page the player
+  // had only just loaded, describing a game they had not yet been in.
+  function showConnecting(attempt, of) {
+    showBanner(attempt > 1 ? `Connecting… (${attempt} of ${of})` : "Connecting…");
   }
   function hideReconnecting() {
     if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
@@ -586,11 +593,15 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
 
   // Offline play has no server ledger, so wagering is meaningless there:
   // a client-side balance is just free money.
+  // A reason given explicitly always wins, and an empty one clears the note:
+  // the menu is rebuilt on every connection change, so a line left over from
+  // a previous state — "sign in to wager", to a player who just did — reads
+  // as the menu arguing with itself.
   function setWagerAvailable(available, reason) {
     wagerPossible = !!available;
     el.ramp.disabled = !available;
     paintStakes();
-    if (!available && reason) setRampNote(reason);
+    if (reason !== undefined) setRampNote(reason);
   }
 
 
@@ -717,7 +728,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     setAuthAvailable, showGoogle, setAuthError, showError, hideError, showStart,
-    renderIntermission, setNextReady, showReconnecting, hideReconnecting,
+    renderIntermission, setNextReady, showReconnecting, showConnecting, hideReconnecting,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
