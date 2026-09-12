@@ -27,10 +27,14 @@ const ORIGIN = process.env.ORIGIN || "http://localhost:8080";
 const ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets");
 
 // One ground for every size, so the tab, the bookmark and the home screen are
-// recognisably the same icon. Opaque rather than transparent: a tab is light
-// in one theme and dark in the other, and a transparent mark that reads on one
-// disappears into the other. iOS also renders a transparent touch icon black.
-const GROUND = "#12101f";
+// recognisably the same icon.
+//
+// Opaque rather than transparent, whatever the colour: a transparent mark
+// takes whatever is behind it, and iOS renders a transparent touch icon black.
+// White because the mark is a saturated violet-to-magenta that holds its own
+// against it — the earlier dark tile read well too, but matched the artwork
+// less closely.
+const GROUND = "#ffffff";
 const SIZES = [[16, "icon-16.png"], [32, "icon-32.png"], [180, "icon-180.png"]];
 
 const browser = await chromium.launch(
