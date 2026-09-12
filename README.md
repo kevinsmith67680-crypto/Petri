@@ -100,11 +100,14 @@ server/     index.js       authoritative tick loop + static file serving
             db/migrations/ schema changes for databases already deployed
 assets/     logo-light.png header logo, dark wordmark
             logo-dark.png  dark-theme variant, white wordmark
-            favicon.svg    the mark alone, simplified for 16px
-            icon-32/180    PNG favicon and touch icon, cropped from the
-                           mark in logo-light.png. The touch icon is
-                           opaque on purpose: iOS composites onto a tile
-                           and renders a transparent one black.
+            icon-16/32/180 favicon, favicon, touch icon — all the mark
+                           cropped from logo-light.png onto one dark
+                           ground. Opaque on purpose: a tab is light in
+                           one theme and dark in the other, and iOS
+                           renders a transparent touch icon black.
+
+            Regenerate them with scripts/icons.mjs after changing the
+            logo, or the tab will disagree with the header.
 
             Both logos were supplied flattened onto their own background
             and were stripped back to transparency before committing:
