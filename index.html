@@ -477,6 +477,14 @@
   .menu-foot a{ color:var(--muted); text-decoration:none; }
   .menu-foot a:hover{ color:var(--text); text-decoration:underline; }
   .menu-foot a:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; border-radius:2px; }
+  /* On a touch screen the bare 12.5px text is about a 20px tap target, well
+     under the ~44px people can actually hit. Padded only for coarse pointers,
+     and pulled back out with a negative margin so the footer does not grow a
+     row taller on a mouse-driven screen where it was already fine. */
+  @media (pointer:coarse){
+    .menu-foot nav{ gap:6px; margin:-15px -12px -15px 0; }
+    .menu-foot a{ padding:15px 12px; }
+  }
 
   .panes{
     display:grid; grid-template-columns:1.05fr 1fr;
