@@ -94,9 +94,14 @@ const ui = createUI({
       if (!api) throw new Error(OFFLINE_AUTH_MSG);
       applyAuth(await api.login(username, password));
     },
-    async signup(username, password, displayName) {
+    // The date of birth is part of the signature, not an afterthought. It was
+    // left off here while every layer around it carried one — the form reads
+    // the field, the client sends it, the server demands it — so every attempt
+    // to create an account with a username and password was refused with
+    // "Enter your date of birth" no matter what the player typed in.
+    async signup(username, password, displayName, dateOfBirth) {
       if (!api) throw new Error(OFFLINE_AUTH_MSG);
-      applyAuth(await api.signup(username, password, displayName));
+      applyAuth(await api.signup(username, password, displayName, dateOfBirth));
     },
     async signOut() {
       await api?.logout();
@@ -127,7 +132,14 @@ function connect(stake = PRACTICE) {
   // Signed-in players join the shared arena. Everyone else runs the same
   // simulation locally against bots. The server enforces this too — this
   // routing is so guests get a working game rather than a rejection.
-  if (MODE === "online" && api?.signedIn) {
+  //
+  // The practice tier is local for everyone, signed in or not. There is no
+  // practice room on the server: it refuses a join with no stake, by design.
+  // Sending one anyway opened a socket on every page load that could only be
+  // closed again, which left the menu reading "Disconnected" the moment a
+  // player signed in — and left the free tier unplayable for them, because
+  // the refused socket was handed back as the thing to play through.
+  if (MODE === "online" && api?.signedIn && stake !== PRACTICE) {
     const url = serverUrl();
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
@@ -146,6 +158,19 @@ function connect(stake = PRACTICE) {
       // pause, not an ending.
       ui.showReconnecting(attempt, of);
       ui.setMode(`Reconnecting… (${attempt} of ${of})`);
+    });
+    // Retrying a connection that has never been live is not a reconnection.
+    // In the menu it gets no banner at all: there is no interrupted game to
+    // explain, and a banner over a page the player has only just loaded is
+    // both wrong and alarming. In a game it does get one, because an empty
+    // arena needs explaining — it just does not claim to be reconnecting.
+    socket.on("connecting", ({ attempt, of }) => {
+      ui.setMode(`Connecting… (${attempt} of ${of})`);
+      if (running) ui.showConnecting(attempt, of);
+    });
+    socket.on("connected", () => {
+      ui.hideReconnecting();
+      ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     });
     socket.on("reconnected", () => {
       ui.hideReconnecting();
@@ -176,6 +201,15 @@ function connect(stake = PRACTICE) {
           action: "Reload"
         });
         running = false;
+        return;
+      }
+      // Not in a game, so a card over the arena would be the wrong shape. But
+      // going silent is worse: online play is what the player came for. Only
+      // an exhausted retry is worth saying, though — a close the server chose
+      // has already been explained by its own message.
+      if (socket.gaveUpTrying()) {
+        ui.setWagerAvailable(false,
+          "Could not reach the game server. Practice against bots works offline.");
       }
     });
     socket.on("error", () => ui.setMode(`Could not reach ${url}`));
@@ -183,7 +217,7 @@ function connect(stake = PRACTICE) {
     // stored session has been validated, so this flag starts false; without
     // clearing it here, signing in reconnects to the server but the menu goes
     // on insisting that wagering needs one.
-    ui.setWagerAvailable(true);
+    ui.setWagerAvailable(true, "");
     ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     return socket;
   }
@@ -195,12 +229,18 @@ function connect(stake = PRACTICE) {
   // Not signed in is not the same as no server. In online mode the server is
   // there and reachable, so wagering stays "possible" and the menu asks for a
   // sign-in; only genuinely offline play reports a missing server.
-  ui.setWagerAvailable(MODE === "online", MODE === "online"
-    ? "Sign in to play against other people and to wager."
-    : "Wagering needs the server. Offline play is practice only.");
-  ui.setMode(MODE === "online"
-    ? "Practice against bots. Sign in to face other players."
-    : "Offline. Add ?mode=online to the URL for accounts and live play.");
+  //
+  // A signed-in player on the practice tier is here by choice, so neither
+  // message applies: they have an account and the server is fine. Telling
+  // them to sign in would be the menu arguing with itself.
+  const guest = !api?.signedIn;
+  ui.setWagerAvailable(MODE === "online", MODE !== "online"
+    ? "Wagering needs the server. Offline play is practice only."
+    : guest ? "Sign in to play against other people and to wager." : "");
+  ui.setMode(MODE !== "online"
+    ? "Offline. Add ?mode=online to the URL for accounts and live play."
+    : guest ? "Practice against bots. Sign in to face other players."
+            : "Practice against bots. Pick a stake to play for real.");
   return local;
 }
 
@@ -274,7 +314,13 @@ function onAccount(msg) {
     // A retryable fault is handled by the socket layer reopening; putting a
     // card in front of the player would be wrong twice over — it is not their
     // problem to solve, and it is about to fix itself.
-    if (msg.code === "retry") { ui.showReconnecting(1, 8); return; }
+    if (msg.code === "retry") {
+      // Same rule as above: only a connection that had been live has anything
+      // to reconnect to, and only a player in a game needs a banner.
+      if (conn?.everBeenLive?.()) ui.showReconnecting(1, 8);
+      else if (running) ui.showConnecting(1, 8);
+      return;
+    }
     if (running || msg.code === "stale") {
       const stale = msg.code === "stale";
       ui.showError({

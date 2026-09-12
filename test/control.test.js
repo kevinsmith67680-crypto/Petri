@@ -413,12 +413,105 @@ for (const [code, label] of [[1008, "policy"], [1013, "room full"], [1002, "prot
 sockets.length = 0;
 const drop = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
 let dropRetries = 0;
+drop.on("connecting", () => dropRetries++);
 drop.on("reconnecting", () => dropRetries++);
 sockets[0].fire("open");
 sockets[0].fire("close", { code: 1006 });
 await new Promise(r => setTimeout(r, 60));
 check("close 1006 (dropped) still retries", dropRetries === 1, `${dropRetries}`);
 drop.close();
+
+console.log("\n-- a first connection is not a reconnection --");
+
+// This is what put a "Reconnecting…" banner on screen every time the page was
+// refreshed. A reload has never been connected to anything, so a retry on its
+// first attempt was reported as a reconnection, and the banner announced the
+// interruption of a game the player had not yet been in.
+//
+// Both cases still retry. They differ only in what they are called, which is
+// the whole point: the caller shows a banner for one and not the other.
+{
+  sockets.length = 0;
+  const w = createWorld(14, MODES[0].world);
+  const p = addPlayer(w, { id: "me", name: "Me" });
+  const cs = createClientState(0);
+  const fresh = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const first = [], again = [];
+  fresh.on("connecting", e => first.push(e));
+  fresh.on("reconnecting", e => again.push(e));
+
+  check("a brand new connection has never been live", fresh.everBeenLive() === false);
+
+  // Three failures before the server ever says hello.
+  for (let i = 0; i < 3; i++) {
+    const sock = sockets[sockets.length - 1];
+    sock.fire("open");
+    sock.fire("close", { code: 1006 });
+    await new Promise(r => setTimeout(r, 150));
+  }
+  check("failing to connect is reported as connecting", first.length === 3, `${first.length}`);
+  check("and never as reconnecting", again.length === 0, `${again.length}`);
+  check("it still counts the attempts", first[2].attempt === 3, `${first[2].attempt}`);
+  check("and has still never been live", fresh.everBeenLive() === false);
+
+  // Now the server answers.
+  const live = sockets[sockets.length - 1];
+  live.fire("open");
+  live.fire("message", { data: JSON.stringify({ type: "welcome", nid: p.nid, tickHz: TICK_HZ }) });
+  stepWorld(w, 1 / TICK_HZ);
+  live.fire("message", { data: encodeSnapshot(w, p, cs, null).slice().buffer });
+  check("the welcome makes it live", fresh.everBeenLive() === true);
+
+  // From here a drop IS an interruption, and says so.
+  live.fire("close", { code: 1006 });
+  await new Promise(r => setTimeout(r, 60));
+  check("a drop after that is reported as reconnecting", again.length === 1, `${again.length}`);
+  check("and not as a first connection", first.length === 3, `${first.length}`);
+
+  check("it has not given up", fresh.gaveUpTrying() === false);
+  fresh.close();
+}
+
+console.log("\n-- giving up is distinct from being refused --");
+
+// The menu says "could not reach the game server" off the back of this, and
+// must not say it when the server answered and declined. A refusal has its own
+// message; an exhausted retry has none.
+{
+  sockets.length = 0;
+  const refused = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  sockets[0].fire("open");
+  sockets[0].fire("close", { code: 1008 });
+  await new Promise(r => setTimeout(r, 60));
+  check("a refusal is not giving up", refused.gaveUpTrying() === false);
+  refused.close();
+
+  sockets.length = 0;
+  const unreachable = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  let tries = 0, gone = 0;
+  unreachable.on("connecting", () => tries++);
+  unreachable.on("close", () => gone++);
+
+  // This walks the real backoff to its end, which takes about seven seconds of
+  // wall clock. Faking the schedule would test the fake, and the thing being
+  // pinned is what happens at the far end of the real one.
+  const deadline = Date.now() + 15000;
+  let handled = 0;
+  while (Date.now() < deadline && !gone) {
+    if (sockets.length > handled) {
+      const sock = sockets[handled++];
+      sock.fire("open");
+      sock.fire("close", { code: 1006 });
+    }
+    await new Promise(r => setTimeout(r, 25));
+  }
+  check("it ran the attempts out", tries === 8, `${tries} attempts`);
+  check("then reported the connection closed", gone === 1, `${gone}`);
+  check("and says it gave up rather than being refused",
+    unreachable.gaveUpTrying() === true);
+  unreachable.close();
+  await new Promise(r => setTimeout(r, 50));
+}
 
 console.log("\n-- a connection that has gone quiet is not waited out --");
 

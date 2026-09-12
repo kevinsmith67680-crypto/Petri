@@ -101,8 +101,20 @@ export function createSocketConnection({
 
   const listeners = {
     event: [], welcome: [], close: [], error: [], account: [], round: [],
-    reconnecting: [], reconnected: []
+    connecting: [], connected: [], reconnecting: [], reconnected: []
   };
+
+  // Has this connection ever actually been live? A retry before the first
+  // welcome is not a reconnection, and calling it one is what put a
+  // "Reconnecting…" banner on the screen every time the page was refreshed:
+  // nothing had been interrupted, the connection had simply never been made.
+  // Opening for the first time is reported as "connecting" instead, which the
+  // menu can state quietly without a banner over the arena.
+  let everLive = false;
+  // Set only when the retries ran out. A close the server chose — a refused
+  // stake, a full room, a takeover — is an answer, not an unreachable host,
+  // and the two want different things said about them.
+  let gaveUp = false;
   const emit = (kind, payload) => listeners[kind].forEach(fn => fn(payload));
 
   const frames = [];              // recent snapshots for interpolation
@@ -270,7 +282,7 @@ export function createSocketConnection({
       return;
     }
 
-    if (attempt >= MAX_ATTEMPTS) { emit("close", ev); return; }
+    if (attempt >= MAX_ATTEMPTS) { gaveUp = true; emit("close", ev); return; }
 
     // Anything held from the old socket describes a world we are no longer
     // being told about. The server sends a keyframe on join, so drop it.
@@ -284,7 +296,7 @@ export function createSocketConnection({
 
     const wait = backoffMs(attempt);
     attempt++;
-    emit("reconnecting", { attempt, of: MAX_ATTEMPTS, wait });
+    emit(everLive ? "reconnecting" : "connecting", { attempt, of: MAX_ATTEMPTS, wait });
     retryTimer = setTimeout(() => { retryTimer = null; if (!closedByUs) open(); }, wait);
   }
 
@@ -328,7 +340,9 @@ export function createSocketConnection({
       if (msg.type === MSG.WELCOME) {
         myNid = msg.nid;
         if (msg.tickHz) serverHz = msg.tickHz;
-        if (attempt > 0) { attempt = 0; emit("reconnected"); }
+        const returning = everLive;
+        everLive = true;
+        if (attempt > 0) { attempt = 0; emit(returning ? "reconnected" : "connected"); }
         emit("welcome", msg);
         emit("account", msg);
       } else if (msg.type === "account" || msg.type === "account_error" ||
@@ -766,6 +780,11 @@ export function createSocketConnection({
         socket.send(JSON.stringify({ type: "ramp", action }));
       }
     },
+
+    // The server can report a retryable fault of its own (a session lookup
+    // that failed), and the menu needs the same distinction for it.
+    everBeenLive: () => everLive,
+    gaveUpTrying: () => gaveUp,
 
     close() {
       closedByUs = true;

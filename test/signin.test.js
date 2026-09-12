@@ -99,6 +99,7 @@ globalThis.WebSocket = class {
 };
 
 const ACCOUNT = { id: "u1", username: "ada", displayName: "Ada", provider: "password" };
+const signupBodies = [];
 let signedInOnServer = false;
 
 globalThis.fetch = async (url, opts = {}) => {
@@ -117,6 +118,19 @@ globalThis.fetch = async (url, opts = {}) => {
     signedInOnServer = true;
     return json(200, {
       token: "t".repeat(64), account: ACCOUNT,
+      demo: true, balance: 5_000_000, pot: 0, staked: false
+    });
+  }
+  if (path.endsWith("/api/signup")) {
+    signupBodies.push(JSON.parse(opts.body || "{}"));
+    const body = signupBodies[signupBodies.length - 1];
+    // Mirrors the server: an account cannot be created without a declared age.
+    if (!body.dateOfBirth) {
+      return json(400, { error: "Enter your date of birth.", code: "age" });
+    }
+    signedInOnServer = true;
+    return json(201, {
+      token: "s".repeat(64), account: ACCOUNT,
       demo: true, balance: 5_000_000, pot: 0, staked: false
     });
   }
@@ -148,8 +162,13 @@ $("btnAuth").click();
 await settle(); await settle(); await settle();
 
 if ($("authError").textContent) console.log("  authError:", $("authError").textContent);
-check("a socket was opened to the server", sockets.length === 1,
-  sockets.length ? sockets[0].url : "none");
+// Signing in does NOT open a socket, because the practice tier is still
+// selected and there is no practice room on the server: it refuses a join
+// with no stake, by design. Opening one anyway meant every sign-in left the
+// menu reading "Disconnected", and handed the player a refused socket to try
+// to play the free tier through.
+check("no socket is opened while the free tier is selected", sockets.length === 0,
+  sockets.length ? sockets[0].url : "");
 check("the account panel switched over", $("authSignedIn").hidden === false);
 
 // The bug: main.js reconnected to the server but never cleared the flag it had
@@ -165,6 +184,7 @@ console.log("\n-- picking a stake --");
 
 $("stake2").click();
 check("2.00 can be selected", $("stake2").getAttribute("aria-checked") === "true");
+check("choosing a tier alone still opens nothing", sockets.length === 0, `${sockets.length}`);
 
 console.log("\n-- a refusal is never silent --");
 
@@ -172,11 +192,16 @@ console.log("\n-- a refusal is never silent --");
 // is hidden the moment the player presses Start. The result was a blank arena
 // with the explanation sitting behind it, unreachable.
 {
-  const sockA = sockets[sockets.length - 1];
   $("stake1").click();
   $("btnStart").click();
   await settle();
+  check("starting a staked run is what opens the socket", sockets.length === 1,
+    `${sockets.length}`);
   const live = sockets[sockets.length - 1];
+  // The join is written when the socket opens, so drive that first.
+  (live.handlers.open || []).forEach(fn => fn());
+  check("and it carries the tier that was chosen",
+    /"stake":1000000/.test(String(live.sent[0] || "")), String(live.sent[0] || "").slice(0, 60));
   live.handlers.message.forEach(fn => fn({
     data: JSON.stringify({ type: "round_start", mode: "standard", number: 1, seconds: 120 })
   }));
@@ -229,6 +254,34 @@ check("round_start closes the lobby", $("lobbyVeil").hidden === true);
 live.handlers.message.forEach(fn => fn({ data: lobbyMsg(1) }));   // PHASE_LIVE
 check("a lobby broadcast during a live round is ignored",
   $("lobbyVeil").hidden === true);
+
+console.log("\n-- creating an account carries the date of birth --");
+
+// Every layer around this one already handled the date: the form reads the
+// field, the account client sends it, the server demands it. main.js took
+// three arguments where the form passed four, so the fourth was dropped on
+// the floor and EVERY attempt to create an account with a username and
+// password was refused with "Enter your date of birth" no matter what the
+// player typed. Nothing caught it because each layer was correct on its own.
+{
+  $("tabSignUp").click();
+  $("fUser").value = "grace";
+  $("fPass").value = "hopper19061";
+  $("fName").value = "Grace";
+  $("fDob").value = "1906-12-09";
+  $("btnAuth").click();
+  await settle(); await settle(); await settle();
+
+  const sent = signupBodies[signupBodies.length - 1];
+  check("the form reached the server", !!sent, sent ? "" : "nothing was posted");
+  check("and carried the date of birth", sent?.dateOfBirth === "1906-12-09",
+    JSON.stringify(sent?.dateOfBirth));
+  check("along with the rest of the form",
+    sent?.username === "grace" && sent?.displayName === "Grace",
+    JSON.stringify(sent));
+  check("so the account was created, not refused",
+    !$("authError").textContent, $("authError").textContent);
+}
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
