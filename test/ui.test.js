@@ -272,5 +272,29 @@ endRound(undefined);
 check("a missing display name cannot match a row",
   roundTitle() === "Round 4 over", roundTitle());
 
+console.log("\n-- the pre-round countdown --");
+
+// The number is ticked from the snapshot clock rather than a timer of the
+// client's own, so it cannot drift away from when the round actually starts.
+// PHASE_COUNTDOWN is 4.
+ui.showLobby({ ready: 1, connected: 1, min: 1, max: 150, phase: 4 });
+check("the count replaces the ready meter",
+  $("lobbyCount").hidden === false && $("lobbyMeter").hidden === true);
+ui.renderCountdown({ phase: 4, remaining: 3, number: 0 });
+check("it shows the seconds the server sent", $("lobbyCountNum").textContent === "3",
+  $("lobbyCountNum").textContent);
+ui.renderCountdown({ phase: 4, remaining: 0, number: 0 });
+check("and the last tick is not a zero to sit on",
+  $("lobbyCountNum").textContent === "Go", $("lobbyCountNum").textContent);
+
+// A count that is called off has to put the lobby back as it was, or the
+// player is left staring at a number that has stopped moving.
+ui.showLobby({ ready: 0, connected: 1, min: 2, max: 150, phase: 3 });
+check("cancelling restores the meter",
+  $("lobbyCount").hidden === true && $("lobbyMeter").hidden === false);
+ui.renderCountdown({ phase: 3, remaining: 0, number: 0 });
+check("and the stale number is not ticked any more",
+  $("lobbyCountNum").textContent === "Go", $("lobbyCountNum").textContent);
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

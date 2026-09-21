@@ -55,6 +55,9 @@ process.env.TEST_MODE = "1";
 // of bodies in the arena means what it says.
 process.env.ROUND_SECONDS = "60";
 process.env.INTERMISSION_SECONDS = "1";
+// Shortened, not disabled: readying now opens a count before the round, and
+// this file needs to be on the other side of it.
+process.env.COUNTDOWN_SECONDS = "1";
 process.env.BOTS = "0";
 // Short enough to watch the window close within the test.
 process.env.LINGER_SEC = "3";
@@ -111,7 +114,7 @@ check("the join was accepted", !first.closed, JSON.stringify(first.closed || {})
 check("and escrowed the stake", (await money()).pot === STAKE, `${(await money()).pot}`);
 
 await first.deliver({ type: "ready", ready: true });
-await settle(400);
+await settle(1500);                       // the pre-round count, plus margin
 const std = await room("standard");
 check("the round is live", std.phase === "live", std.phase);
 check("one body in the arena", std.inWorld === 1, `${std.inWorld}`);

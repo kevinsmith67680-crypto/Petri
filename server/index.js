@@ -33,12 +33,12 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 
 import {
-  createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnPlayer,
+  createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnRing,
   setAim, queueAction, stepWorld, totalMass, TICK_HZ
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
-  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PROTOCOL_VERSION
+  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import { isValidStake, PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
@@ -97,6 +97,11 @@ const HZ = Math.max(10, Math.min(60, envInt("TICK_HZ", TICK_HZ)));
 
 // Rounds. Ten minutes of play, then a short intermission showing standings.
 const INTERMISSION_SECONDS = envInt("INTERMISSION_SECONDS", TEST_MODE ? 8 : 15);
+
+// The gap between the lobby filling and the whistle. Players who have just
+// pressed a button are not looking at the arena; dropping them straight into
+// it costs them the opening seconds of a round they have paid for.
+const COUNTDOWN_SECONDS = envInt("COUNTDOWN_SECONDS", 5);
 
 // Lobby. A round starts only once this many players have marked themselves
 // ready, and the server refuses connections past the maximum.
@@ -212,7 +217,7 @@ const server = http.createServer(async (req, res) => {
         players: r.clients.size,
         ready: readyCount(r),
         startsAt: r.lobbyMin,
-        phase: ["", "live", "intermission", "lobby"][r.round.phase] || r.round.phase,
+        phase: ["", "live", "intermission", "lobby", "countdown"][r.round.phase] || r.round.phase,
         round: r.round.number,
         arena: r.world.size,
         botTarget: r.bots,
@@ -529,7 +534,12 @@ const roundView = room => ({
   phase: room.round.phase,
   remaining: room.round.endsAt === Infinity
     ? 0
-    : Math.max(0, room.round.endsAt - room.world.time),
+    // The pre-round count is read as a number on a card, not as a clock, so it
+    // is ceilinged: "1" then covers the whole last second instead of half of
+    // it, and the count never shows a zero it sits on.
+    : room.round.phase === PHASE_COUNTDOWN
+      ? Math.ceil(Math.max(0, room.round.endsAt - room.world.time))
+      : Math.max(0, room.round.endsAt - room.world.time),
   number: room.round.number
 });
 
@@ -812,9 +822,46 @@ function toLobby(room) {
   pushLobby(room);
 }
 
+// The order players are dealt onto the starting ring. Neighbours on the ring
+// are neighbours in this list, so the humans are spread through it at even
+// intervals rather than left in a block: nobody opens wedged between two bots
+// while somebody else has the far side of the arena to themselves.
+export function startingOrder(humans, bots) {
+  if (!bots.length) return humans;
+  if (!humans.length) return bots;
+
+  const slots = humans.length + bots.length;
+  const step = slots / humans.length;          // >= 1, so no two humans collide
+  const order = new Array(slots).fill(null);
+  humans.forEach((p, i) => { order[Math.round(i * step)] = p; });
+
+  let b = 0;
+  for (let i = 0; i < slots; i++) if (!order[i]) order[i] = bots[b++];
+  return order;
+}
+
+// Enough hands are up. The round does not begin here: the lobby holds for a
+// visible count first, so nobody is dropped into the arena mid-sentence.
 function maybeStartRound(room) {
   if (room.round.phase !== PHASE_LOBBY) return;
   if (readyCount(room) < room.lobbyMin) return;
+  if (room.starting) return;           // a start is already in flight
+  room.round.phase = PHASE_COUNTDOWN;
+  room.round.endsAt = room.world.time + COUNTDOWN_SECONDS;
+  pushLobby(room);
+}
+
+// Back to waiting. Reached when someone un-readies or drops during the count,
+// and when the re-stake at the top of startRound cannot fund the round.
+function cancelCountdown(room) {
+  room.round.phase = PHASE_LOBBY;
+  room.round.endsAt = Infinity;
+  pushLobby(room);
+}
+
+// The count has run out. Kept separate from the countdown so the async
+// re-staking inside startRound cannot be entered twice.
+function beginRound(room) {
   if (room.starting) return;           // re-staking is async; do not race it
   room.starting = true;
   startRound(room)
@@ -850,9 +897,10 @@ async function startRound(room) {
     await pushAccount(ws, meta);
   }
 
-  // Everyone who could not pay has been un-readied, so check again.
-  if (readyCount(room) < room.lobbyMin && round.phase !== PHASE_INTERMISSION) {
-    pushLobby(room);
+  // Everyone who could not pay has been un-readied, so check again. Nothing
+  // has been spawned yet, so the room simply goes back to waiting.
+  if (readyCount(room) < room.lobbyMin) {
+    cancelCountdown(room);
     return;
   }
 
@@ -861,16 +909,22 @@ async function startRound(room) {
   round.endsAt = world.time + room.roundSeconds;
   resetArena(world);
 
+  // Bots first: the roster has to be final before anyone is placed, or the
+  // ring is spaced for a field that is about to change size.
+  syncBots(room);
+
   // Only players who marked themselves ready take the field.
+  const humans = [];
   for (const meta of room.clients.values()) {
     meta.spectateId = null;
     const player = world.players.get(meta.id);
     if (!player) continue;
-    if (meta.ready) spawnPlayer(world, player);
+    if (meta.ready) humans.push(player);
     else { player.alive = false; player.cells = []; }
   }
+  const bots = [...world.players.values()].filter(p => p.bot);
+  spawnRing(world, startingOrder(humans, bots));
 
-  syncBots(room);
   room.lastEater.clear();
   broadcast(room, {
     type: "round_start", mode: room.mode.id,
@@ -1208,8 +1262,15 @@ function tickRoom(room, dt) {
   } else if (round.phase === PHASE_INTERMISSION && world.time >= round.endsAt) {
     toLobby(room);
     // Anyone who opted in while the standings were up is already ready, so
-    // the next round can begin immediately rather than waiting to be asked.
+    // the next round can start counting down rather than waiting to be asked.
     maybeStartRound(room);
+  } else if (round.phase === PHASE_COUNTDOWN && !room.starting) {
+    // Checked every tick rather than only where readiness changes, so a player
+    // dropping their connection mid-count aborts it the same as un-readying.
+    // Skipped once a start is in flight: the phase stays COUNTDOWN across the
+    // awaits inside startRound, which does its own final check.
+    if (readyCount(room) < room.lobbyMin) cancelCountdown(room);
+    else if (world.time >= round.endsAt) beginRound(room);
   }
 
   if (events.length) {

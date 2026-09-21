@@ -263,6 +263,17 @@ check("pressing ready puts a frame on the wire",
   sent.some(m => m.includes('"type":"ready"') && m.includes('"ready":true')),
   sent.join(" ") || "nothing sent");
 
+// PHASE_COUNTDOWN is 4. The lobby stays up and swaps the ready meter for the
+// count: treating it as "not the lobby" hid the card the count lives on.
+live.handlers.message.forEach(fn => fn({ data: lobbyMsg(4) }));
+check("the countdown keeps the lobby open", $("lobbyVeil").hidden === false);
+check("and shows the count instead of the ready meter",
+  $("lobbyCount").hidden === false && $("lobbyMeter").hidden === true);
+
+live.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
+check("a cancelled countdown puts the meter back",
+  $("lobbyCount").hidden === true && $("lobbyMeter").hidden === false);
+
 live.handlers.message.forEach(fn => fn({
   data: JSON.stringify({ type: "round_start", mode: "standard", number: 1, seconds: 120 })
 }));

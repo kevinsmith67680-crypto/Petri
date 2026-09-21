@@ -16,7 +16,7 @@ import { createUI } from "./ui.js";
 import { SERVER_URL } from "./config.js";
 import { PRACTICE } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
-import { PHASE_LOBBY } from "../shared/protocol.js";
+import { PHASE_LOBBY, PHASE_COUNTDOWN } from "../shared/protocol.js";
 import { createAccountClient } from "./account.js";
 
 const params = new URLSearchParams(location.search);
@@ -314,7 +314,9 @@ function onRound(msg) {
     // The server broadcasts lobby state on every join and leave, including
     // during a live round. Acting on those would drop a mid-game player back
     // to the lobby overlay because somebody else connected.
-    if (msg.phase !== PHASE_LOBBY) return;
+    // PHASE_COUNTDOWN is still the lobby: the card stays up and swaps the
+    // ready meter for the count, so it has to be let through here too.
+    if (msg.phase !== PHASE_LOBBY && msg.phase !== PHASE_COUNTDOWN) return;
     if (spectating) { spectating = false; ui.hideSpectator(); }
     // The lobby overlay replaces the start card: in live mode you do not
     // press Start, you declare yourself ready and wait for the room.

@@ -245,9 +245,14 @@ export function createWorld(seed = 1, opts = {}) {
 
 const rand = (world, a, b) => a + world.rng() * (b - a);
 
+// Kept clear of the walls, so nothing spawns already pinned against one.
+const SPAWN_PAD = 140;
+
 function spawnPoint(world) {
-  const pad = 140;
-  return { x: rand(world, pad, world.size - pad), y: rand(world, pad, world.size - pad) };
+  return {
+    x: rand(world, SPAWN_PAD, world.size - SPAWN_PAD),
+    y: rand(world, SPAWN_PAD, world.size - SPAWN_PAD)
+  };
 }
 
 function makePellet(world, x, y, mass, vx, vy, ci) {
@@ -305,7 +310,12 @@ export function removePlayer(world, id) {
 
 export function spawnPlayer(world, player, mass = START_MASS) {
   const p = spawnPoint(world);
-  player.cells = [makeCell(world, p.x, p.y, mass, player.ci)];
+  placePlayer(world, player, p.x, p.y, mass);
+}
+
+// The body of a spawn once somewhere to put it has been decided.
+function placePlayer(world, player, x, y, mass) {
+  player.cells = [makeCell(world, x, y, mass, player.ci)];
   player.alive = true;
   player.spawnedAt = world.time;
   player.rank = 0;
@@ -313,6 +323,44 @@ export function spawnPlayer(world, player, mass = START_MASS) {
   player.input.x = 0;
   player.input.y = 0;
   player.actions.length = 0;
+}
+
+// Target distance between neighbouring spawns. A lobby too big to seat at this
+// spacing gets the widest ring the arena holds instead, which is tighter but
+// still even — see spawnRing.
+export const SPAWN_GAP = 520;
+
+// Start everyone the same distance apart.
+//
+// Random spawn points decide the round before it begins: two players can open
+// a body-length apart while a third has a quarter of the board to itself. A
+// ring at equal angular spacing gives every player an identical opening — the
+// same distance to either neighbour, to the centre, and to the wall — which is
+// the only arrangement that is defensible with money on the table.
+//
+// Order matters: neighbours on the ring are whoever is adjacent in `players`,
+// so a caller that wants humans spread through a field of bots interleaves
+// them before calling.
+export function spawnRing(world, players, mass = START_MASS) {
+  const n = players.length;
+  if (!n) return;
+
+  const c = world.size / 2;
+  const maxR = c - SPAWN_PAD;
+  // Neighbours on a ring of radius r sit 2r·sin(pi/n) apart, so this is the
+  // radius that puts them exactly SPAWN_GAP apart. A full 100-player lobby
+  // asks for more room than the arena has and is clamped to the wall padding;
+  // the spacing stays equal, just smaller than the target.
+  const want = n > 1 ? SPAWN_GAP / (2 * Math.sin(Math.PI / n)) : 0;
+  const r = Math.min(maxR, want);
+  // Seeded, so a given world still replays identically. Without it the ring
+  // lands on the same points every round and players learn the openings.
+  const turn = world.rng() * Math.PI * 2;
+
+  for (let i = 0; i < n; i++) {
+    const a = turn + (i * Math.PI * 2) / n;
+    placePlayer(world, players[i], c + Math.cos(a) * r, c + Math.sin(a) * r, mass);
+  }
 }
 
 export function fillBots(world, target = DEFAULT_BOTS) {
@@ -779,8 +827,10 @@ export function resetArena(world) {
   world.viruses.length = 0;
   for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
 
+  // Evenly spaced rather than scattered: a fresh round should not hand anyone
+  // a neighbour within eating distance while someone else opens alone.
+  spawnRing(world, [...world.players.values()]);
   for (const p of world.players.values()) {
-    spawnPlayer(world, p);
     p.orbs = 0;
     p.eaten = 0;
     p.peak = START_MASS;

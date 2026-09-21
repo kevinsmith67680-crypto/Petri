@@ -69,6 +69,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `BOTS` | 0; in test mode each room fills to its own lobby size | Overrides both rooms. Bots exist only while a human is in the room |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `INTERMISSION_SECONDS` | 15 | Gap between rounds |
+| `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
 | `LOBBY_MAX` | 150 | Hard connection cap |
 | `ALLOWED_ORIGINS` | *(unset)* | Comma-separated origin allowlist. Unset means allow anything — dev only |
@@ -366,7 +367,7 @@ The scoping rules survive intact. **A spectator inherits the target's view radiu
 
 Loose ends handled: the watched player can be eaten at any moment, so targets are re-checked every tick and the view cycles on automatically. Respawning, a new round, and returning to the lobby all end spectating.
 
-**One thing to think about.** Mid-round respawning is still allowed, so a player can die, watch the leader, and rejoin. Spawn points are random, so the intel is of limited use — but if that bothers you, the fix is to make death final for the round and spectating the only option after it.
+**One thing to think about.** Mid-round respawning is still allowed, so a player can die, watch the leader, and rejoin. Mid-round spawn points stay random — only round starts use the ring — so the intel is of limited use — but if that bothers you, the fix is to make death final for the round and spectating the only option after it.
 
 ### The mass readout
 
@@ -663,7 +664,9 @@ Overrides apply to every room at once: `LOBBY_MIN`, `ROUND_SECONDS`, `PAID_POSIT
 
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
 
-A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and the server refuses connections past **`LOBBY_MAX`** (default 150) with a "server full" close. The cycle is lobby → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
+A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and the server refuses connections past **`LOBBY_MAX`** (default 150) with a "server full" close. The cycle is lobby → **5s countdown** → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
+
+**The countdown is its own round phase** (`PHASE_COUNTDOWN`), not a flag on the lobby. That puts it on the snapshot clock every other timer already rides on, so the number on the card is the server's and cannot drift away from when the round actually starts. The lobby card stays up and swaps its ready meter for the count. If anyone un-readies or drops their connection during it the count is abandoned and the room goes back to waiting — checked every tick rather than only where readiness changes, so a dropped socket aborts it the same as a released button. `COUNTDOWN_SECONDS` overrides the length.
 
 In test mode each room fills to the size its mode is built for — **100 bots for Standard, 50 for High stakes** — so a solo test sees the board the mode is actually designed around rather than an empty field. Bots are created when the first player joins a room and removed when the last one leaves; simulating a hundred of them in a room nobody is in doubled the server's work for no one's benefit. Measured per tick with both rooms present: 0.33ms idle, 1.49ms with only High stakes occupied, 3.63ms with only Standard, 4.96ms with both.
 
@@ -696,11 +699,15 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
 
+**Everyone starts the same distance apart.** Random spawn points decided rounds before they began: two players could open within eating distance of each other while a third had a quarter of the board to itself. The field is now dealt onto one ring at equal angular spacing (`spawnRing` in `shared/sim.js`), so every opening position is interchangeable — same distance to either neighbour, same distance to the centre, same distance to the wall. The target gap is 520 units; a lobby too big to seat at that spacing gets the widest ring the arena holds instead, which is tighter but still even (100 players come out 268 apart, about fifteen starting diameters). The ring is turned by a seeded angle each round, so it is reproducible from the world seed without landing on the same points every time. Where bots stand in for a short lobby, the humans are dealt into the ring at even intervals rather than left in a block.
+
+Only round starts use the ring. A **mid-round respawn is still random**, which is deliberate: a ring position is an opening, and handing one to a player who died at minute eight would be a reward for dying.
+
 The clock sits top centre: a large countdown, the round number, and the **wall-clock time the round finishes** ("ends 16:10"). The finish time is formatted to the minute and stays fixed for the whole round, because `now` and `remaining` move together — verified across a full ten minutes, one distinct value. The countdown turns red and pulses in the last 30 seconds, which is the only motion in the HUD so it reads as urgency rather than decoration.
 
 Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
 
-Tune with `ROUND_SECONDS` and `INTERMISSION_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
+Tune with `ROUND_SECONDS`, `INTERMISSION_SECONDS` and `COUNTDOWN_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
 
 **Requires migration 004.** The `survived` outcome is new and the original check constraint rejects it, so run `server/db/migrations/004_survived_outcome.sql` before deploying or every end-of-round write fails.
 
@@ -795,7 +802,7 @@ npm run dev          # test mode, 60 bots, 2-minute rounds
 npm run dev:solo     # 100 bots at full density, 1-minute rounds
 ```
 
-Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matters. Without it you are a guest playing locally against bots, with no server and therefore no accounts; the sign-in panel is replaced by a note saying so. Create an account, mark yourself ready, and the round starts immediately.
+Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matters. Without it you are a guest playing locally against bots, with no server and therefore no accounts; the sign-in panel is replaced by a note saying so. Create an account, mark yourself ready, and the round starts after a five-second count.
 
 | | Normal | Test mode |
 |---|---|---|
@@ -803,6 +810,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
 | `ROUND_SECONDS` | 600 | **120** |
 | `INTERMISSION_SECONDS` | 15 | **8** |
+| `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
 
 Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=100 npm start` works.
 

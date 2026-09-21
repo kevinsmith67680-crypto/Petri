@@ -43,9 +43,13 @@ const PORT = 8700 + (process.pid % 200);
 process.env.PORT = String(PORT);
 process.env.TEST_MODE = "1";
 delete process.env.BOTS;
-// Short rounds so a full cycle can be observed without a long wait.
+// Short rounds so a full cycle can be observed without a long wait. The
+// pre-round count is shortened for the same reason, not switched off: a round
+// that starts without passing through PHASE_COUNTDOWN is a different code path
+// from the one that ships.
 process.env.ROUND_SECONDS = "3";
 process.env.INTERMISSION_SECONDS = "1";
+process.env.COUNTDOWN_SECONDS = "1";
 // An allowlist that names somewhere else entirely. This is the production
 // shape of the bug: the list is correct for the domain and wrong for every
 // other host the same server answers on. Joins in this file are driven
@@ -73,7 +77,7 @@ const health = async () => (await (await fetch(`http://localhost:${PORT}/health`
 const room = async id => (await health()).rooms.find(r => r.mode === id);
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
 
-const { PROTOCOL_VERSION } = await import("../shared/protocol.js");
+const { PROTOCOL_VERSION, PHASE_COUNTDOWN } = await import("../shared/protocol.js");
 
 async function join(username, stake, protocol = PROTOCOL_VERSION) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
@@ -247,13 +251,27 @@ check("and the player is told to reload", /out of date/i.test(told),
 check("it never entered a room",
   (await room("standard")).players === (await room("standard")).players);
 
-console.log("\n-- the ready flow still starts a round --");
+console.log("\n-- the ready flow counts down, then starts a round --");
 
+// Readying no longer drops you straight into the arena: the lobby holds for a
+// count first, which is what the card on screen is showing. The round has to
+// still arrive at the end of it.
 const before = bob.out.length;
 await bob.deliver({ type: "ready", ready: true });
-await settle(300);
+await settle(200);
+check("the room counts down before it starts",
+  (await room("highstakes")).phase === "countdown",
+  (await room("highstakes")).phase);
+const counting = bob.out.slice(before).filter(m => m !== "<binary>").map(JSON.parse);
+check("and the lobby is told so",
+  counting.some(m => m.type === "lobby" && m.phase === PHASE_COUNTDOWN),
+  counting.map(m => m.type).join(",") || "nothing");
+check("nothing has started yet",
+  !counting.some(m => m.type === "round_start"));
+
+await settle(1200);
 const msgs = bob.out.slice(before).filter(m => m !== "<binary>");
-check("readying one player starts the round",
+check("the count runs out and the round starts",
   msgs.some(m => m.includes("round_start")), msgs.join(" ").slice(0, 120) || "nothing");
 check("the room reports itself live", (await room("highstakes")).phase === "live");
 
@@ -280,12 +298,12 @@ console.log("\n-- one round rolls into the next --");
   check("joining escrows the stake", joined.pot === 1_000_000, `${joined.pot}`);
 
   await ws.deliver({ type: "ready", ready: true });
-  await settle(300);
+  await settle(1400);                     // the count, plus margin
   const texts = () => ws.out.filter(m => m !== "<binary>").map(JSON.parse);
   check("round one starts", texts().some(m => m.type === "round_start"));
 
-  // Round (3s) then intermission (1s), with margin.
-  await settle(5000);
+  // Round (3s), intermission (1s) and the next count (1s), with margin.
+  await settle(6500);
   const rounds = texts().filter(m => m.type === "round_start").length;
   check("round two starts without being asked again", rounds >= 2, `${rounds} rounds`);
 
@@ -303,6 +321,31 @@ console.log("\n-- one round rolls into the next --");
   const after = await money();
   check("the balance paid for it", after.balance < joined.balance,
     `${joined.balance} -> ${after.balance}`);
+}
+
+console.log("\n-- a short lobby is padded without bunching the humans --");
+
+// Bots stand in for a lobby that has not filled. They are dealt onto the same
+// starting ring, so the order they go on in is the whole of the difference
+// between "spread through the field" and "all four of us in one arc".
+{
+  const { startingOrder } = await import("../server/index.js");
+  const h = n => Array.from({ length: n }, (_, i) => `h${i}`);
+  const b = n => Array.from({ length: n }, (_, i) => `b${i}`);
+
+  const order = startingOrder(h(4), b(12));
+  const at = order.map((p, i) => [p, i]).filter(([p]) => String(p)[0] === "h").map(([, i]) => i);
+  check("every player is on the ring", order.length === 16 && new Set(order).size === 16);
+  check("and they are spread evenly through it", JSON.stringify(at) === "[0,4,8,12]",
+    JSON.stringify(at));
+
+  // Uneven divisions cannot collide two humans into one slot or drop a bot.
+  const odd = startingOrder(h(3), b(7));
+  check("an uneven split still seats everyone",
+    odd.length === 10 && new Set(odd).size === 10, JSON.stringify(odd));
+
+  check("a full lobby needs no padding", startingOrder(h(5), []).length === 5);
+  check("and an empty one is all bots", startingOrder([], b(3)).length === 3);
 }
 
 console.log("\n-- the origin guard cannot lock out the server's own page --");
