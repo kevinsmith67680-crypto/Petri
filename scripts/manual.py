@@ -51,6 +51,7 @@ def read_constants():
     the game cannot disagree."""
     script = """
     import * as S from './shared/sim.js';
+    const { createWorld, addPlayer, spawnRing } = S;
     import { MODES } from './shared/modes.js';
     import * as W from './shared/wager.js';
     const names = ['WORLD','PELLETS','VIRUSES','START_MASS','PELLET_MASS','EJECT_MASS',
@@ -93,6 +94,69 @@ def read_constants():
       out.pursuit.push({ ratio, prey, theirs: speed(prey), yours: speed(you),
                          edge: (speed(prey) / speed(you) - 1) * 100 });
     }
+    // The board: measured, not asserted. A real seeded arena is built and its
+    // orb and virus layout is sampled, so the map in the manual is a map of a
+    // world the server could actually deal.
+    const nn = pts => {
+      const G = 400, b = new Map(), key = (a, c) => a * 100003 + c;
+      pts.forEach((q, i) => {
+        const k = key((q.x / G) | 0, (q.y / G) | 0);
+        if (!b.has(k)) b.set(k, []);
+        b.get(k).push(i);
+      });
+      const out = [];
+      pts.forEach((q, i) => {
+        let best = Infinity;
+        const gx = (q.x / G) | 0, gy = (q.y / G) | 0;
+        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++)
+          for (const j of b.get(key(gx + dx, gy + dy)) || []) {
+            if (j === i) continue;
+            const d = Math.hypot(pts[j].x - q.x, pts[j].y - q.y);
+            if (d < best) best = d;
+          }
+        if (best < Infinity) out.push(best);
+      });
+      return out.sort((a, c) => a - c);
+    };
+    const med = a => a[(a.length / 2) | 0];
+
+    out.board = {};
+    for (const m of MODES) {
+      const w = createWorld(42, { size: m.world.size, pellets: m.world.pellets,
+                                  viruses: m.world.viruses });
+      const Sz = m.world.size, N = 10, cells = new Array(N * N).fill(0);
+      for (const q of w.pellets)
+        cells[Math.min(N - 1, (q.y / Sz * N) | 0) * N + Math.min(N - 1, (q.x / Sz * N) | 0)]++;
+
+      const ring = createWorld(1, { size: Sz, pellets: 0, viruses: 0 });
+      const ps = [];
+      for (let i = 0; i < m.lobbyMin; i++)
+        ps.push(addPlayer(ring, { id: 'p' + i, name: 'P' + i }));
+      spawnRing(ring, ps);
+      const c = Sz / 2;
+      const rr = Math.hypot(ps[0].cells[0].x - c, ps[0].cells[0].y - c);
+
+      out.board[m.id] = {
+        size: Sz,
+        orbGap: med(nn(w.pellets)),
+        virusGap: med(nn(w.viruses)),
+        virusMin: nn(w.viruses)[0],
+        areaPerOrb: Sz * Sz / w.pellets.length,
+        areaPerVirus: Sz * Sz / w.viruses.length,
+        richest: Math.max(...cells),
+        emptiest: Math.min(...cells),
+        ringRadius: rr,
+        ringGap: Math.hypot(ps[0].cells[0].x - ps[1].cells[0].x,
+                            ps[0].cells[0].y - ps[1].cells[0].y),
+        wallClear: Sz / 2 - rr,
+        // A thinned sample for drawing. Every 9th orb keeps the clumping
+        // visible without putting 4,100 circles in a PDF.
+        orbs: w.pellets.filter((_, i) => i % 9 === 0).map(q => [Math.round(q.x), Math.round(q.y)]),
+        vir: w.viruses.map(q => [Math.round(q.x), Math.round(q.y)]),
+      };
+    }
+    out.spawnPad = 140;
+
     // View radius has a floor, so it does NOT grow with mass until you are
     // already large. Solved rather than assumed.
     const { viewRadius } = await import('./shared/protocol.js');
@@ -137,6 +201,10 @@ POP_MASS = K["VIRUS_MASS"] * K["VIRUS_EAT_RATIO"]       # 126.5
 EJECT_LOSS = (K["EJECT_MASS"] - K["EJECT_KEEP"]) / K["EJECT_MASS"] * 100
 MASS_PER_USDC = K["UNIT"] / K["MICRO_PER_MASS"]         # 200
 ORBS_TO_100 = -(-(100 - K["START_MASS"]) // K["PELLET_MASS"])
+
+
+def radius_of(mass):
+    return mass ** 0.5 * 4 * 2      # diameter, which is what a player perceives
 
 
 def money(units):
@@ -489,6 +557,57 @@ def dia_split_reach():
     return d
 
 
+def dia_board(mode="standard", side=None, ring=True):
+    """A real seeded arena, drawn to scale: orbs, viruses and the opening ring."""
+    import math
+    b = K["board"][mode]
+    side = side or CONTENT_W * 0.46
+    d = Drawing(side, side + 14)
+    sc = side / b["size"]
+    d.add(Rect(0, 0, side, side, fillColor=colors.HexColor("#ffffff"),
+               strokeColor=RULE, strokeWidth=0.8))
+    pad = K["spawnPad"] * sc
+    d.add(Rect(pad, pad, side - 2 * pad, side - 2 * pad, fillColor=None,
+               strokeColor=colors.HexColor("#eceae5"), strokeWidth=0.5,
+               strokeDashArray=[2, 3]))
+
+    for x, y in b["orbs"]:
+        d.add(Circle(x * sc, y * sc, 0.85, fillColor=colors.HexColor("#b4afc8"),
+                     strokeColor=None))
+    for x, y in b["vir"]:
+        d.add(Circle(x * sc, y * sc, 2.1, fillColor=VIRUS, strokeColor=None))
+
+    if ring:
+        r = b["ringRadius"] * sc
+        c = side / 2
+        d.add(Circle(c, c, r, fillColor=None, strokeColor=ACCENT, strokeWidth=0.8,
+                     strokeDashArray=[2, 2]))
+        # The real count, not a decorative sample: this is what a full lobby
+        # standing on the ring actually looks like.
+        n = STD["lobbyMin"] if mode == "standard" else HIGH["lobbyMin"]
+        for i in range(n):
+            a = i * 2 * math.pi / n
+            d.add(Circle(c + math.cos(a) * r, c + math.sin(a) * r, 1.5,
+                         fillColor=ACCENT, strokeColor=None))
+    d.add(String(0, side + 5, "ONE REAL ARENA, TO SCALE", fontName="Helvetica-Bold",
+                 fontSize=7, fillColor=MUTED))
+    return d
+
+
+def legend_row(colour, label, r=3):
+    d = Drawing(9, 9)
+    d.add(Circle(4, 3.5, r, fillColor=colour, strokeColor=None))
+    t = Table([[d, Paragraph(label, S_CELL)]], colWidths=[6 * mm, None])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+    ]))
+    return t
+
+
 def technique(title, framing):
     head = [P(title, style("tt", fontName="Helvetica-Bold", fontSize=13, leading=16,
                            spaceBefore=0, spaceAfter=2)),
@@ -719,6 +838,7 @@ def story():
         datatable(["", ""],
                   [["Controls", "Four inputs, and the HUD"],
                    ["The rules", "Eating, speed, decay"],
+                   ["The board", "Spawns, orbs and virus layout"],
                    ["Splitting", "What it buys and what it costs"],
                    ["Ejecting", "The only thing worth spending on"],
                    ["Viruses", "Cover, mine, and weapon"]],
@@ -830,6 +950,133 @@ def story():
                "noticeable. At 1,600 you are losing more than three a second, and "
                "standing still is going backwards. Big players have to keep eating "
                "purely to stand still.", S_BODY))
+
+    s.append(PageBreak())
+
+    # ---- the board ---------------------------------------------------------
+    s.append(Mark("The board"))
+    s.append(P("The board", S_H1))
+    s.append(P("Where you start, and where everything else is. None of it is "
+               "decorative - the layout decides what your first two minutes can "
+               "possibly look like.", S_LEAD))
+
+    STDB = K["board"]["standard"]
+    HIB = K["board"]["highstakes"]
+
+    s.append(two_col(
+        [P("Spawn position", S_H2),
+         P("At the start of a round the whole field is dealt onto <b>one ring at "
+           "equal angular spacing</b>. Every player gets an identical opening: the "
+           "same distance to either neighbour, the same distance to the centre, the "
+           "same distance to the wall. Nobody is handed a quiet corner and nobody "
+           "opens inside somebody's mouth.", S_BODY),
+         P(f"The ring wants to seat everyone {K['SPAWN_GAP']:.0f} units apart, but a full "
+           "lobby asks for a bigger circle than the arena holds, so it clamps to the "
+           "widest ring that fits. At a full Standard lobby that means a radius of "
+           f"<b>{STDB['ringRadius']:.0f}</b>, neighbours <b>{STDB['ringGap']:.0f} units</b> "
+           "apart, and the ring sitting exactly on the wall padding.", S_BODY)],
+        [dia_board("standard"),
+         legend_row(colors.HexColor("#b4afc8"), "orbs (one in nine drawn)", 1.6),
+         legend_row(VIRUS, "viruses, all 90 of them", 2.4),
+         legend_row(ACCENT, f"the {STD['lobbyMin']} opening positions", 2.0)],
+        ratio=0.52))
+
+    s.append(callout(
+        "So a full lobby opens on the perimeter",
+        f"With {STD['lobbyMin']} players the ring is pinned {K['spawnPad']} units off "
+        "the wall and the entire middle of the arena is empty. Everyone starts with "
+        "their back to a wall and open board in front of them. The first thing worth "
+        "doing is moving inward - the centre is the only part of the map nobody is "
+        "standing in, and it is where the orbs are untouched."))
+
+    s.append(datatable(
+        ["At a full lobby", "Standard", "High stakes"],
+        [["Players on the ring", str(STD["lobbyMin"]), str(HIGH["lobbyMin"])],
+         ["Ring radius", f"{STDB['ringRadius']:.0f}", f"{HIB['ringRadius']:.0f}"],
+         ["Gap to each neighbour", f"{STDB['ringGap']:.0f}",
+          f"{HIB['ringGap']:.0f}"],
+         ["Clear of the wall", f"{STDB['wallClear']:.0f}", f"{HIB['wallClear']:.0f}"]],
+        [50 * mm, None, None]))
+
+    s.append(P("Two details worth knowing. The ring is <b>turned by a fresh angle "
+               "every round</b>, so there is no memorised opening. And a "
+               "<b>mid-round respawn is not on the ring</b> - it is a uniformly random "
+               "point anywhere in the arena, which is deliberate: a ring position is "
+               "an opening, and handing one to somebody who died at minute eight "
+               "would be a reward for dying.", S_BODY))
+
+    s.append(PageBreak())
+
+    s.append(P("How the orbs are spread", S_H2))
+    s.append(P("<b>Uniformly at random - which is not the same as evenly.</b> This is "
+               "the most useful thing on the page. Random placement clumps: it leaves "
+               "rich patches and bare stretches, and both are real rather than "
+               "imagined.", S_BODY))
+
+    s.append(two_col(
+        [datatable(
+            ["Orbs", "Standard", "High stakes"],
+            [["Orbs in play", f"{STD['world']['pellets']:,}", f"{HIGH['world']['pellets']:,}"],
+             ["Board area each", f"{STDB['areaPerOrb']:,.0f}", f"{HIB['areaPerOrb']:,.0f}"],
+             ["Typical gap between them", f"{STDB['orbGap']:.0f} units",
+              f"{HIB['orbGap']:.0f} units"],
+             ["Richest hundredth of the board",
+              f"{STDB['richest']} orbs", f"{HIB['richest']} orbs"],
+             ["Emptiest hundredth",
+              f"{STDB['emptiest']} orbs", f"{HIB['emptiest']} orbs"]],
+            [36 * mm, None, None])],
+        [P("What that ratio means", S_H3),
+         P(f"The busiest hundredth of a Standard board carries "
+           f"<b>{STDB['richest'] / STDB['emptiest']:.1f} times</b> what the emptiest "
+           "does. Finding a rich patch is worth real time early on, and the difference "
+           "between a good first two minutes and a mediocre one is mostly whether you "
+           "swept one.", S_BODY),
+         P("Both modes are tuned to the same density - about "
+           f"{STDB['areaPerOrb']:,.0f} units of board per orb - so a smaller arena is "
+           "not a poorer one.", S_BODY)],
+        ratio=0.52))
+
+    s.append(P("Orbs are replaced the moment they are eaten, so the arena never runs "
+               "down: the count is held at "
+               f"{STD['world']['pellets']:,} all round. But <b>the replacement appears "
+               "at a fresh random point, not where the old one was</b>. Farming a "
+               "patch really does exhaust it, and the mass you took reappears "
+               "somewhere else entirely - usually somewhere you are not.", S_BODY))
+    s.append(P("Ejected mass lands in the same pool. A blob somebody threw is an orb "
+               "like any other once it comes to rest, worth several times a natural "
+               "one, and free to anyone who reaches it first.", S_BODY))
+
+    s.append(P("How the viruses are spread", S_H2))
+    s.append(P("Also uniformly at random, and also clumpy - which matters far more "
+               "for viruses, because the gaps are wide enough to plan around and the "
+               "clusters are dangerous.", S_BODY))
+
+    s.append(datatable(
+        ["Viruses", "Standard", "High stakes"],
+        [["In the arena at the start", str(STD["world"]["viruses"]), str(HIGH["world"]["viruses"])],
+         ["Board area each", f"{STDB['areaPerVirus']:,.0f}", f"{HIB['areaPerVirus']:,.0f}"],
+         ["Typical gap to the nearest other",
+          f"{STDB['virusGap']:.0f} units", f"{HIB['virusGap']:.0f} units"],
+         ["Closest pair on a sample board",
+          f"{STDB['virusMin']:.0f} units apart", f"{HIB['virusMin']:.0f} units apart"],
+         ["Ceiling once players start feeding them",
+          f"{STD['world']['viruses'] * K['VIRUS_MAX_RATIO']:.0f}",
+          f"{HIGH['world']['viruses'] * K['VIRUS_MAX_RATIO']:.0f}"]],
+        [56 * mm, None, None]))
+
+    s.append(bullets([
+        f"A virus is {radius_of(K['VIRUS_MASS']):.0f} units across the middle, and a "
+        f"typical one sits about {STDB['virusGap']:.0f} units from its nearest "
+        "neighbour - so most of the board is open, and you can usually plan a route "
+        "that never comes near one.",
+        f"But pairs happen. The closest two on the sample board above are "
+        f"{STDB['virusMin']:.0f} units apart, barely more than their own diameters. "
+        f"A gap like that is a death corridor if you are over {POP_MASS:.0f} mass, and "
+        "a fortress if you are under it.",
+        "The population is not fixed once play starts: feeding splits viruses and "
+        "adds new ones, up to the ceiling. By the endgame there are more viruses "
+        "than there were at the whistle, and they are wherever players wanted them.",
+    ]))
 
     s.append(PageBreak())
 

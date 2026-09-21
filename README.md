@@ -705,7 +705,9 @@ When the timer expires everyone still alive is ranked by mass, their run is reco
 
 ### The player's manual
 
-`docs/engulfs-field-manual.pdf` is a 16-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, viruses as both hazard and weapon, what is actually at stake in a wagered round, the eight skills a round is won with, and a technique chapter covering positioning, split accuracy, mass management, map awareness, risk, prediction, virus play and team tactics.
+`docs/engulfs-field-manual.pdf` is an 18-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, how the board is laid out, viruses as both hazard and weapon, what is actually at stake in a wagered round, the eight skills a round is won with, and a technique chapter covering positioning, split accuracy, mass management, map awareness, risk, prediction, virus play and team tactics.
+
+The board chapter is measured rather than described: the build seeds a real arena, computes the spawn ring and the nearest-neighbour spacing of its orbs and viruses, and draws that same arena to scale. The map in the manual is a map of a world the server could deal.
 
 It is generated, not written by hand:
 
