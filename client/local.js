@@ -58,7 +58,9 @@ export function createLocalConnection({ name = "You", bots = 14, seed, world: op
 
       const pellets = world.pellets.map(p =>
         [p.x, p.y, p.ci, p.mass > PELLET_MASS ? 1 : 0, p.owner === "me" ? 1 : 0]);
-      const viruses = world.viruses.map(v => [v.x, v.y]);
+      // Same shape the wire uses, feed count and id included, so practice and
+      // live render a fed virus identically.
+      const viruses = world.viruses.map(v => [v.x, v.y, v.fed, v.vid]);
       const c = centroid(me);
       const rank = rankOf(world, "me");
 

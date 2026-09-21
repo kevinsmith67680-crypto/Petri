@@ -12,7 +12,8 @@ import {
   totalMass, centroid, leaderboard, TICK_HZ, WORLD, PELLETS, VIRUSES,
   radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
   advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN,
-  EAT_RATIO, spawnRing, resetArena, SPAWN_GAP, START_MASS
+  EAT_RATIO, spawnRing, resetArena, SPAWN_GAP, START_MASS,
+  VIRUS_FEED_HITS, VIRUS_MAX_RATIO
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -311,6 +312,102 @@ console.log("\n-- ejected mass behaves like a projectile --");
     Math.hypot(field[0].cells[0].x - wasAt.x, field[0].cells[0].y - wasAt.y) > 1,
     `${wasAt.x.toFixed(0)},${wasAt.y.toFixed(0)} -> ` +
     `${field[0].cells[0].x.toFixed(0)},${field[0].cells[0].y.toFixed(0)}`);
+}
+
+// ── feeding a virus splits it ───────────────────────────────────────────────
+
+// agar.io's virus feeding: shoot ejected mass into one and the third hit
+// splits it, sending a new virus off along the line the mass came in on.
+{
+  // Throw one blob at the virus and run until it lands. The thrower is parked
+  // out of the way after each throw, or it chases its own mass down.
+  const feed = (w, ent, v) => {
+    ent.cells[0].mass = 200;
+    ent.cells[0].x = v.x - 300;
+    ent.cells[0].y = v.y;
+    setAim(w, ent.id, 600, 0);
+    queueAction(w, ent.id, "eject");
+    stepWorld(w, 1 / TICK_HZ);
+    ent.cells[0].x = v.x - 3000;
+    setAim(w, ent.id, 0, 0);
+    for (let i = 0; i < 20; i++) stepWorld(w, 1 / TICK_HZ);
+  };
+
+  const world = createWorld(11, { size: 8800, pellets: 0, viruses: 1 });
+  const thrower = addPlayer(world, { id: "a", name: "A" });
+  const virus = world.viruses[0];
+  virus.x = 4400; virus.y = 4400;
+
+  feed(world, thrower, virus);
+  check("one blob is swallowed by the virus", virus.fed === 1, `fed ${virus.fed}`);
+  check("and the blob is gone rather than left sitting on it",
+    world.pellets.filter(p => p.owner === "a" && !p.dead).length === 0,
+    `${world.pellets.length} pellets`);
+  check("one feed is not a split", world.viruses.length === 1, `${world.viruses.length}`);
+
+  feed(world, thrower, virus);
+  check("two is not either", world.viruses.length === 1 && virus.fed === 2,
+    `${world.viruses.length} viruses, fed ${virus.fed}`);
+
+  feed(world, thrower, virus);
+  check(`${VIRUS_FEED_HITS} feeds splits it`, world.viruses.length === 2,
+    `${world.viruses.length} viruses`);
+  check("and the parent starts counting again", virus.fed === 0, `fed ${virus.fed}`);
+
+  // The whole point of the mechanic: you aim the new virus by choosing where
+  // you stand. The mass was thrown rightwards, so the child leaves rightwards.
+  const child = world.viruses.find(v => v !== virus);
+  check("the new virus is shot along the line the mass came in on",
+    child.x > virus.x && Math.abs(child.y - virus.y) < 20,
+    `${(child.x - virus.x).toFixed(0)} right, ${(child.y - virus.y).toFixed(0)} across`);
+
+  // It has to end up somewhere useful. Coasting a virus's own diameter would
+  // leave it sitting on its parent, which is not a hazard anyone has to avoid.
+  for (let i = 0; i < 80; i++) stepWorld(world, 1 / TICK_HZ);
+  const travelled = child.x - virus.x;
+  check("and coasts clear of its parent before it stops",
+    child.vx === 0 && travelled > radiusOf(VIRUS_MASS) * 4,
+    `${travelled.toFixed(0)} units, ${(radiusOf(VIRUS_MASS) * 4).toFixed(0)} needed`);
+
+  // Mass that has run out of travel has missed. Otherwise a blob could be
+  // parked against a virus and feeding would cost nothing to aim.
+  const rest = createWorld(12, { size: 8800, pellets: 0, viruses: 1 });
+  const rv = rest.viruses[0];
+  rv.x = 4400; rv.y = 4400;
+  rest.pellets.push({ id: 999, x: rv.x, y: rv.y, mass: EJECT_KEEP, vx: 0, vy: 0, ci: 0,
+                      owner: "ghost", ownerFree: 0 });
+  stepWorld(rest, 1 / TICK_HZ);
+  check("a blob at rest on a virus does not feed it", rv.fed === 0, `fed ${rv.fed}`);
+}
+
+// ── the board cannot fill up with viruses ───────────────────────────────────
+
+{
+  // Feeding is a way to move a hazard around, not a way to wall the arena in.
+  const w = createWorld(13, { size: 8800, pellets: 0, viruses: 4 });
+  const cap = Math.round(4 * VIRUS_MAX_RATIO);
+  const target = w.viruses[0];
+  for (let i = 0; i < 40; i++) {
+    // Feed the same virus over and over, straight at it from the left.
+    w.pellets.push({ id: 5000 + i, x: target.x - 1, y: target.y, mass: EJECT_KEEP,
+                     vx: 200, vy: 0, ci: 0, owner: "ghost", ownerFree: 0 });
+    stepWorld(w, 1 / TICK_HZ);
+  }
+  check("the population stops at the ceiling", w.viruses.length === cap,
+    `${w.viruses.length} of ${cap}`);
+  check("and mass is still swallowed once it is full",
+    w.pellets.every(p => p.owner !== "ghost"), `${w.pellets.length} left`);
+
+  // Popping one above the natural count must not top it back up, or every
+  // split would be permanent and the board would only ever gain viruses.
+  const eater = addPlayer(w, { id: "big", name: "Big" });
+  eater.cells[0].mass = VIRUS_MASS * 2;
+  eater.cells[0].x = w.viruses[0].x;
+  eater.cells[0].y = w.viruses[0].y;
+  const before = w.viruses.length;
+  stepWorld(w, 1 / TICK_HZ);
+  check("eating one above the seeded count does not respawn it",
+    w.viruses.length === before - 1, `${before} -> ${w.viruses.length}`);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

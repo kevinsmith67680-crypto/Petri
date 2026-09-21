@@ -152,7 +152,10 @@ export function createRenderer(canvas, mapCanvas) {
   }
 
   function drawVirus(th, v, time) {
-    const r = radiusOf(110);
+    // Swells with every blob fed into it. This is the only tell that one is
+    // primed — at the third feed it splits and shoots a new virus out — so it
+    // has to be readable at a glance rather than a subtle shade.
+    const r = radiusOf(110) * (1 + (v[2] || 0) * 0.08);
     const spikes = 18;
     const spin = time * 0.22;
     ctx.beginPath();
