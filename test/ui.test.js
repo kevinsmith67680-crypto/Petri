@@ -277,9 +277,16 @@ console.log("\n-- the pre-round countdown --");
 // The number is ticked from the snapshot clock rather than a timer of the
 // client's own, so it cannot drift away from when the round actually starts.
 // PHASE_COUNTDOWN is 4.
-ui.showLobby({ ready: 1, connected: 1, min: 1, max: 150, phase: 4 });
+ui.showLobby({ ready: 1, connected: 1, min: 1, max: 150, phase: 4, starts: 5 });
 check("the count replaces the ready meter",
   $("lobbyCount").hidden === false && $("lobbyMeter").hidden === true);
+// The card is opened by the lobby message, so the message has to carry the
+// number. Left to the next frame, the card opens on the last count's "1".
+check("and opens on the count, not on the last one's leftovers",
+  $("lobbyCountNum").textContent === "5", $("lobbyCountNum").textContent);
+ui.showLobby({ ready: 1, connected: 1, min: 1, max: 150, phase: 4, starts: 2 });
+check("a player joining mid-count sees where it has got to",
+  $("lobbyCountNum").textContent === "2", $("lobbyCountNum").textContent);
 ui.renderCountdown({ phase: 4, remaining: 3, number: 0 });
 check("it shows the seconds the server sent", $("lobbyCountNum").textContent === "3",
   $("lobbyCountNum").textContent);
