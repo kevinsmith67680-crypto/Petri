@@ -63,10 +63,47 @@ def read_constants():
     out.MODES = MODES;
     out.MICRO_PER_MASS = W.MICRO_PER_MASS;
     out.UNIT = W.UNIT;
+    const speed = m => S.BASE_SPEED * Math.pow(m, -0.24) * 60;
     out.speed = {};
     for (const m of [20, 50, 100, 200, 400, 800, 1600])
-      out.speed[m] = { r: S.radiusOf(m), v: S.BASE_SPEED * Math.pow(m, -0.24) * 60,
+      out.speed[m] = { r: S.radiusOf(m), v: speed(m),
                        merge: (11 + (m / 2) * 0.022) * S.MERGE_DELAY };
+
+    // How far a split actually throws you, and how long you stay in pieces.
+    // CELL_FRICTION is private to sim.js, so the decay is rebuilt from the
+    // same 0.935 per 1/60s it is defined with.
+    const LN = -Math.log(Math.pow(0.935, 60));
+    out.split = {};
+    for (const m of [60, 100, 200, 400, 800, 1600]) {
+      const half = m / 2;
+      const launch = S.splitLaunchSpeed(half);
+      out.split[m] = {
+        half, launch, travel: launch / LN,
+        reach: S.radiusOf(m) * 0.4 + launch / LN + S.radiusOf(half),
+        merge: (11 + half * 0.022) * S.MERGE_DELAY,
+        boost: launch / speed(m),
+      };
+    }
+
+    // Every cell you are big enough to eat is faster than you. This is the
+    // table that proves it.
+    out.pursuit = [];
+    for (const ratio of [S.EAT_RATIO, 1.3, 2, 4, 8]) {
+      const you = 400, prey = you / ratio;
+      out.pursuit.push({ ratio, prey, theirs: speed(prey), yours: speed(you),
+                         edge: (speed(prey) / speed(you) - 1) * 100 });
+    }
+    // View radius has a floor, so it does NOT grow with mass until you are
+    // already large. Solved rather than assumed.
+    const { viewRadius } = await import('./shared/protocol.js');
+    const fake = m => ({ cells: [{ mass: m }], alive: true });
+    out.viewFloor = viewRadius(fake(1));
+    let lo = 1, hi = 20000;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (viewRadius(fake(mid)) > out.viewFloor) hi = mid; else lo = mid;
+    }
+    out.viewGrowsAbove = hi;
     console.log(JSON.stringify(out));
     """
     raw = subprocess.run(
@@ -388,6 +425,99 @@ def dia_speed_curve():
     return d
 
 
+def dia_intercept():
+    """Why chasing never works, and what does."""
+    d = Drawing(CONTENT_W, 150)
+    box_w = CONTENT_W / 2 - 8
+    for i, (title, ok) in enumerate((("CHASING", False), ("CUTTING THE ANGLE", True))):
+        ox = i * (box_w + 16)
+        d.add(Rect(ox, 16, box_w, 112, fillColor=colors.HexColor("#fbfbfa"),
+                   strokeColor=RULE, strokeWidth=0.7))
+        d.add(String(ox + 8, 132, title, fontName="Helvetica-Bold", fontSize=7.5,
+                     fillColor=VIRUS_EDGE if ok else DANGER))
+        # Prey runs left to right along the top.
+        d.add(Line(ox + 24, 100, ox + box_w - 26, 100, strokeColor=colors.HexColor("#c9c7c2"),
+                   strokeWidth=0.8, strokeDashArray=[3, 3]))
+        cell_shape(d, ox + 24, 100, 7, "#9a9a97")
+        cell_shape(d, ox + box_w - 26, 100, 7, "#9a9a97")
+        d.add(String(ox + box_w / 2, 110, "prey, and faster than you",
+                     fontName="Helvetica", fontSize=6.5, fillColor=MUTED,
+                     textAnchor="middle"))
+        cell_shape(d, ox + 30, 44, 13, STAINS[2])
+        if ok:
+            arrow(d, ox + 44, 50, ox + box_w - 34, 90, ACCENT, 1.3, 5)
+            d.add(String(ox + box_w / 2 + 6, 34, "aim where it will be",
+                         fontName="Helvetica-Bold", fontSize=7, fillColor=VIRUS_EDGE,
+                         textAnchor="middle"))
+        else:
+            arrow(d, ox + 44, 50, ox + 96, 88, DANGER, 1.3, 5)
+            d.add(String(ox + box_w / 2 + 10, 34, "aim where it is - it is gone",
+                         fontName="Helvetica-Bold", fontSize=7, fillColor=DANGER,
+                         textAnchor="middle"))
+    return d
+
+
+def dia_split_reach():
+    """The arc a split buys, and the two halves it leaves behind."""
+    import math
+    d = Drawing(CONTENT_W, 150)
+    cx, cy = 74, 82
+    d.add(Circle(cx, cy, 52, fillColor=None, strokeColor=colors.HexColor("#ded6ee"),
+                 strokeWidth=0.9, strokeDashArray=[3, 3]))
+    cell_shape(d, cx, cy, 22, STAINS[2], "you")
+    d.add(String(cx, 14, "reach of one split", fontName="Helvetica", fontSize=7,
+                 fillColor=MUTED, textAnchor="middle"))
+
+    arrow(d, 140, 82, 176, 82, MUTED, 1, 4)
+    d.add(String(158, 90, "split", fontName="Helvetica-Bold", fontSize=7,
+                 fillColor=MUTED, textAnchor="middle"))
+
+    cell_shape(d, 208, 82, 15.5, STAINS[2])
+    cell_shape(d, 268, 82, 15.5, STAINS[2])
+    d.add(String(238, 52, "two halves, apart for 20-50s",
+                 fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="middle"))
+    d.add(String(238, 42, "and each eatable by things you outweighed",
+                 fontName="Helvetica", fontSize=7, fillColor=MUTED, textAnchor="middle"))
+
+    cell_shape(d, 356, 82, 19, "#9a9a97")
+    d.add(String(356, 52, "this could not touch you", fontName="Helvetica", fontSize=7,
+                 fillColor=MUTED, textAnchor="middle"))
+    d.add(String(356, 42, "a second ago", fontName="Helvetica", fontSize=7,
+                 fillColor=MUTED, textAnchor="middle"))
+    d.add(String(356, 112, "now it eats both", fontName="Helvetica-Bold", fontSize=7.5,
+                 fillColor=DANGER, textAnchor="middle"))
+    return d
+
+
+def technique(title, framing):
+    head = [P(title, style("tt", fontName="Helvetica-Bold", fontSize=13, leading=16,
+                           spaceBefore=0, spaceAfter=2)),
+            P(framing, style("tf", fontSize=9, leading=12.5, textColor=ACCENT,
+                             spaceAfter=5))]
+    t = Table([[head]], colWidths=[None])
+    t.setStyle(TableStyle([
+        ("LINEABOVE", (0, 0), (-1, 0), 1.6, ACCENT),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return t
+
+
+def tell(text):
+    t = Table([[Paragraph("<b>The tell you got it wrong.</b> " + text, S_NOTE)]],
+              colWidths=[None])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f0ec")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    return t
+
+
 def skill_header(num, title, tag):
     badge = Table([[Paragraph(str(num), S_SKILLNUM)]], colWidths=[11 * mm],
                   rowHeights=[11 * mm])
@@ -524,8 +654,8 @@ def story():
                                      leading=12, textColor=ACCENT, spaceAfter=8)))
     s.append(P("Engulfs", S_COVER_T))
     s.append(Spacer(1, 4 * mm))
-    s.append(P("How to play, and the eight skills<br/>a round is actually won with.",
-               S_COVER_S))
+    s.append(P("How to play, the eight skills a round is<br/>won with, and the "
+               "technique behind them.", S_COVER_S))
     s.append(Spacer(1, 70 * mm))
     s.append(datatable(
         ["", ""],
@@ -590,11 +720,13 @@ def story():
                   [["Controls", "Four inputs, and the HUD"],
                    ["The rules", "Eating, speed, decay"],
                    ["Splitting", "What it buys and what it costs"],
+                   ["Ejecting", "The only thing worth spending on"],
                    ["Viruses", "Cover, mine, and weapon"]],
                   [24 * mm, None]),
         datatable(["", ""],
                   [["The wager", "What is at stake, and when"],
                    ["Eight skills", "The habits a round is won with"],
+                   ["Technique", "How the work is actually done"],
                    ["Playbook", "A shape for ten minutes"],
                    ["Reference", "Every number on one page"]],
                   [24 * mm, None])))
@@ -950,6 +1082,219 @@ def story():
         block.append(drill(dr))
         block.append(Spacer(1, 7))
         s.append(KeepTogether(block))
+
+    s.append(PageBreak())
+
+    # ---- technique ---------------------------------------------------------
+    s.append(Mark("Technique"))
+    s.append(P("Technique", S_H1))
+    s.append(P("The skills chapter is what to work on. This is how the work is "
+               "actually done - eight techniques, and the numbers each one turns on.",
+               S_LEAD))
+
+    s.append(technique("Movement and positioning",
+                       "Avoiding larger cells while creating angles on smaller players."))
+    s.append(P("Start from the fact that makes every chase futile: <b>every cell you "
+               "are big enough to eat is faster than you are</b>. Speed falls with "
+               "mass, so being able to eat something guarantees it can outrun you. "
+               "Even the marginal target - the one only "
+               f"{EAT_PCT:.1f}% smaller - has the legs on you.", S_BODY))
+
+    s.append(datatable(
+        ["You are mass 400 and they are", "Their speed", "Yours", "Their advantage"],
+        [[f"{r['prey']:.0f}" + ("  (the biggest you can eat, just)" if i == 0 else ""),
+          f"{r['theirs']:.0f}", f"{r['yours']:.0f}", f"{r['edge']:.1f}% faster"]
+         for i, r in enumerate(K["pursuit"])],
+        [58 * mm, 22 * mm, 18 * mm, None], align_right=(1, 2)))
+
+    s.append(P("So pursuit is not a tactic, it is a way of losing ground slowly. "
+               "What works is geometry: take the inside line, aim at where the target "
+               "must go rather than where it is, and push it toward something that "
+               "limits its options - a wall, a virus, or a bigger player.", S_BODY))
+    s.append(dia_intercept())
+
+    s.append(P("Against larger cells the same geometry runs backwards. Keep two "
+               "escape directions open at all times; the moment you have one, you are "
+               "being herded. Open water behind you is worth more than orbs in front "
+               "of you.", S_BODY))
+    s.append(tell("You spent ten seconds behind the same player and never closed the "
+                  "gap. That was never going to work - you needed an angle, a wall, "
+                  "or a split, from the first second."))
+
+    s.append(PageBreak())
+
+    s.append(technique("Split timing and accuracy",
+                       "Judging whether a split will reach and consume another player "
+                       "without leaving you vulnerable."))
+    s.append(P("The split is the only thing that closes distance, because the launch "
+               f"is roughly <b>{K['split']['400']['boost']:.1f} times your cruising "
+               "speed</b>. It is also a timer on your own vulnerability. Both halves "
+               "of the decision are in one table.", S_BODY))
+
+    s.append(datatable(
+        ["Your mass", "Each half", "Reach from your centre", "You stay in pieces for"],
+        [[m, f"{K['split'][m]['half']:.0f}", f"about {K['split'][m]['reach']:.0f} units",
+          f"{K['split'][m]['merge']:.0f}s"]
+         for m in ("60", "100", "200", "400", "800", "1600")],
+        [22 * mm, 22 * mm, 42 * mm, None], align_right=(0, 1)))
+
+    s.append(P("Three questions, in order", S_H3))
+    s.append(bullets([
+        "<b>Will it reach?</b> Read the table, not your instinct. At mass 200 you "
+        f"throw about {K['split']['200']['reach']:.0f} units; at 800, about "
+        f"{K['split']['800']['reach']:.0f}. Anything beyond that is a donation.",
+        "<b>Will the half be big enough?</b> The piece that arrives is half your "
+        f"mass, and it still needs to be {K['EAT_RATIO']}x the target. Halving 200 "
+        "gives you 100, which eats nothing above 91.",
+        "<b>What eats the halves?</b> The question people skip. Look behind the "
+        "target before you commit, not after.",
+    ]))
+    s.append(dia_split_reach())
+    s.append(tell("You landed the split, ate the target, and were eaten yourself "
+                  "before the pieces rejoined. The split worked and the decision "
+                  "did not."))
+
+    s.append(PageBreak())
+
+    s.append(technique("Mass management",
+                       "Deciding when to split, merge, feed, or preserve mass."))
+    s.append(P("You have four things you can do with mass, and each is a trade you "
+               "should be able to price.", S_BODY))
+    s.append(datatable(
+        ["Do this", "You pay", "You get"],
+        [["Split", f"Half your size per cell, and {K['split']['400']['merge']:.0f}s "
+                   "apart at mass 400", "Reach, and a second mouth"],
+         ["Merge", "Nothing, but you cannot hurry it", "Back to one fast, safe body"],
+         ["Feed a virus", f"{K['EJECT_MASS']} mass a throw, "
+                          f"{EJECT_LOSS:.0f}% of it lost outright",
+          "A hazard placed where you choose"],
+         ["Preserve", f"Nothing below {K['DECAY_ABOVE']} mass; above it you leak "
+                      "0.22% a second", "Speed, and the ability to run"]],
+        [26 * mm, 52 * mm, None]))
+    s.append(P("The non-obvious one is <b>preserve</b>. Because speed falls with mass "
+               f"and everything above {K['DECAY_ABOVE']} decays, there is a size past "
+               "which extra mass makes you worse at everything except eating people "
+               "who cannot escape. Growing beyond it is a decision, not a reward - "
+               "take it when you intend to hunt, not because the orbs were there.", S_BODY))
+    s.append(callout(
+        "Mass in pieces is not mass",
+        "Sixteen cells of 50 is not a 800-mass player. It is sixteen 50-mass players "
+        "who happen to share a name, each of which can be eaten separately, and none "
+        f"of which can rejoin for {K['split']['800']['merge']:.0f} seconds. Count your "
+        "effective size as your <i>largest cell</i>, not your total."))
+
+    s.append(technique("Risk assessment",
+                       "Deciding when a target is worth pursuing versus when to retreat."))
+    s.append(P("Price the attempt before you start it. A pursuit costs time, position "
+               "and usually a split; what it returns is "
+               f"{K['EAT_BONUS']}x the target's mass, plus - in a wagered round - "
+               "their entire pot.", S_BODY))
+    s.append(bullets([
+        "<b>Worth it:</b> a staked player carrying pots, cornered, with nothing "
+        "bigger than half your mass within a screen.",
+        "<b>Not worth it:</b> anything in open water that can see you coming. It is "
+        "faster than you and the chase is free for it.",
+        "<b>Never:</b> a target sitting on or beside a virus while you are over "
+        f"{POP_MASS:.0f} mass. That is the trap, and good players set it deliberately.",
+    ]))
+
+    s.append(PageBreak())
+
+    s.append(technique("Map awareness",
+                       "Tracking nearby threats, viruses, escape routes and crowded areas."))
+    s.append(P("Four things to keep a running count of, in this order of urgency: "
+               "<b>what can eat me</b>, <b>where the viruses are</b>, <b>which way is "
+               "open</b>, and <b>where the crowd is</b>.", S_BODY))
+    s.append(P("The crowd matters more than beginners expect. A fight between two "
+               "large players generates fragments, ejected mass and burst cells - a "
+               "burst player scatters into "
+               f"{K['VIRUS_PIECES']} pieces - and the profit is in arriving after it, "
+               "not during. Equally, a quiet quadrant is where you grow unmolested "
+               "for the first two minutes.", S_BODY))
+    s.append(P(f"How far you can see is not a matter of opinion. Everyone is shown "
+               f"the same <b>{K['viewFloor']:.0f} units</b> in every direction, and "
+               f"that does not change until you pass about "
+               f"<b>{K['viewGrowsAbove']:.0f} mass</b> - past which your view finally "
+               "starts growing with your size.", S_BODY))
+    s.append(P("Two things follow. For most of a round every player on the board has "
+               "exactly your horizon, so anything you cannot see cannot see you "
+               "either. And the handful of players large enough to have outgrown the "
+               "floor are the only ones with an information advantage - which is part "
+               "of why a leader is hard to ambush.", S_BODY))
+    s.append(tell("You died to something you never saw. Nine times in ten that is a "
+                  "wall at your back, not bad luck."))
+
+    s.append(technique("Prediction",
+                       "Anticipating opponents' movement and split attacks."))
+    s.append(P("Two things to read.", S_BODY))
+    s.append(P("<b>Movement.</b> Everyone else is drawn from the last thing the server "
+               "sent, so on a slow connection you are seeing them a fraction of a "
+               "second in the past. Lead your targets. This cuts the other way too: "
+               "your own cell is predicted locally and is exactly where you think it "
+               "is, which is why your escapes work better than your chases.", S_BODY))
+    s.append(P("<b>Split attacks.</b> A player about to split lines up first - they "
+               "stop cutting corners and start travelling straight at you. The "
+               f"warning is short and the reach is long ({K['split']['400']['reach']:.0f} "
+               "units at mass 400), so the counter is distance held in advance, not "
+               "reaction. If something twice your size is pointing at you and closing, "
+               "you are already inside its range.", S_BODY))
+    s.append(callout(
+        "The counter nobody uses",
+        "A player who has just split is two half-sized cells that cannot rejoin for "
+        "tens of seconds. If they miss you, they are prey - and for that window they "
+        "are the most profitable target on the board. Baiting a split and turning on "
+        "the pieces is the highest-value play in the game."))
+
+    s.append(PageBreak())
+
+    s.append(technique("Virus mechanics",
+                       "Skilled players use viruses offensively and defensively."))
+    s.append(P("<b>Defensively</b>, while you are under "
+               f"{POP_MASS:.0f} mass, a virus is a place nothing dangerous can follow "
+               "you. Learn where they are and treat them as safe squares - a chase "
+               "that would kill you in open water ends the moment you sit on one.", S_BODY))
+    s.append(P("<b>Offensively</b>, there are two plays. The first needs no setup: "
+               "herd a large player toward a virus. They know the danger, so the "
+               "threat of it alone steers them, which is often all you want.", S_BODY))
+    s.append(P(f"The second is feeding. {K['VIRUS_FEED_HITS']} blobs of ejected mass "
+               "split a virus and launch a new one along the line your mass came in "
+               "on, about 450 units. That is how a small player removes a large one "
+               "without ever being big enough to fight it - and how you close off the "
+               "open water someone was running for.", S_BODY))
+    s.append(bullets([
+        f"Cost: {K['VIRUS_FEED_HITS'] * K['EJECT_MASS']} of your own mass, "
+        "unrecoverable.",
+        "Only mass still in flight counts, so feed from a distance you can actually "
+        "throw - a blob that stops short has missed.",
+        f"Do not set up a feed while over {POP_MASS:.0f} mass without watching your "
+        "own drift. Walking in to aim is how people burst themselves.",
+    ]))
+
+    s.append(technique("Team tactics",
+                       "Feeding, baiting, splitting and coordinating - where applicable."))
+    s.append(P("The mechanics exist, so it is worth knowing what they are. <b>Feeding</b> "
+               "transfers mass to another player at "
+               f"{EJECT_LOSS:.0f}% loss per throw. <b>Baiting</b> means one player "
+               "presenting as catchable so a third party splits at them, and the "
+               "partner taking the pieces. <b>Coordinated splitting</b> means two "
+               "players cutting off both escape directions at once, which defeats the "
+               "geometry in the positioning section above.", S_BODY))
+
+    s.append(Spacer(1, 3))
+    s.append(callout(
+        "Where this applies, and where it does not",
+        "In Practice, and in any friendly round, all of the above is fair play and "
+        "good fun. <b>In a wagered round it is not a tactic, it is collusion.</b> Two "
+        "accounts moving stakes between themselves by feeding is precisely the "
+        "behaviour a staked game has to exclude, and the fact that the mechanics "
+        "allow it is an open problem rather than a licence. Treat wagered rounds as "
+        "what they are: every other player is an opponent.",
+        DANGER, colors.HexColor("#fbeceb")))
+    s.append(Spacer(1, 7))
+    s.append(P("The one piece of it that is always legitimate is reading other "
+               "people's coordination. If two cells keep arriving together, assume "
+               "they are working together and stop treating either as a lone target.",
+               S_BODY))
 
     s.append(PageBreak())
 

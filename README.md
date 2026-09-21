@@ -705,7 +705,7 @@ When the timer expires everyone still alive is ranked by mass, their run is reco
 
 ### The player's manual
 
-`docs/engulfs-field-manual.pdf` is an 11-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, viruses as both hazard and weapon, what is actually at stake in a wagered round, and the eight skills a round is won with.
+`docs/engulfs-field-manual.pdf` is a 16-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, viruses as both hazard and weapon, what is actually at stake in a wagered round, the eight skills a round is won with, and a technique chapter covering positioning, split accuracy, mass management, map awareness, risk, prediction, virus play and team tactics.
 
 It is generated, not written by hand:
 
