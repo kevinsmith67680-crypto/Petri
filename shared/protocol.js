@@ -41,7 +41,7 @@ export const WORLD_LIMIT = MAX_WORLD;
 // the server refuses a mismatch, so a stale client gets told to reload instead
 // of silently decoding every frame two bytes out of alignment — which looks
 // like opponents scattered across the map and orbs that never appear.
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 export const MSG = {
   JOIN: "join",        // text
@@ -83,7 +83,7 @@ export const BOARD_TICKS = 10;      // leaderboard at 2Hz; it changes slowly
 const CELL_BYTES = 13;
 const PELLET_BYTES = 10;
 const REMOVE_BYTES = 4;
-const VIRUS_BYTES = 4;
+const VIRUS_BYTES = 7;
 
 // ── client -> server ────────────────────────────────────────────────────────
 
@@ -289,8 +289,17 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   for (const id of removed) w.u32(id);
 
   // viruses
+  // id, position, and how many blobs have been fed in. The id is what lets the
+  // client match a virus between snapshots and interpolate a shot one instead
+  // of stepping it at the tick rate; the feed count is what makes it swell on
+  // screen, which is the only warning anybody gets that it is about to split.
   w.u16(viruses.length);
-  for (const v of viruses) { w.u16(Math.round(v.x)); w.u16(Math.round(v.y)); }
+  for (const v of viruses) {
+    w.u16(v.vid);
+    w.u16(Math.round(v.x));
+    w.u16(Math.round(v.y));
+    w.u8(v.fed);
+  }
 
   if (withBoard) {
     const board = leaderboard(world);
@@ -371,7 +380,10 @@ export function decodeSnapshot(buffer) {
 
   const viruses = [];
   const virusCount = r.expect(r.u16(), VIRUS_BYTES);
-  for (let i = 0; i < virusCount; i++) viruses.push([r.u16(), r.u16()]);
+  for (let i = 0; i < virusCount; i++) {
+    const vid = r.u16();
+    viruses.push([r.u16(), r.u16(), r.u8(), vid]);
+  }
 
   let board = null;
   if (flags & FLAG_BOARD) {

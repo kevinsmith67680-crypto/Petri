@@ -703,6 +703,18 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
 
+### Feeding a virus
+
+Shoot ejected mass into a virus and it swells. The third hit splits it: a new virus is launched along the line the mass came in on and coasts about 450 units before settling. This is agar.io's mechanic at three feeds rather than seven — enough to be worth doing inside a ten-minute round without turning the board into a minefield.
+
+Only mass **still in flight** counts. Feeding is shooting a blob into a virus, not parking next to one, and a blob that runs out of travel short of the virus has missed. The fed mass is swallowed either way, so feeding is a pure sink for the feeder: 16 mass spent, 13 delivered, none of it recoverable. What you buy with it is a hazard placed where you want it.
+
+Viruses coast on their own friction rather than a cell's. At the cell rate a virus launched fast enough to matter is gone in a third of a second, and one launched slowly travels barely its own diameter — 107 units, against a diameter of 84. `VIRUS_SPLIT_SPEED` of 820 units/second against `VIRUS_FRICTION` 0.97 puts it ~450 units out over about a second and a half. 820 is also 41 units per tick, just under the 45-unit radius of the smallest cell a virus can pop, so a shot virus cannot step straight over a cell it should have burst.
+
+**The population has a ceiling** of `VIRUS_MAX_RATIO` (1.5) times the count the arena seeds — 135 for Standard. Past it a fed virus still resets and still swallows the mass, it just has nowhere to put the child. Eating a virus tops the population back up only when it is *below* the seeded count, so a long round cannot ratchet upwards one split at a time.
+
+The wire carries a virus's compact id and feed count alongside its position (7 bytes, up from 4). The feed count is what makes it swell on screen — the only warning anyone gets that a virus is primed. The id is what lets the client match a virus between snapshots and interpolate a shot one, instead of stepping it a radius at a time at 20Hz; their order in the list is a function of where the viewer is standing, so position in the array cannot be used for it.
+
 **Everyone starts the same distance apart.** Random spawn points decided rounds before they began: two players could open within eating distance of each other while a third had a quarter of the board to itself. The field is now dealt onto one ring at equal angular spacing (`spawnRing` in `shared/sim.js`), so every opening position is interchangeable — same distance to either neighbour, same distance to the centre, same distance to the wall. The target gap is 520 units; a lobby too big to seat at that spacing gets the widest ring the arena holds instead, which is tighter but still even (100 players come out 268 apart, about fifteen starting diameters). The ring is turned by a seeded angle each round, so it is reproducible from the world seed without landing on the same points every time. Where bots stand in for a short lobby, the humans are dealt into the ring at even intervals rather than left in a block.
 
 Only round starts use the ring. A **mid-round respawn is still random**, which is deliberate: a ring position is an opening, and handing one to a player who died at minute eight would be a reward for dying.

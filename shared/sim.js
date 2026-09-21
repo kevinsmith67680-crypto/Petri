@@ -33,6 +33,30 @@ export const ORB_RADIUS = 6;        // a plain orb, fixed size regardless of mas
 export const VIRUS_MASS = 110;
 export const VIRUS_EAT_RATIO = 1.15; // how much bigger you must be to pop one
 export const VIRUS_PIECES = 9;       // fragments a virus scatters you into
+
+// Feeding a virus. Shoot ejected mass into one and it swells; the third hit
+// splits it, and the new virus is shot off along the line the mass came in on.
+// agar.io uses seven feeds; three is enough to be worth doing inside a
+// ten-minute round without turning the board into a minefield.
+export const VIRUS_FEED_HITS = 3;
+// How the virus that is shot out travels. It coasts on its own, gentler
+// friction rather than a cell's: at the cell rate a virus launched fast enough
+// to matter is gone in a third of a second, and one launched slowly travels
+// barely its own diameter — 107 units, against a diameter of 84. This pair
+// puts it ~450 units out over about a second and a half, which reads as a
+// heavy thing drifting into place and is far enough to aim at somebody.
+//
+// 820 units/second is also 41 per tick, just under the 45-unit radius of the
+// smallest cell a virus can pop — so a virus cannot step straight over a cell
+// it should have burst.
+export const VIRUS_SPLIT_SPEED = 820;
+const VIRUS_FRICTION = 0.97;          // per 1/60s, for readability
+const VIRUS_DECAY = Math.pow(VIRUS_FRICTION, 60);
+const VIRUS_LN = Math.log(VIRUS_DECAY);
+// Ceiling on the population, as a multiple of the count the arena seeds. Past
+// it a fed virus still resets, it just has nowhere to put the child — without
+// this, a round long enough turns every arena into a wall of green.
+export const VIRUS_MAX_RATIO = 1.5;
 export const MAX_CELLS = 16;
 // Size advantage needed to eat a rival. Lowered from 1.22 by 10%: you now
 // need to be 9.8% bigger rather than 22%, so to swallow a mass-100 player you
@@ -230,6 +254,7 @@ export function createWorld(seed = 1, opts = {}) {
     time: 0,          // seconds since world creation; all timers use this
     nextId: 1,
     nextNid: 1,       // compact numeric player id, used on the wire
+    nextVid: 1,       // and the same for viruses, which the client matches on
     pellets: [],
     pelletsDirty: false,
     grid: null,
@@ -266,9 +291,34 @@ function makePellet(world, x, y, mass, vx, vy, ci) {
   };
 }
 
-function makeVirus(world) {
-  const p = spawnPoint(world);
-  return { id: world.nextId++, x: p.x, y: p.y, mass: VIRUS_MASS };
+function makeVirus(world, x, y, vx = 0, vy = 0) {
+  const p = x === undefined ? spawnPoint(world) : { x, y };
+  return {
+    id: world.nextId++,
+    // Compact id for the wire, allocated the way player nids are. The client
+    // needs it to tell one virus from another between snapshots, which is what
+    // lets a shot one be interpolated instead of stepping at the tick rate.
+    vid: (world.nextVid = (world.nextVid % 65534) + 1),
+    x: p.x, y: p.y,
+    mass: VIRUS_MASS,
+    fed: 0,             // ejected blobs absorbed since the last split
+    vx, vy
+  };
+}
+
+// A shot virus coasts to a stop. Integrated exactly, for the same reason
+// ejected mass is (see advancePellet): a client drawing at 60fps and a server
+// stepping at 20Hz have to agree on where it ends up.
+function advanceVirus(v, dt, size) {
+  if (!v.vx && !v.vy) return;
+  const f = Math.pow(VIRUS_DECAY, dt);
+  const travel = (f - 1) / VIRUS_LN;
+  const pad = radiusOf(v.mass);
+  v.x = clamp(v.x + v.vx * travel, pad, size - pad);
+  v.y = clamp(v.y + v.vy * travel, pad, size - pad);
+  v.vx *= f;
+  v.vy *= f;
+  if (Math.abs(v.vx) < 1 && Math.abs(v.vy) < 1) { v.vx = 0; v.vy = 0; }
 }
 
 function makeCell(world, x, y, mass, ci) {
@@ -599,6 +649,48 @@ function eatPellets(world, ent) {
   }
 }
 
+// Ejected mass fed into a virus. Only mass still in flight counts: feeding is
+// shooting a blob into one, not parking next to it, and a blob that runs out
+// of travel short of the virus has missed.
+//
+// The hit is tested against the virus centre plus the blob's own radius, which
+// is what the thrower sees — a blob visibly touching the spikes registers.
+function feedViruses(world) {
+  for (const p of world.pellets) {
+    // Velocity first: it is the most selective test by a long way. Thousands
+    // of orbs sit still, and this pass runs over all of them every tick.
+    if (!p.vx && !p.vy) continue;
+    if (p.dead || p.owner === undefined) continue;
+    for (const v of world.viruses) {
+      const dx = p.x - v.x, dy = p.y - v.y;
+      const reach = radiusOf(v.mass) + pelletRadius(p);
+      if (dx * dx + dy * dy > reach * reach) continue;
+
+      p.dead = true;
+      world.pelletsDirty = true;
+      if (++v.fed < VIRUS_FEED_HITS) break;
+
+      // Full. The child is shot off along the line the mass came in on, which
+      // is the whole point: you aim a virus at somebody by choosing where you
+      // stand when you feed it.
+      v.fed = 0;
+      const speed = Math.hypot(p.vx, p.vy) || 1;
+      splitVirus(world, v, p.vx / speed, p.vy / speed);
+      break;
+    }
+  }
+}
+
+// The population ceiling is checked here rather than at the feed, so the mass
+// is always swallowed: a virus that cannot split is still a mass sink, not a
+// wall that silently ignores you.
+function splitVirus(world, parent, dirX, dirY) {
+  if (world.viruses.length >= Math.round(world.virusCount * VIRUS_MAX_RATIO)) return;
+  world.viruses.push(makeVirus(
+    world, parent.x, parent.y, dirX * VIRUS_SPLIT_SPEED, dirY * VIRUS_SPLIT_SPEED
+  ));
+}
+
 // A virus pops any cell big enough to swallow it, the moment that cell's body
 // covers the virus centre. Smaller cells pass over untouched and can shelter.
 function eatViruses(world, ent) {
@@ -610,7 +702,10 @@ function eatViruses(world, ent) {
       if (Math.hypot(v.x - c.x, v.y - c.y) < r) {
         c.mass += v.mass * 0.4;
         world.viruses.splice(i, 1);
-        world.viruses.push(makeVirus(world));
+        // Topped back up only to the count the arena seeds. Replacing
+        // unconditionally would make every fed split permanent, so a long
+        // round could only ever gain viruses.
+        if (world.viruses.length < world.virusCount) world.viruses.push(makeVirus(world));
         world.events.push({ t: "pop", id: ent.id, x: c.x, y: c.y });
         burst(world, ent, c);
         return;
@@ -723,6 +818,10 @@ export function stepWorld(world, dt) {
   world.events.length = 0;
 
   for (const p of world.pellets) advancePellet(p, dt, world.size);
+  for (const v of world.viruses) advanceVirus(v, dt, world.size);
+  // After both have moved, so a blob and a virus travelling toward each other
+  // are tested where they actually are this tick.
+  feedViruses(world);
 
   for (const ent of world.players.values()) {
     if (!ent.alive) {

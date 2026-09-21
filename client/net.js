@@ -640,7 +640,17 @@ export function createSocketConnection({
       return { ...c, x: lerp(p.x, c.x, k), y: lerp(p.y, c.y, k), m: lerp(p.m, c.m, k) };
     });
 
-    return { ...newer, cells };
+    // Viruses sat still until feeding one could shoot a new one out, and a
+    // moving object taken straight from the newest frame jumps a radius at a
+    // time at 20Hz. Matched on the id the snapshot carries, because their
+    // order in the list is a function of where the viewer is standing.
+    const wasAt = new Map(older.viruses.map(v => [v[3], v]));
+    const viruses = newer.viruses.map(v => {
+      const q = wasAt.get(v[3]);
+      return q ? [lerp(q[0], v[0], k), lerp(q[1], v[1], k), v[2], v[3]] : v;
+    });
+
+    return { ...newer, cells, viruses };
   }
 
   return {

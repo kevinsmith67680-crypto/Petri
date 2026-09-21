@@ -280,5 +280,41 @@ deadStar.alive = false;
 const fallback = decodeSnapshot(encodeSnapshot(spec, ghost, createClientState(0), null, deadStar));
 check("watching a dead target falls back to self", fallback.spectating === false);
 
+// ── viruses carry what a fed one needs ──────────────────────────────────────
+
+// A virus used to be two numbers on the wire. Feeding gave it two more jobs:
+// the feed count is the swell that warns a virus is primed, and the id is how
+// the client tells one from another between snapshots — which is what lets a
+// shot one be interpolated rather than stepped a radius at a time.
+{
+  const w = createWorld(21, { size: 8800, pellets: 0, viruses: 3 });
+  const me = addPlayer(w, { id: "me", name: "Me" });
+  me.cells[0].mass = 400;
+  // All three in view, so none is culled out of the comparison.
+  w.viruses.forEach((v, i) => { v.x = me.cells[0].x + i * 30; v.y = me.cells[0].y; });
+  w.viruses[1].fed = 2;
+
+  const got = decodeSnapshot(encodeSnapshot(w, me, createClientState(0))).viruses;
+  check("every virus in view is on the wire", got.length === 3, `${got.length}`);
+  check("with the feed count the swell is drawn from",
+    got.map(v => v[2]).join() === w.viruses.map(v => v.fed).join(),
+    got.map(v => v[2]).join());
+  check("and an id that is stable and distinct",
+    got.map(v => v[3]).join() === w.viruses.map(v => v.vid).join() &&
+    new Set(got.map(v => v[3])).size === 3,
+    got.map(v => v[3]).join());
+
+  // The id has to survive the virus moving, or interpolation matches the
+  // wrong one and a shot virus teleports between its neighbours.
+  const shot = w.viruses[2];
+  shot.vx = 820;
+  stepWorld(w, 1 / TICK_HZ);
+  const after = decodeSnapshot(encodeSnapshot(w, me, createClientState(0))).viruses;
+  const same = after.find(v => v[3] === shot.vid);
+  check("a moving virus keeps its id", !!same, `looking for ${shot.vid}`);
+  check("and reports where it moved to", same && same[0] > got[2][0],
+    same ? `${got[2][0]} -> ${same[0]}` : "gone");
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
