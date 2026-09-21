@@ -70,7 +70,11 @@ globalThis.location = {
   origin: "http://localhost:8080"
 };
 globalThis.performance = { now: () => Date.now() };
-globalThis.requestAnimationFrame = noop;
+// The render loop is where the death card is decided, so the frame callback is
+// captured rather than dropped: a test that cannot step a frame cannot see it.
+let frameFn = null;
+globalThis.requestAnimationFrame = fn => { frameFn = fn; };
+const stepFrame = () => { const fn = frameFn; frameFn = null; if (fn) fn(performance.now()); };
 globalThis.addEventListener = noop;
 globalThis.localStorage = {
   _v: {},
@@ -248,8 +252,9 @@ $("btnStart").click();
 await settle();
 
 const live = sockets[sockets.length - 1];
-const lobbyMsg = p => JSON.stringify({
-  type: "lobby", mode: "standard", ready: 0, connected: 1, min: 1, max: 150, phase: p, test: true
+const lobbyMsg = (p, starts = null) => JSON.stringify({
+  type: "lobby", mode: "standard", ready: 0, connected: 1, min: 1, max: 150,
+  phase: p, starts, test: true
 });
 
 // PHASE_LOBBY is 3.
@@ -265,7 +270,7 @@ check("pressing ready puts a frame on the wire",
 
 // PHASE_COUNTDOWN is 4. The lobby stays up and swaps the ready meter for the
 // count: treating it as "not the lobby" hid the card the count lives on.
-live.handlers.message.forEach(fn => fn({ data: lobbyMsg(4) }));
+live.handlers.message.forEach(fn => fn({ data: lobbyMsg(4, 5) }));
 check("the countdown keeps the lobby open", $("lobbyVeil").hidden === false);
 check("and shows the count instead of the ready meter",
   $("lobbyCount").hidden === false && $("lobbyMeter").hidden === true);
@@ -354,6 +359,67 @@ console.log("\n-- a refusal the browser cannot see is explained anyway --");
     !/could not reach/i.test($("errText").textContent), $("errText").textContent);
   check("and it names the setting to change",
     /ALLOWED_ORIGINS/.test($("errText").textContent), $("errText").textContent);
+}
+
+console.log("\n-- a round opening is not a death --");
+
+// The bug this pins: `round_start` used to assert "we are alive now". The
+// newest snapshot in hand at that moment was encoded during the count, when
+// everyone is despawned, so the very next frame read it as having just been
+// eaten and threw up a death card — carrying the PREVIOUS round's orbs, peak
+// and placing — over a round that had only just opened.
+//
+// It bites from round two onwards, where re-staking makes startRound await and
+// the server therefore sends one more despawned snapshot before round_start.
+{
+  const { createWorld, addPlayer } = await import("../shared/sim.js");
+  const { encodeSnapshot, createClientState, PROTOCOL_VERSION } =
+    await import("../shared/protocol.js");
+
+  const world = createWorld(5);
+  const player = addPlayer(world, { id: "me", name: "Me" });
+  player.orbs = 139; player.peak = 469; player.eaten = 0;
+  const cs = createClientState(1);
+  const live = { phase: 1, remaining: 120, number: 2 };
+  const counting = { phase: 4, remaining: 1, number: 1 };
+
+  // Walk the world clock on, so each snapshot is newer than the last.
+  const snapshot = (alive, round) => {
+    world.time += 0.05;
+    if (alive) { player.alive = true; if (!player.cells.length) player.cells = [{ id: 1, x: 100, y: 100, mass: 20, ci: 0, vx: 0, vy: 0, mergeAt: 0 }]; }
+    else { player.alive = false; player.cells = []; }
+    return encodeSnapshot(world, player, cs, round);
+  };
+
+  $("stake1").click();
+  $("btnStart").click();
+  await settle();
+  const ws = sockets[sockets.length - 1];
+  (ws.handlers.open || []).forEach(fn => fn());
+  const deliver = (data, binary) =>
+    ws.handlers.message.forEach(fn => fn({ data: binary ? data : JSON.stringify(data) }));
+
+  deliver({ type: "welcome", id: "me", nid: player.nid, tickHz: 20, mode: "standard",
+            round: 1, roundSeconds: 120, lobbyMin: 1, lobbyMax: 150, test: true,
+            stake: 1_000_000, signedIn: true, displayName: "Me", protocol: PROTOCOL_VERSION });
+
+  // The despawned frame the count leaves behind, then the whistle.
+  deliver(snapshot(false, counting), true);
+  deliver({ type: "round_start", mode: "standard", number: 2, seconds: 120 });
+  stepFrame();
+  check("the stale despawned frame is not read as a death",
+    $("overVeil").hidden === true, "death card is up");
+  check("and the lobby is behind us", $("lobbyVeil").hidden === true);
+
+  // The round proper. Once a snapshot has actually shown us alive, being
+  // eaten has to still produce the card — the fix must not disarm it.
+  deliver(snapshot(true, live), true);
+  stepFrame();
+  check("playing on shows no card", $("overVeil").hidden === true);
+
+  deliver(snapshot(false, live), true);
+  stepFrame();
+  check("being eaten for real still shows one", $("overVeil").hidden === false);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

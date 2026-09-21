@@ -37,7 +37,11 @@ let running = false;
 let startedAt = 0;
 let elapsed = 0;
 let best = 0;
-let wasAlive = true;
+// Whether a snapshot has actually shown us alive in the run that is running
+// now. Set only from what the server sent, never assumed: the death card fires
+// on the transition out of it, so anything that turns it on without evidence
+// fires the card on the first stale frame. See the round_start handler.
+let seenAlive = false;
 let lastRank = 0;
 let lastOf = 0;
 let spectating = false;
@@ -327,7 +331,7 @@ function onRound(msg) {
   }
   if (msg.type === "round_end") {
     running = false;
-    wasAlive = false;
+    seenAlive = false;
     // Readiness survives the intermission on the server, so the button starts
     // from wherever the player left it rather than silently resetting.
     ui.setNextReady(ready);
@@ -344,10 +348,14 @@ function onRound(msg) {
     ui.setReady(false);
     ui.hideLobby();
     ui.hideRoundEnd();
-    // The server has already respawned us into the fresh arena; just start
-    // counting again locally.
+    // The server has already respawned us into the fresh arena, but the
+    // newest snapshot in hand was encoded before it did — during the count,
+    // when everyone is despawned. Claiming to be alive here would arm the
+    // death check against that stale frame, and the player would be shown a
+    // death card built from last round's figures at the exact moment the new
+    // round opened. The first snapshot that actually shows us alive arms it.
     running = true;
-    wasAlive = true;
+    seenAlive = false;
     lastOrbs = 0;
     startedAt = performance.now();
     elapsed = 0;
@@ -408,7 +416,9 @@ function start() {
     conn.sendAction("respawn");
   }
   running = true;
-  wasAlive = true;
+  // Same rule as a round start: a respawn is a request, and the body does not
+  // exist until a snapshot says so.
+  seenAlive = false;
   lastOrbs = 0;
   startedAt = performance.now();
   elapsed = 0;
@@ -539,6 +549,9 @@ function frame(now) {
       // Track the run so Leave can restore the death card without asking the
       // server, whose `me` block now describes whoever we are watching.
       if (!spectating && fresh.me.alive) {
+        // The evidence the death check waits for. While spectating `me`
+        // describes whoever is being watched, so it proves nothing about us.
+        seenAlive = true;
         lastRunOrbs = fresh.me.orbs;
         lastRunPeak = fresh.me.peak;
         lastRunEaten = fresh.me.eaten;
@@ -548,8 +561,8 @@ function frame(now) {
         ui.showSpectator(fresh.eyeName);
       }
 
-      if (running && wasAlive && !fresh.me.alive && !spectating) {
-        wasAlive = false;
+      if (running && seenAlive && !fresh.me.alive && !spectating) {
+        seenAlive = false;
         running = false;
         best = Math.max(best, fresh.me.orbs);
         ui.showDeath({

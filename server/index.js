@@ -508,7 +508,14 @@ const readyCount = room => {
   return n;
 };
 
+// Seconds left on the pre-round count. Ceilinged because it is read as a
+// number on a card, not as a clock: "1" then covers the whole last second
+// instead of half of it, and the count never shows a zero it sits on.
+const countdownLeft = room =>
+  Math.max(0, Math.ceil(room.round.endsAt - room.world.time));
+
 function lobbyState(room) {
+  const counting = room.round.phase === PHASE_COUNTDOWN;
   return {
     type: "lobby",
     mode: room.mode.id,
@@ -517,6 +524,11 @@ function lobbyState(room) {
     min: room.lobbyMin,
     max: room.lobbyMax,
     phase: room.round.phase,
+    // The count travels with the message that opens the card. Without it the
+    // card shows whatever the last count ended on until the next snapshot
+    // lands — a stale "1" flashing where a "5" belongs — and a player who
+    // joins mid-count has nothing to show at all.
+    starts: counting ? countdownLeft(room) : null,
     test: TEST_MODE
   };
 }
@@ -534,11 +546,8 @@ const roundView = room => ({
   phase: room.round.phase,
   remaining: room.round.endsAt === Infinity
     ? 0
-    // The pre-round count is read as a number on a card, not as a clock, so it
-    // is ceilinged: "1" then covers the whole last second instead of half of
-    // it, and the count never shows a zero it sits on.
     : room.round.phase === PHASE_COUNTDOWN
-      ? Math.ceil(Math.max(0, room.round.endsAt - room.world.time))
+      ? countdownLeft(room)
       : Math.max(0, room.round.endsAt - room.world.time),
   number: room.round.number
 });

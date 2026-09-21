@@ -170,12 +170,16 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
 
   let iAmReady = false;
 
+  // The last second of the count is spent starting the round, so it reads as
+  // the word rather than a zero sitting on screen.
+  const countText = n => (n > 0 ? String(n) : "Go");
+
   function showLobby(state) {
     el.lobbyVeil.hidden = false;
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
 
-    const { ready = 0, connected = 0, min = 0, max = 0, phase } = state || {};
+    const { ready = 0, connected = 0, min = 0, max = 0, phase, starts } = state || {};
     $("lobbyReady").textContent = ready;
     $("lobbyConnected").textContent = connected;
     $("lobbyMin").textContent = min;
@@ -188,6 +192,10 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     el.lobbyCount.hidden = !counting;
     $("lobbyMeter").hidden = counting;
     $("lobbyNums").hidden = counting;
+    // Written here as well as from the snapshot clock, because the card is
+    // opened by this message: leaving it to the next frame shows the previous
+    // count's final number for as long as it takes one to arrive.
+    if (counting && typeof starts === "number") setText($("lobbyCountNum"), countText(starts));
 
     const short = Math.max(0, min - ready);
     $("lobbyLine").textContent = counting
@@ -214,8 +222,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   function renderCountdown(round) {
     if (!el.lobbyVeil || el.lobbyVeil.hidden) return;
     if (!round || round.phase !== PHASE_COUNTDOWN) return;
-    const left = Math.max(0, Math.round(round.remaining));
-    setText($("lobbyCountNum"), left > 0 ? String(left) : "Go");
+    setText($("lobbyCountNum"), countText(Math.max(0, Math.round(round.remaining))));
   }
 
   function hideLobby() { el.lobbyVeil.hidden = true; }
