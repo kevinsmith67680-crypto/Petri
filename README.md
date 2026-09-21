@@ -703,6 +703,19 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
 
+### The player's manual
+
+`docs/engulfs-field-manual.pdf` is an 11-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, viruses as both hazard and weapon, what is actually at stake in a wagered round, and the eight skills a round is won with.
+
+It is generated, not written by hand:
+
+```
+pip install reportlab
+python3 scripts/manual.py
+```
+
+**Every number in it is read out of `shared/` at build time**, by running the real modules rather than copying values across. Change `EAT_RATIO` or a mode's lobby size and the manual is correct the next time it is built — which is the only way a document full of tuning constants stays true. Re-run it after touching anything in `shared/sim.js`, `shared/modes.js` or `shared/wager.js`.
+
 ### Feeding a virus
 
 Shoot ejected mass into a virus and it swells. The third hit splits it: a new virus is launched along the line the mass came in on and coasts about 450 units before settling. This is agar.io's mechanic at three feeds rather than seven — enough to be worth doing inside a ten-minute round without turning the board into a minefield.
