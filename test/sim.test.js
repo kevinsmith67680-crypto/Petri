@@ -12,7 +12,7 @@ import {
   totalMass, centroid, leaderboard, TICK_HZ, WORLD, PELLETS, VIRUSES,
   radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
   advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN,
-  EAT_RATIO
+  EAT_RATIO, spawnRing, resetArena, SPAWN_GAP, START_MASS
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -247,6 +247,70 @@ console.log("\n-- ejected mass behaves like a projectile --");
   stepWorld(w3, 1 / TICK_HZ);
   check("another player can take it immediately",
     other.cells[0].mass > otherBefore, `${otherBefore} -> ${other.cells[0].mass.toFixed(0)}`);
+}
+
+// ── everyone starts the same distance apart ─────────────────────────────────
+
+// Random spawns decided rounds before they began: two players could open
+// within eating distance while a third had a quarter of the board alone. The
+// rule now is that every starting position is interchangeable.
+{
+  const gaps = players => players.map((p, i) => {
+    const q = players[(i + 1) % players.length];
+    return Math.hypot(p.cells[0].x - q.cells[0].x, p.cells[0].y - q.cells[0].y);
+  });
+
+  const w = createWorld(7);
+  const field = [];
+  for (let i = 0; i < 12; i++) field.push(addPlayer(w, { id: `p${i}`, name: `P${i}` }));
+  spawnRing(w, field);
+
+  const g = gaps(field);
+  const spread = Math.max(...g) - Math.min(...g);
+  check("neighbours are all the same distance apart", spread < 0.001,
+    `${Math.min(...g).toFixed(1)} … ${Math.max(...g).toFixed(1)}`);
+  check("and it is the gap the arena was asked for",
+    Math.abs(g[0] - SPAWN_GAP) < 0.001, g[0].toFixed(1));
+
+  const c = w.size / 2;
+  const radii = field.map(p => Math.hypot(p.cells[0].x - c, p.cells[0].y - c));
+  check("nobody starts closer to the middle than anyone else",
+    Math.max(...radii) - Math.min(...radii) < 0.001,
+    `${Math.min(...radii).toFixed(1)} … ${Math.max(...radii).toFixed(1)}`);
+  check("everyone starts at the same mass",
+    field.every(p => p.cells[0].mass === START_MASS));
+
+  // A full lobby wants a ring wider than the arena. It is clamped, and the
+  // spacing has to stay even through the clamp rather than degrading.
+  const big = createWorld(8);
+  const crowd = [];
+  for (let i = 0; i < 100; i++) crowd.push(addPlayer(big, { id: `p${i}`, name: `P${i}` }));
+  spawnRing(big, crowd);
+  const bg = gaps(crowd);
+  check("a lobby too big for the target gap is still evenly spaced",
+    Math.max(...bg) - Math.min(...bg) < 0.001, `${bg[0].toFixed(1)} apart`);
+  check("and stays inside the arena",
+    crowd.every(p => {
+      const { x, y } = p.cells[0];
+      return x > 0 && y > 0 && x < big.size && y < big.size;
+    }));
+  const r = radiusOf(START_MASS);
+  check("nobody opens within eating distance of a neighbour",
+    Math.min(...bg) > r * 4, `${Math.min(...bg).toFixed(1)} vs ${(r * 4).toFixed(1)}`);
+
+  // The round-start wipe goes through the same placement, so a second round
+  // opens as evenly as the first.
+  const wasAt = { x: field[0].cells[0].x, y: field[0].cells[0].y };
+  resetArena(w);
+  const after = gaps(field);
+  check("a fresh round is spaced the same way",
+    Math.max(...after) - Math.min(...after) < 0.001, `${after[0].toFixed(1)} apart`);
+  // The ring is turned by a seeded angle each time. Landing on the same points
+  // every round would hand regulars a memorised opening.
+  check("but not on the same points every round",
+    Math.hypot(field[0].cells[0].x - wasAt.x, field[0].cells[0].y - wasAt.y) > 1,
+    `${wasAt.x.toFixed(0)},${wasAt.y.toFixed(0)} -> ` +
+    `${field[0].cells[0].x.toFixed(0)},${field[0].cells[0].y.toFixed(0)}`);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

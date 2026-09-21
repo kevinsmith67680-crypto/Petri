@@ -202,6 +202,10 @@
     margin-top:16px; display:grid; grid-template-columns:repeat(3, 1fr);
     gap:10px; font-size:12.5px;
   }
+  /* Every class here that sets its own display needs this: the UA rule for
+     [hidden] loses to a class selector, so hiding the element in script does
+     nothing without it. The count and the meter swap places mid-lobby. */
+  .lobby-nums[hidden]{ display:none; }
   .lobby-nums div{ display:grid; gap:3px; }
   .lobby-nums i{ font-style:normal; color:var(--muted); }
   .lobby-nums em{
@@ -209,6 +213,17 @@
     font-variant-numeric:tabular-nums;
   }
   #btnReady[aria-pressed="true"]{ background:var(--accent); }
+
+  /* The pre-round count. It takes the place of the ready meter rather than
+     sitting beside it: once the round is seconds away, how full the lobby is
+     no longer tells the player anything they can act on. */
+  .lobby-count{ margin-top:18px; display:grid; gap:4px; justify-items:center; }
+  .lobby-count[hidden]{ display:none; }
+  .lobby-count b{
+    font-size:64px; line-height:1; font-weight:600;
+    font-variant-numeric:tabular-nums; color:var(--accent);
+  }
+  .lobby-count span{ font-size:12.5px; color:var(--muted); }
 
   .standings{ margin-top:20px; display:grid; gap:6px; font-size:13.5px; }
   .standings div{
@@ -1002,11 +1017,18 @@
   <div class="card">
     <h2>Lobby</h2>
     <p id="lobbyLine">Waiting for players.</p>
-    <div class="meter"><div class="meter-fill" id="lobbyFill"></div></div>
-    <div class="lobby-nums">
+    <div class="meter" id="lobbyMeter"><div class="meter-fill" id="lobbyFill"></div></div>
+    <div class="lobby-nums" id="lobbyNums">
       <div><i>Ready</i><em id="lobbyReady">0</em></div>
       <div><i>Connected</i><em id="lobbyConnected">0</em></div>
       <div><i>Needed to start</i><em id="lobbyMin">100</em></div>
+    </div>
+    <!-- aria-live so the count is announced rather than only seen. Polite, not
+         assertive: five interruptions in five seconds is worse than a count
+         that is a beat behind. The number is the server's, ticked from the
+         snapshot clock. -->
+    <div class="lobby-count" id="lobbyCount" hidden aria-live="polite">
+      <b id="lobbyCountNum">5</b><span>Starting</span>
     </div>
     <button id="btnReady" type="button">I'm ready</button>
     <p class="next" id="lobbyHint">The match begins as soon as enough players are ready.</p>

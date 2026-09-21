@@ -5,7 +5,8 @@
 
 import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
-import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION } from "../shared/protocol.js";
+import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
+  from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 
 const $ = id => document.getElementById(id);
@@ -43,6 +44,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     clockTime: $("clockTime"),
     roundVeil: $("roundVeil"),
     lobbyVeil: $("lobbyVeil"),
+    lobbyCount: $("lobbyCount"),
     statValue: $("statValue"),
     specBar: $("specBar"),
     specName: $("specName")
@@ -173,22 +175,47 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
 
-    const { ready = 0, connected = 0, min = 0, max = 0 } = state || {};
+    const { ready = 0, connected = 0, min = 0, max = 0, phase } = state || {};
     $("lobbyReady").textContent = ready;
     $("lobbyConnected").textContent = connected;
     $("lobbyMin").textContent = min;
     $("lobbyFill").style.width = `${Math.min(100, min ? (ready / min) * 100 : 0)}%`;
 
+    // The room is full and the round is seconds away. How full the lobby is
+    // has stopped being news, so the count takes the card over — the number
+    // itself is ticked by renderCountdown off the snapshot clock.
+    const counting = phase === PHASE_COUNTDOWN;
+    el.lobbyCount.hidden = !counting;
+    $("lobbyMeter").hidden = counting;
+    $("lobbyNums").hidden = counting;
+
     const short = Math.max(0, min - ready);
-    $("lobbyLine").textContent = short === 0
-      ? "Starting now."
-      : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`;
-    $("lobbyHint").textContent =
-      `The match begins as soon as ${min} players are ready. Capacity ${max}.`;
+    $("lobbyLine").textContent = counting
+      ? "Everyone is ready."
+      : short === 0
+        ? "Starting now."
+        : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`;
+    $("lobbyHint").textContent = counting
+      ? "Leaving the lobby now stops the round from starting."
+      : `The match begins as soon as ${min} players are ready. Capacity ${max}.`;
 
     const btn = $("btnReady");
-    btn.textContent = iAmReady ? "Ready — waiting for others" : "I'm ready";
+    // Nobody is being waited on once the count is running, so the button stops
+    // saying so. It is still a toggle: pressing it calls the round off.
+    btn.textContent = iAmReady
+      ? (counting ? "Ready" : "Ready — waiting for others")
+      : "I'm ready";
     btn.setAttribute("aria-pressed", String(iAmReady));
+  }
+
+  // Ticks the pre-round count on the lobby card from the snapshot clock, the
+  // same way the intermission is ticked — the number on screen is the
+  // server's, so it cannot drift away from when the round actually starts.
+  function renderCountdown(round) {
+    if (!el.lobbyVeil || el.lobbyVeil.hidden) return;
+    if (!round || round.phase !== PHASE_COUNTDOWN) return;
+    const left = Math.max(0, Math.round(round.remaining));
+    setText($("lobbyCountNum"), left > 0 ? String(left) : "Go");
   }
 
   function hideLobby() { el.lobbyVeil.hidden = true; }
@@ -243,6 +270,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     if (!view) return;
     renderClock(view.round);
     renderIntermission(view.round);
+    renderCountdown(view.round);
     setText(el.orbs, view.me.orbs);
     setText(el.cells, view.me.eaten);
     setText(el.mass, Math.round(view.me.mass));
@@ -733,7 +761,8 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     setAuthAvailable, showGoogle, setAuthError, showError, setErrorText, hideError, showStart,
-    renderIntermission, setNextReady, showReconnecting, showConnecting, hideReconnecting,
+    renderIntermission, renderCountdown, setNextReady,
+    showReconnecting, showConnecting, hideReconnecting,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },

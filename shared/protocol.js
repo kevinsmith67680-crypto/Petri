@@ -62,6 +62,10 @@ export const PHASE_NONE = 0;
 export const PHASE_LIVE = 1;
 export const PHASE_INTERMISSION = 2;
 export const PHASE_LOBBY = 3;
+// The lobby is full and the round is a few seconds out. Its own phase rather
+// than a flag on the lobby, so the count reaches the client on the snapshot
+// clock every other timer already rides on.
+export const PHASE_COUNTDOWN = 4;
 
 const CELL_MINE = 1 << 0;
 const CELL_COOLDOWN = 1 << 1;
