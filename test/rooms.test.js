@@ -66,7 +66,10 @@ class FakeWS {
   static OPEN = 1;
   constructor() { this.OPEN = 1; this.readyState = 1; this.h = {}; this.out = []; }
   on(t, fn) { (this.h[t] ||= []).push(fn); }
-  send(d) { this.out.push(typeof d === "string" ? d : "<binary>"); }
+  send(d) {
+    this.out.push(typeof d === "string" ? d : "<binary>");
+    if (typeof d !== "string") (this.bin ||= []).push(d);   // snapshots, to decode
+  }
   close(code, why) { this.closed = { code, why }; this.readyState = 3; }
   ping() {} terminate() {}
   async deliver(o) { for (const fn of this.h.message || []) await fn(JSON.stringify(o), false); }
@@ -77,7 +80,7 @@ const health = async () => (await (await fetch(`http://localhost:${PORT}/health`
 const room = async id => (await health()).rooms.find(r => r.mode === id);
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
 
-const { PROTOCOL_VERSION, PHASE_COUNTDOWN } = await import("../shared/protocol.js");
+const { PROTOCOL_VERSION, PHASE_COUNTDOWN, decodeSnapshot } = await import("../shared/protocol.js");
 
 async function join(username, stake, protocol = PROTOCOL_VERSION) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
@@ -143,6 +146,7 @@ console.log("\n-- the join frame fits the payload limit --");
     name: "x".repeat(16),            // NAME_MAX
     stake: 2_000_000,
     token: "a".repeat(64),           // session token
+    ci: 6,                           // palette slot
     protocol: PROTOCOL_VERSION
   });
   const size = Buffer.byteLength(worst);
@@ -321,6 +325,73 @@ console.log("\n-- one round rolls into the next --");
   const after = await money();
   check("the balance paid for it", after.balance < joined.balance,
     `${joined.balance} -> ${after.balance}`);
+}
+
+console.log("\n-- the colour picked in the lobby is the one the room sees --");
+
+// Colours used to live only on the server: the snapshot named each cell's
+// owner but never said what colour they were, so every client drew everyone
+// else in whatever fill the canvas had been left with. The pick now travels
+// with the name.
+{
+  const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "painter", password: "password123", displayName: "Painter", dateOfBirth: "1990-01-01" })
+  })).json().then(d => d.token);
+
+  const ws = new FakeWS();
+  globalThis.__wss.emit("connection", ws, req);
+  await ws.deliver({ type: "join", name: "Painter", stake: 1_000_000, token: tok, ci: 4, protocol: PROTOCOL_VERSION });
+  await settle();
+  const welcome = ws.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "welcome");
+  check("the colour asked for on join is the one given", welcome && welcome.ci === 4,
+    welcome ? String(welcome.ci) : "no welcome");
+
+  // What the room has been told about this player, newest last.
+  const records = (from = 0) => (ws.bin || []).slice(from)
+    .flatMap(b => decodeSnapshot(b).names)
+    .filter(n => n.nid === welcome.nid);
+  const until = async (cond, ms = 9000) => {
+    for (let t = 0; t < ms && !(await cond()); t += 50) await settle(50);
+    return cond();
+  };
+
+  // Rounds are rolling in this room, and joining mid-round puts you straight
+  // into it — alive, where a change is refused. The lobby is where the picker
+  // is, and everyone there has been despawned.
+  const waiting = await until(async () =>
+    ["lobby", "countdown"].includes((await room("standard")).phase));
+  check("the room comes back to its lobby", waiting, (await room("standard")).phase);
+  await ws.deliver({ type: "colour", ci: 1 });
+  await ws.deliver({ type: "ready", ready: true });
+  const seen = await until(() => records().some(n => n.ci === 1));
+  check("a change in the lobby reaches the snapshot once the round starts", seen,
+    JSON.stringify(records().slice(-1)));
+  check("under the player's own name", records().at(-1)?.name === "Painter",
+    records().at(-1)?.name);
+
+  // Accepting a change re-announces the player at once — the case above — so
+  // a record carrying the new colour would be on the next snapshot or not at
+  // all. Several ticks go by to be sure.
+  const mark = ws.bin.length;
+  await ws.deliver({ type: "colour", ci: 5 });
+  await settle(400);
+  check("mid-fight, the colour does not change",
+    !records(mark).some(n => n.ci === 5), JSON.stringify(records(mark)));
+
+  const junk = new FakeWS();
+  globalThis.__wss.emit("connection", junk, req);
+  const tok2 = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "smudge", password: "password123", displayName: "Smudge", dateOfBirth: "1990-01-01" })
+  })).json().then(d => d.token);
+  await junk.deliver({ type: "join", name: "Smudge", stake: 1_000_000, token: tok2, ci: 99, protocol: PROTOCOL_VERSION });
+  await settle();
+  const w2 = junk.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "welcome");
+  check("a slot outside the palette is replaced with a real one",
+    w2 && Number.isInteger(w2.ci) && w2.ci >= 0 && w2.ci < 7, w2 ? String(w2.ci) : "no welcome");
+  await junk.drop();
+  await ws.drop();
 }
 
 console.log("\n-- a short lobby is padded without bunching the humans --");

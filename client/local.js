@@ -19,9 +19,10 @@ import {
 import { PHASE_NONE } from "../shared/protocol.js";
 import { PELLET_MASS } from "../shared/sim.js";
 
-export function createLocalConnection({ name = "You", bots = 14, seed, world: opts } = {}) {
+export function createLocalConnection({ name = "You", ci = null, bots = 14, seed, world: opts } = {}) {
   const world = createWorld(seed ?? (Math.random() * 1e9) | 0, opts);
-  const me = addPlayer(world, { id: "me", name, ci: -1 });
+  // -1 is "the player colour" to the renderer, used when nothing was picked.
+  const me = addPlayer(world, { id: "me", name, ci: ci ?? -1 });
   fillBots(world, bots);
 
   const listeners = { event: [], welcome: [], close: [], round: [] };
@@ -70,6 +71,7 @@ export function createLocalConnection({ name = "You", bots = 14, seed, world: op
         cells, pellets, viruses,
         me: {
           id: "me",
+          ci: me.ci,
           alive: me.alive,
           orbs: me.orbs,
           eaten: me.eaten,
@@ -96,7 +98,10 @@ export function createLocalConnection({ name = "You", bots = 14, seed, world: op
     sendSpectate() {},
     stats() { return { ping: 0, srvMs: 0, hz: 0, budgetMs: 0 }; },
     sendRamp() {},
-    sendRename() {},
+    sendRename(next) { if (next) me.name = next; },
+    // Refused while alive, the same as online: a live body keeps the colour
+    // it was born with.
+    setColour(next) { if (!me.alive) me.ci = next; },
 
     close() { emit("close"); }
   };

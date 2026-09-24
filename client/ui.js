@@ -8,11 +8,12 @@ import { MODES } from "../shared/modes.js";
 import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
   from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
+import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, auth }) {
+export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, onColour, auth }) {
   const el = {
     orbs: $("orbCount"),
     mass: $("statMass"),
@@ -356,6 +357,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     settings.theme = settings.theme === "light" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", settings.theme);
     swTheme.setAttribute("aria-checked", String(settings.theme === "dark"));
+    paintColours();
     onThemeChange?.(settings.theme);
   });
 
@@ -677,6 +679,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
       el.whoName.textContent = account.displayName;
       el.whoUser.textContent = `@${account.username}`;
       $("fPass").value = "";
+      savedName = account.displayName;
+      // Not while the player is typing in it: a rename from the menu, or the
+      // session being restored, would otherwise wipe what they had written.
+      if (document.activeElement !== nameInput) nameInput.value = savedName;
+      syncName();
     }
     // Wagering requires identity: a guest balance belongs to whoever opens
     // the next socket, which is to say nobody.
@@ -760,9 +767,98 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   $("btnSaveName").addEventListener("click", submitRename);
   $("fNewName").addEventListener("keydown", e => { if (e.key === "Enter") submitRename(); });
 
+  // ── your cell, on the lobby card ──────────────────────────────────────────
+
+  // The display name, as the server last confirmed it, and the palette slot
+  // in use. -1 is "none picked", which the renderer draws in the theme's
+  // default player colour.
+  let savedName = "";
+  let myColour = -1;
+
+  const nameInput = $("fLobbyName");
+  const nameBtn = $("btnLobbyName");
+
+  // The preview follows the field as it is typed, so the player sees the name
+  // on the cell before committing to it. Save only lights up for a change.
+  function syncName() {
+    const typed = nameInput.value.trim();
+    setText($("mePreviewName"), typed || savedName);
+    nameBtn.disabled = !typed || typed === savedName;
+  }
+
+  async function saveLobbyName() {
+    if (nameBtn.disabled) return;
+    const err = $("lobbyNameError");
+    err.textContent = "";
+    nameBtn.disabled = true;
+    nameBtn.textContent = "Saving…";
+    try {
+      await auth?.rename(nameInput.value);
+      // Whatever the server kept, which may be tidier than what was typed.
+      nameInput.value = savedName;
+    } catch (e) {
+      err.textContent = e.message || "Could not change name.";
+    } finally {
+      nameBtn.textContent = "Save";
+      syncName();
+    }
+  }
+
+  nameInput.addEventListener("input", () => { $("lobbyNameError").textContent = ""; syncName(); });
+  nameInput.addEventListener("keydown", e => { if (e.key === "Enter") saveLobbyName(); });
+  nameBtn.addEventListener("click", saveLobbyName);
+
+  const swatches = STAIN_NAMES.map((label, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "swatch";
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-label", label);
+    b.title = label;
+    b.addEventListener("click", () => pickColour(i));
+    $("swatches").appendChild(b);
+    return b;
+  });
+
+  // Arrow keys move the pick, as in any radio group; Tab leaves the group.
+  $("swatches").addEventListener("keydown", e => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const next = (Math.max(0, myColour) + step + swatches.length) % swatches.length;
+    pickColour(next);
+    swatches[next].focus();
+  });
+
+  // Painted from the renderer's palette rather than copied into CSS, so the
+  // swatch is exactly the colour the cell will be drawn in, in either theme.
+  function paintColours() {
+    const th = THEMES[settings.theme];
+    swatches.forEach((b, i) => {
+      b.style.background = th.stains[i];
+      b.setAttribute("aria-checked", String(i === myColour));
+      // One tab stop for the whole group, on the colour that is picked.
+      b.tabIndex = i === Math.max(0, myColour) ? 0 : -1;
+    });
+    $("lobbyMe").style.setProperty("--me", colourOf(th, myColour));
+  }
+
+  function pickColour(i) {
+    if (i === myColour) return;
+    myColour = i;
+    paintColours();
+    onColour?.(i);
+  }
+
+  function setColour(ci) {
+    myColour = Number.isInteger(ci) && ci >= 0 && ci < swatches.length ? ci : -1;
+    paintColours();
+  }
+
   setAuthMode("login");
   renderAuth(null);
   renderAccount();
+  paintColours();
 
   return {
     update, bumpCounter, showDeath, setMode, el,
@@ -773,6 +869,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
+    setColour,
     getStake: () => stake,
     isSignedIn: () => signedIn,
     // The Google button lives outside this form but can still CREATE an

@@ -189,6 +189,23 @@ const farSnap = decodeSnapshot(encodeSnapshot(quiet, observer, qcs));
 const leakedName = farSnap.names.some(n => n.name === "Eater");
 check("out-of-view player names are not sent", !leakedName);
 
+console.log("\n-- colours travel with names --");
+
+// The snapshot used to carry names but no colours, so a client had nothing to
+// draw anyone else in. The owner's palette slot now rides on the name record.
+{
+  const painted = createWorld(11);
+  const viewer = addPlayer(painted, { id: "v", name: "Viewer", ci: 2 });
+  const neighbour = addPlayer(painted, { id: "n", name: "Neighbour", ci: 5 });
+  viewer.cells[0].x = 1000; viewer.cells[0].y = 1000;
+  neighbour.cells[0].x = 1100; neighbour.cells[0].y = 1000;
+  const snap = decodeSnapshot(encodeSnapshot(painted, viewer, createClientState(0)));
+  const colourOf = id => snap.names.find(n => n.nid === id.nid)?.ci;
+  check("a neighbour's colour is sent with their name", colourOf(neighbour) === 5,
+    String(colourOf(neighbour)));
+  check("and so is the viewer's own", colourOf(viewer) === 2, String(colourOf(viewer)));
+}
+
 console.log("\n-- ejected mass --");
 
 // A pellet is transmitted once and never re-sent, so a thrown blob has to

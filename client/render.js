@@ -53,6 +53,23 @@ export const THEMES = {
   }
 };
 
+// What each palette slot is called, for the colour picker's labels. Same
+// order as `stains` in both themes, which differ in shade but not in hue.
+export const STAIN_NAMES = ["Blue", "Red", "Violet", "Pink", "Teal", "Amber", "Moss"];
+
+// The fill for a slot. -1 means the viewer's own colour: their pick when the
+// view carries one, else the theme's default player colour.
+//
+// Anything else that is not a slot falls back to the first stain. Handing the
+// canvas `undefined` does not throw — it is silently ignored, and the cell is
+// painted with whatever was filled last. That is how every opponent online was
+// drawn before colours travelled with names.
+export function colourOf(th, ci, own = -1) {
+  if (ci < 0) ci = own;
+  if (ci < 0) return th.player;
+  return th.stains[ci] ?? th.stains[0];
+}
+
 export function createRenderer(canvas, mapCanvas) {
   // Reused across frames so a busy renderer is not also an allocator. Eight
   // buckets: seven palette slots plus one for the player's own colour.
@@ -88,7 +105,11 @@ export function createRenderer(canvas, mapCanvas) {
     mapCtx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
   }
 
-  const colorOf = (th, ci) => (ci < 0 ? th.player : th.stains[ci % th.stains.length]);
+  // The viewer's own slot for the frame being drawn. Set once per draw so the
+  // hot paths below keep their two-argument calls.
+  let own = -1;
+  const colorOf = (th, ci) => colourOf(th, ci, own);
+  const ownSlot = view => (Number.isInteger(view.me.ci) && view.me.ci >= 0 ? view.me.ci : -1);
 
   function drawGrid(th, camera, size) {
     const step = 68;
@@ -179,6 +200,7 @@ export function createRenderer(canvas, mapCanvas) {
     ctx.fillStyle = th.outside;
     ctx.fillRect(0, 0, state.vw, state.vh);
     if (!view) return;
+    own = ownSlot(view);
 
     ctx.save();
     ctx.translate(state.vw / 2, state.vh / 2);
@@ -275,7 +297,8 @@ export function createRenderer(canvas, mapCanvas) {
     }
     mapCtx.stroke();
 
-    mapCtx.fillStyle = th.player;
+    const mine = colourOf(th, -1, ownSlot(view));
+    mapCtx.fillStyle = mine;
     for (const c of view.cells) {
       if (c.o !== view.me.id) continue;
       mapCtx.beginPath();
@@ -283,7 +306,7 @@ export function createRenderer(canvas, mapCanvas) {
       mapCtx.fill();
     }
 
-    mapCtx.strokeStyle = th.player;
+    mapCtx.strokeStyle = mine;
     mapCtx.globalAlpha = 0.4;
     mapCtx.lineWidth = 1;
     mapCtx.beginPath();

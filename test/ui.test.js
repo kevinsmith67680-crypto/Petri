@@ -14,7 +14,7 @@ class El {
   constructor(id = "") {
     this.id = id;
     this.attrs = {};
-    this.style = {};
+    this.style = { setProperty(k, v) { this[k] = String(v); } };
     this.handlers = {};
     this.hidden = false;
     this.disabled = false;
@@ -40,6 +40,7 @@ class El {
   scrollIntoView() {}
   focus() { globalThis.__focused = this.id; }
   blur() {}
+  appendChild(child) { (this.children ||= []).push(child); return child; }
 }
 
 const registry = new Map();
@@ -48,13 +49,16 @@ globalThis.document = {
     if (!registry.has(id)) registry.set(id, new El(id));
     return registry.get(id);
   },
+  createElement: () => new El("created"),
   body: new El("body"),
+  documentElement: new El("html"),
   addEventListener() {},
   activeElement: null
 };
 globalThis.window = { matchMedia: () => ({ matches: false }) };
 
 const { createUI } = await import("../client/ui.js");
+const { THEMES } = await import("../client/render.js");
 const { PRACTICE, STAKE_1_USDC, STAKE_2_USDC, UNIT } = await import("../shared/wager.js");
 
 let failures = 0;
@@ -65,7 +69,14 @@ function check(label, cond, detail = "") {
 
 const $ = id => document.getElementById(id);
 const settings = { theme: "light", map: true, board: true, grid: true, names: true, perf: false };
-const ui = createUI({ settings, onStart() {}, onThemeChange() {}, onRamp() {}, auth: {} });
+// What the lobby card reports: colours picked, and names sent to be saved.
+const picked = [];
+let renameImpl = async () => {};
+const ui = createUI({
+  settings, onStart() {}, onThemeChange() {}, onRamp() {},
+  onColour: ci => picked.push(ci),
+  auth: { rename: name => renameImpl(name) }
+});
 
 const locked = id => $(id).getAttribute("aria-disabled") === "true";
 const shown = id => $(id).hidden === false;
@@ -302,6 +313,84 @@ check("cancelling restores the meter",
 ui.renderCountdown({ phase: 3, remaining: 0, number: 0 });
 check("and the stale number is not ticked any more",
   $("lobbyCountNum").textContent === "Go", $("lobbyCountNum").textContent);
+
+console.log("\n-- your cell, on the lobby card --");
+
+const swatches = $("swatches").children;
+const checked = () => swatches.map(b => b.getAttribute("aria-checked") === "true" ? 1 : 0).join("");
+check("every colour in the palette is offered", swatches.length === 7, String(swatches.length));
+check("each is named for a screen reader", swatches.every(b => b.getAttribute("aria-label")));
+
+ui.setColour(null);
+check("with nothing picked, no colour claims to be", checked() === "0000000", checked());
+check("but the group is still one tab stop", swatches.filter(b => b.tabIndex === 0).length === 1);
+
+swatches[4].click();
+check("picking a colour reports it", picked.at(-1) === 4, JSON.stringify(picked));
+check("and marks it, and only it, as chosen", checked() === "0000100", checked());
+check("the preview is painted in it", $("lobbyMe").style["--me"] === THEMES.light.stains[4],
+  $("lobbyMe").style["--me"]);
+swatches[4].click();
+check("picking it again is not another change", picked.length === 1, JSON.stringify(picked));
+
+const arrow = key => { for (const fn of $("swatches").handlers.keydown) fn({ key, preventDefault() {} }); };
+arrow("ArrowRight");
+check("an arrow key moves the pick along", picked.at(-1) === 5 && checked() === "0000010", checked());
+arrow("ArrowRight"); arrow("ArrowRight");
+check("and wraps round at the end", picked.at(-1) === 0, String(picked.at(-1)));
+
+// The server's choice, shown to a player who has not picked. Not a pick of
+// their own, so it is not reported back as one.
+const before = picked.length;
+ui.setColour(2);
+check("a colour handed in from outside is shown", checked() === "0010000", checked());
+check("without being reported as the player's pick", picked.length === before);
+
+$("swTheme").click();
+check("the swatches follow the theme",
+  swatches[1].style.background === THEMES.dark.stains[1], swatches[1].style.background);
+check("and so does the preview", $("lobbyMe").style["--me"] === THEMES.dark.stains[2]);
+$("swTheme").click();
+
+const typeName = v => {
+  $("fLobbyName").value = v;
+  for (const fn of $("fLobbyName").handlers.input) fn({});
+};
+const save = async () => { $("btnLobbyName").click(); await new Promise(r => setTimeout(r, 0)); };
+
+ui.renderAuth({ id: "a", username: "ada", displayName: "Ada" });
+check("the name starts as the display name", $("fLobbyName").value === "Ada", $("fLobbyName").value);
+check("and is what the cell says", $("mePreviewName").textContent === "Ada");
+check("there is nothing to save yet", $("btnLobbyName").disabled === true);
+
+typeName("Ada L");
+check("the cell shows the name as it is typed", $("mePreviewName").textContent === "Ada L");
+check("and it can now be saved", $("btnLobbyName").disabled === false);
+
+const asked = [];
+renameImpl = async name => {
+  asked.push(name);
+  ui.renderAuth({ id: "a", username: "ada", displayName: name.trim() });
+};
+await save();
+check("saving sends the new name", asked.at(-1) === "Ada L", JSON.stringify(asked));
+check("and settles on it", $("fLobbyName").value === "Ada L" && $("btnLobbyName").disabled === true);
+check("the menu's account panel agrees", $("whoName").textContent === "Ada L");
+
+renameImpl = async () => { throw new Error("That display name is taken."); };
+typeName("Bo");
+await save();
+check("a refusal is said on the card", $("lobbyNameError").textContent === "That display name is taken.",
+  $("lobbyNameError").textContent);
+check("and what was typed is kept to fix", $("fLobbyName").value === "Bo");
+check("the button is ready to try again", $("btnLobbyName").disabled === false &&
+  $("btnLobbyName").textContent === "Save");
+typeName("Bob");
+check("typing clears the refusal", $("lobbyNameError").textContent === "");
+
+typeName("   ");
+check("a blank name cannot be saved", $("btnLobbyName").disabled === true);
+check("and the cell keeps the saved one", $("mePreviewName").textContent === "Ada L");
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

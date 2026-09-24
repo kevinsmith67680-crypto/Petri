@@ -26,7 +26,8 @@ const ctx2d = new Proxy({}, {
 
 class El {
   constructor(id = "") {
-    this.id = id; this.attrs = {}; this.style = {}; this.handlers = {};
+    this.id = id; this.attrs = {}; this.handlers = {};
+    this.style = { setProperty(k, v) { this[k] = String(v); } };
     this.hidden = false; this.disabled = false;
     this.textContent = ""; this.innerHTML = ""; this.value = "";
     this.offsetWidth = 0; this.clientWidth = 300; this._lock = null;

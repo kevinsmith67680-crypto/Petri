@@ -17,6 +17,7 @@ import { SERVER_URL } from "./config.js";
 import { PRACTICE } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
 import { PHASE_LOBBY, PHASE_COUNTDOWN } from "../shared/protocol.js";
+import { STAIN_COUNT } from "../shared/sim.js";
 import { createAccountClient } from "./account.js";
 
 const params = new URLSearchParams(location.search);
@@ -24,6 +25,21 @@ const MODE = params.get("mode") === "online" ? "online" : "local";
 const NAME = (params.get("name") || "You").slice(0, 16);
 
 const settings = { theme: "light", map: true, board: true, grid: true, names: true, diag: false };
+
+// The colour picked on the lobby card, kept on this device. Cosmetic, so it is
+// not worth an account column: losing it costs one click. null until the
+// player picks one, which leaves the server to choose online and the default
+// player colour in practice — so nobody's cell changes colour unasked.
+const COLOUR_KEY = "engulfs.colour";
+let colourPick = (() => {
+  try {
+    const raw = localStorage.getItem(COLOUR_KEY);
+    const ci = raw === null ? NaN : Number(raw);
+    return Number.isInteger(ci) && ci >= 0 && ci < STAIN_COUNT ? ci : null;
+  } catch {
+    return null;              // storage blocked; the pick lasts the session
+  }
+})();
 
 const canvas = document.getElementById("stage");
 const mapCanvas = document.getElementById("minimap");
@@ -90,6 +106,11 @@ const ui = createUI({
   onThemeChange: () => renderGoogleButton(),
   onRamp: action => conn?.sendRamp(action),
   onSharp: on => renderer.setSharp(on),
+  onColour: ci => {
+    colourPick = ci;
+    try { localStorage.setItem(COLOUR_KEY, String(ci)); } catch { /* session only */ }
+    conn?.setColour?.(ci);
+  },
   auth: {
     // Every one of these guards `api`, which is null in guest mode. Without
     // the check the click throws "null is not an object" into the console and
@@ -115,11 +136,15 @@ const ui = createUI({
     },
     async rename(displayName) {
       if (!api) throw new Error(OFFLINE_AUTH_MSG);
-      const payload = await api.setDisplayName(displayName);
-      applyAuth(payload);
-      // Tell the server to re-read the name so it updates on the live cell
-      // without needing a reconnect.
-      conn?.sendRename?.();
+      await api.setDisplayName(displayName);
+      // Identity has not changed, so unlike signing in this keeps the
+      // connection. It used to go through applyAuth, which reconnects — and
+      // from the lobby that threw the player out of their place and their
+      // ready state for the sake of a new name.
+      ui.renderAuth(api.account);
+      // Tell the server to re-read the name so it updates on the live cell.
+      // Practice has no server, so it is handed the name directly.
+      conn?.sendRename?.(api.account?.displayName);
     }
   }
 });
@@ -187,15 +212,19 @@ function connect(stake = PRACTICE) {
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
       ui.setWagerAvailable(false, "Wagering needs a wss:// connection to the server.");
-      return createLocalConnection({ name: NAME, world: MODES[0].world });
+      return createLocalConnection({ name: NAME, ci: colourPick, world: MODES[0].world });
     }
     const socket = createSocketConnection({
-      url, name: NAME, stake, token: api?.token || null
+      url, name: NAME, stake, token: api?.token || null, ci: colourPick
     });
     socket.on("event", onEvent);
     socket.on("account", onAccount);
     socket.on("round", onRound);
-    socket.on("welcome", w => ui.setTestMode(w.test));
+    socket.on("welcome", w => {
+      ui.setTestMode(w.test);
+      // With no pick of their own, show the player the colour they were given.
+      if (colourPick === null) ui.setColour(w.ci);
+    });
     socket.on("reconnecting", ({ attempt, of }) => {
       // The game keeps its last frame on screen while this runs; it is a
       // pause, not an ending.
@@ -276,6 +305,7 @@ function connect(stake = PRACTICE) {
   }
   const local = createLocalConnection({
     name: api?.account?.displayName || NAME,
+    ci: colourPick,
     world: MODES[0].world
   });
   local.on("event", onEvent);
@@ -702,6 +732,8 @@ if (api) {
   // cannot work.
   ui.setAuthAvailable(false, OFFLINE_AUTH_MSG);
 }
+
+ui.setColour(colourPick);
 
 // Connect immediately so the arena is visible behind the start card.
 conn = connect();
