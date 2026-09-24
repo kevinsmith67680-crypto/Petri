@@ -815,6 +815,25 @@ export function createSocketConnection({
       }
     },
 
+    // Back to the menu from the lobby. The server refunds the stake and closes
+    // the socket itself; until it does, its messages still arrive — the
+    // refunded balance among them — but the close is ours rather than a
+    // disconnection, so nothing is retried and nothing is reported.
+    leave() {
+      closedByUs = true;
+      clearInterval(pingTimer);
+      clearInterval(stallTimer);
+      if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+      const ws = socket;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "leave" }));
+        // A server that never answers is not waited on for ever.
+        setTimeout(() => { try { ws.close(); } catch { /* already gone */ } }, 3000);
+      } else {
+        try { ws?.close(); } catch { /* already gone */ }
+      }
+    },
+
     // The server can report a retryable fault of its own (a session lookup
     // that failed), and the menu needs the same distinction for it.
     everBeenLive: () => everLive,

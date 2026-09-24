@@ -394,6 +394,78 @@ console.log("\n-- the colour picked in the lobby is the one the room sees --");
   await ws.drop();
 }
 
+console.log("\n-- leaving the lobby for the menu --");
+
+// Closing the socket from the lobby left the stake lingering for six seconds
+// before the sweep refunded it, with nothing pushed to say so — the menu the
+// player landed on showed the stake as still at risk. `leave` settles it on
+// the spot. A live body gets no such exit: it lingers like any other.
+{
+  const signup = async name => (await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: name.toLowerCase(), password: "password123", displayName: name, dateOfBirth: "1990-01-01" })
+  })).json()).token;
+  const money = async tok => (await (await fetch(`http://localhost:${PORT}/api/me`, {
+    headers: { Authorization: `Bearer ${tok}` }
+  })).json());
+  const until = async (cond, ms = 12000) => {
+    for (let t = 0; t < ms && !(await cond()); t += 50) await settle(50);
+    return cond();
+  };
+  const enter = async (tok, name, stake = 2_000_000) => {
+    const ws = new FakeWS();
+    globalThis.__wss.emit("connection", ws, req);
+    await ws.deliver({ type: "join", name, stake, token: tok, protocol: PROTOCOL_VERSION });
+    return ws;
+  };
+  const texts = ws => ws.out.filter(m => m !== "<binary>").map(JSON.parse);
+
+  // Rounds are rolling here. Anyone who joins outside a live round waits in
+  // the lobby, and stays there for the round if they never ready up.
+  const quiet = await until(async () => (await room("highstakes")).phase !== "live");
+  check("the room is between rounds", quiet, (await room("highstakes")).phase);
+
+  const tok = await signup("Leaver");
+  const opening = await money(tok);
+  const ws = await enter(tok, "Leaver");
+  const joined = await money(tok);
+  check("joining holds the stake", joined.pot === 2_000_000, `${joined.pot}`);
+  const before = await room("highstakes");
+
+  await ws.deliver({ type: "leave" });
+  const pushed = texts(ws).filter(m => m.type === "account").at(-1);
+  check("the refund is pushed before the socket closes",
+    pushed && pushed.pot === 0 && pushed.balance === opening.balance,
+    pushed ? `balance ${pushed.balance}, pot ${pushed.pot}` : "no account push");
+  check("the socket is closed normally", ws.closed?.code === 1000, JSON.stringify(ws.closed || {}));
+  const after = await money(tok);
+  check("the stake is back at once, not after the linger",
+    after.pot === 0 && after.balance === opening.balance, `${after.balance} / ${after.pot}`);
+
+  await ws.drop();
+  const gone = await room("highstakes");
+  check("nothing is left lingering", gone.lingering === before.lingering,
+    `${before.lingering} -> ${gone.lingering}`);
+  check("and the player is out of the room", gone.players === before.players - 1,
+    `${before.players} -> ${gone.players}`);
+
+  // In a round, with a body on the board: not let off early. The player
+  // readies and plays rather than relying on anyone else's rounds rolling.
+  const tok2 = await signup("Stayer");
+  await until(async () => (await room("standard")).phase !== "live");
+  const ws2 = await enter(tok2, "Stayer", 1_000_000);
+  await ws2.deliver({ type: "ready", ready: true });
+  const started = await until(() => texts(ws2).some(m => m.type === "round_start"));
+  check("they are dealt into a round", started);
+  const lingerBefore = (await room("standard")).lingering;
+  await ws2.deliver({ type: "leave" });
+  await ws2.drop();
+  const held = await money(tok2);
+  check("a live body keeps its stake at risk", held.pot === 1_000_000, `${held.pot}`);
+  check("and lingers like any other exit",
+    (await room("standard")).lingering === lingerBefore + 1);
+}
+
 console.log("\n-- a short lobby is padded without bunching the humans --");
 
 // Bots stand in for a lobby that has not filled. They are dealt onto the same

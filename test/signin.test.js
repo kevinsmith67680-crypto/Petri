@@ -291,6 +291,58 @@ live.handlers.message.forEach(fn => fn({ data: lobbyMsg(1) }));   // PHASE_LIVE
 check("a lobby broadcast during a live round is ignored",
   $("lobbyVeil").hidden === true);
 
+console.log("\n-- returning to the menu from the lobby --");
+
+// The lobby card's way back to the pregame menu. It has to let the room go
+// properly — a `leave`, so the server refunds the stake now and says so — and
+// nothing the old socket still delivers may drag the lobby back over the menu.
+{
+  $("btnStart").click();
+  await settle();
+  const ws = sockets[sockets.length - 1];
+  ws.handlers.message.forEach(fn => fn({ data: lobbyMsg(4, 5) }));
+  check("the lobby is open, counting", $("lobbyVeil").hidden === false && $("lobbyCount").hidden === false);
+  check("the lobby's figures stay on screen through the count", $("lobbyNums").hidden !== true);
+  check("the card names the room and its stake",
+    $("lobbyRoom").hidden === false && $("lobbyRoom").textContent === "Standard · 1.00 USDC stake",
+    $("lobbyRoom").textContent);
+
+  $("btnReady").click();
+  const opened = sockets.length;
+  const mark = ws.sent.length;
+  $("btnLobbyMenu").click();
+  await settle();
+  check("the room is told the player is leaving",
+    ws.sent.slice(mark).some(m => String(m).includes('"type":"leave"')),
+    ws.sent.slice(mark).join(" ") || "nothing sent");
+  check("the pregame menu is back", $("startVeil").hidden === false);
+  check("and the lobby is gone", $("lobbyVeil").hidden === true);
+  check("practice behind the menu needs no socket", sockets.length === opened, `${sockets.length}`);
+
+  // Still in flight when the button was pressed.
+  ws.handlers.message.forEach(fn => fn({ data: lobbyMsg(4, 4) }));
+  check("a lobby message from the room just left is ignored", $("lobbyVeil").hidden === true);
+
+  ws.handlers.message.forEach(fn => fn({
+    data: JSON.stringify({ type: "account", balance: 5_000_000, pot: 0, stake: 0, staked: false, demo: true })
+  }));
+  check("but the refunded balance it carries is shown",
+    /^5\.00/.test($("balValue").innerHTML), $("balValue").innerHTML);
+
+  (ws.handlers.close || []).forEach(fn => fn({ code: 1000, reason: "Left" }));
+  check("the server's close is not reported as a disconnection",
+    $("errVeil").hidden !== false && !/disconnected/i.test($("modeNote").textContent),
+    $("modeNote").textContent);
+
+  $("btnStart").click();
+  await settle();
+  const again = sockets[sockets.length - 1];
+  again.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
+  check("Start goes back into a lobby", again !== ws && $("lobbyVeil").hidden === false);
+  check("not ready, since leaving un-readied them",
+    $("btnReady").getAttribute("aria-pressed") === "false", $("btnReady").getAttribute("aria-pressed"));
+}
+
 console.log("\n-- creating an account carries the date of birth --");
 
 // Every layer around this one already handled the date: the form reads the

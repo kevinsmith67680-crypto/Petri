@@ -1043,6 +1043,35 @@ wss.on("connection", (ws, req) => {
           if (!player || player.alive || ci === null) return;
           player.ci = ci;
           reannounce(room, player);
+        } else if (msg.type === "leave") {
+          // Back to the menu from the lobby. Nobody can be eaten there, so a
+          // linger protects nothing: the stake comes back now rather than six
+          // seconds after the socket closes, and the account push lands
+          // before the close, so the menu shows the balance the player has.
+          // A live body is not let off that way — it closes, and lingers,
+          // like any other exit.
+          const player = room.world.players.get(id);
+          if (player?.alive) { ws.close(1000, "Left"); return; }
+          meta.left = true;
+          meta.ready = false;
+          // Out of the room before anything is awaited, so a count that
+          // finishes meanwhile cannot deal them into the round.
+          room.clients.delete(ws);
+          if (player) removePlayer(room.world, id);
+          syncBots(room);
+          pushLobby(room);
+          // Only a stake still held for this round is refunded — the one
+          // locked on joining. After a round it has already been settled.
+          if (meta.stake !== PRACTICE && meta.accountId) {
+            try {
+              await backend.refund(meta.accountId);
+            } catch (err) {
+              console.error("refund on leave:", err.message);
+            }
+          }
+          meta.stake = PRACTICE;
+          await pushAccount(ws, meta);
+          ws.close(1000, "Left");
         } else if (msg.type === "ramp") {
           const result = msg.action === "withdraw"
             ? ramp.requestWithdrawal(meta.accountId, 0, null)
@@ -1246,8 +1275,9 @@ wss.on("connection", (ws, req) => {
     if (n <= 0) connectionsByIp.delete(ip); else connectionsByIp.set(ip, n);
 
     // A replaced connection has already been reconciled by the join that
-    // replaced it; lingering here would refund a stake that is now live.
-    if (meta.joined && room && !meta.replaced) {
+    // replaced it; lingering here would refund a stake that is now live. One
+    // that left for the menu has already been refunded and removed.
+    if (meta.joined && room && !meta.replaced && !meta.left) {
       pushLobby(room);
       syncBots(room);
       // Do not delete the player immediately. Vanishing on demand is a free

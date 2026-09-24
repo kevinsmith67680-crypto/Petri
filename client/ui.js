@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
-import { MODES } from "../shared/modes.js";
+import { MODES, modeById } from "../shared/modes.js";
 import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
   from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
@@ -183,19 +183,25 @@ export function createUI({
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
 
-    const { ready = 0, connected = 0, min = 0, max = 0, phase, starts } = state || {};
+    const { ready = 0, connected = 0, min = 0, max = 0, phase, starts, mode } = state || {};
+    // The lobby message names its room. Worth saying on the card, since the
+    // menu behind it offers more than one and each holds a different stake.
+    const room = modeById(mode);
+    $("lobbyRoom").hidden = !room;
+    if (room) $("lobbyRoom").textContent = `${room.label} · ${formatUsdc(room.stake)} USDC stake`;
     $("lobbyReady").textContent = ready;
     $("lobbyConnected").textContent = connected;
     $("lobbyMin").textContent = min;
     $("lobbyFill").style.width = `${Math.min(100, min ? (ready / min) * 100 : 0)}%`;
 
-    // The room is full and the round is seconds away. How full the lobby is
-    // has stopped being news, so the count takes the card over — the number
-    // itself is ticked by renderCountdown off the snapshot clock.
+    // The room is full and the round is seconds away, so the count replaces
+    // the meter, which could only read full — the number itself is ticked by
+    // renderCountdown off the snapshot clock. The figures below it stay: who
+    // is in and who is ready is the lobby's own information, and it is what
+    // a player deciding whether to stay needs while the count runs.
     const counting = phase === PHASE_COUNTDOWN;
     el.lobbyCount.hidden = !counting;
     $("lobbyMeter").hidden = counting;
-    $("lobbyNums").hidden = counting;
     // Written here as well as from the snapshot clock, because the card is
     // opened by this message: leaving it to the next frame shows the previous
     // count's final number for as long as it takes one to arrive.

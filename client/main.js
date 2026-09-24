@@ -237,15 +237,21 @@ function connect(stake = PRACTICE) {
     const socket = createSocketConnection({
       url, name: NAME, stake, token: api?.token || null, ci: colourPick
     });
+    // Once this is no longer the connection in use — the player went back to
+    // the menu — its lobby and round messages describe a room they have left,
+    // and acting on one would put the lobby card back over the menu. Account
+    // messages still count, whichever socket carries them: the refund for
+    // leaving arrives on this one after it has been replaced.
+    const on = (kind, fn) => socket.on(kind, payload => { if (conn === socket) fn(payload); });
     socket.on("event", onEvent);
     socket.on("account", onAccount);
-    socket.on("round", onRound);
-    socket.on("welcome", w => {
+    on("round", onRound);
+    on("welcome", w => {
       ui.setTestMode(w.test);
       // With no pick of their own, show the player the colour they were given.
       if (colourPick === null) ui.setColour(w.ci);
     });
-    socket.on("reconnecting", ({ attempt, of }) => {
+    on("reconnecting", ({ attempt, of }) => {
       // The game keeps its last frame on screen while this runs; it is a
       // pause, not an ending.
       ui.showReconnecting(attempt, of);
@@ -256,19 +262,19 @@ function connect(stake = PRACTICE) {
     // explain, and a banner over a page the player has only just loaded is
     // both wrong and alarming. In a game it does get one, because an empty
     // arena needs explaining — it just does not claim to be reconnecting.
-    socket.on("connecting", ({ attempt, of }) => {
+    on("connecting", ({ attempt, of }) => {
       ui.setMode(`Connecting… (${attempt} of ${of})`);
       if (running) ui.showConnecting(attempt, of);
     });
-    socket.on("connected", () => {
+    on("connected", () => {
       ui.hideReconnecting();
       ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     });
-    socket.on("reconnected", () => {
+    on("reconnected", () => {
       ui.hideReconnecting();
       ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     });
-    socket.on("close", ev => {
+    on("close", ev => {
       ui.hideReconnecting();
       ui.setMode("Disconnected");
       // Another connection took this account over — almost always a second
@@ -314,7 +320,7 @@ function connect(stake = PRACTICE) {
         });
       }
     });
-    socket.on("error", () => ui.setMode(`Could not reach ${url}`));
+    on("error", () => ui.setMode(`Could not reach ${url}`));
     // Must be set on BOTH paths. The page connects as a guest before the
     // stored session has been validated, so this flag starts false; without
     // clearing it here, signing in reconnects to the server but the menu goes
@@ -546,6 +552,30 @@ document.getElementById("btnReady").addEventListener("click", () => {
   ui.setReady(ready);
   conn?.sendReady?.(ready);
 });
+
+// Back to the pregame menu from the lobby, with the practice arena behind it
+// as on page load. The socket is let go with `leave` rather than dropped: the
+// server refunds the stake there and then and says so before it closes, so
+// the menu shows the balance the player actually has. A plain close would
+// hold the stake for the six-second linger and never say it came back.
+function returnToMenu() {
+  if (spectating) stopSpectating();
+  ready = false;
+  ui.setReady(false);
+  running = false;
+  seenAlive = false;
+  ui.hideReconnecting();
+  const leaving = conn;
+  // Replaced first, so anything the old socket still delivers is recognised
+  // as belonging to a room the player has left.
+  conn = connect(PRACTICE);
+  if (leaving?.leave) leaving.leave();
+  else leaving?.close?.();
+  ui.showStart();
+  document.getElementById("btnStart")?.focus?.();
+}
+
+document.getElementById("btnLobbyMenu").addEventListener("click", returnToMenu);
 
 document.getElementById("btnSplit")
   .addEventListener("click", () => running && conn?.sendAction("split"));

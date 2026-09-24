@@ -221,6 +221,14 @@
     font-variant-numeric:tabular-nums;
   }
   #btnReady[aria-pressed="true"]{ background:var(--accent); }
+  .card .lobby-room{ margin:0 0 6px; font-size:12.5px; }
+  .card .lobby-room[hidden]{ display:none; }
+  /* The two lobby buttons share a row and fill it, and when the ready label
+     grows ("Ready — waiting for others") or the screen is narrow they stack,
+     each full width, rather than wrapping ragged. The spacing lives on the
+     row, not on each button. */
+  .lobby-actions{ margin-top:28px; display:flex; flex-wrap:wrap; gap:10px; }
+  .card .lobby-actions button{ margin-top:0; flex:1 1 auto; }
 
   /* The pre-round count. It takes the place of the ready meter rather than
      sitting beside it: once the round is seconds away, how full the lobby is
@@ -1126,20 +1134,22 @@
 
 <div class="veil" id="lobbyVeil" hidden>
   <div class="card">
+    <!-- Which room this is, and what it costs to be in it. -->
+    <p class="lobby-room" id="lobbyRoom" hidden></p>
     <h2>Lobby</h2>
     <p id="lobbyLine">Waiting for players.</p>
     <div class="meter" id="lobbyMeter"><div class="meter-fill" id="lobbyFill"></div></div>
+    <!-- aria-live so the count is announced rather than only seen. Polite, not
+         assertive: five interruptions in five seconds is worse than a count
+         that is a beat behind. The number is the server's, ticked from the
+         snapshot clock. It sits above the numbers so it is read first. -->
+    <div class="lobby-count" id="lobbyCount" hidden aria-live="polite">
+      <b id="lobbyCountNum">5</b><span>Starting</span>
+    </div>
     <div class="lobby-nums" id="lobbyNums">
       <div><i>Ready</i><em id="lobbyReady">0</em></div>
       <div><i>Connected</i><em id="lobbyConnected">0</em></div>
       <div><i>Needed to start</i><em id="lobbyMin">100</em></div>
-    </div>
-    <!-- aria-live so the count is announced rather than only seen. Polite, not
-         assertive: five interruptions in five seconds is worse than a count
-         that is a beat behind. The number is the server's, ticked from the
-         snapshot clock. -->
-    <div class="lobby-count" id="lobbyCount" hidden aria-live="polite">
-      <b id="lobbyCountNum">5</b><span>Starting</span>
     </div>
     <!-- The player's own cell, edited while they wait. The preview is drawn
          the way the arena draws a cell, so what is picked here is what the
@@ -1158,7 +1168,12 @@
         <div class="swatches" id="swatches" role="radiogroup" aria-labelledby="lblColour"></div>
       </div>
     </div>
-    <button id="btnReady" type="button">I'm ready</button>
+    <div class="lobby-actions">
+      <button id="btnReady" type="button">I'm ready</button>
+      <!-- Back to the pregame menu: the stake is refunded on the spot, and
+           the player can pick another room or play practice from there. -->
+      <button id="btnLobbyMenu" type="button" class="ghost">Return to menu</button>
+    </div>
     <p class="next" id="lobbyHint">The match begins as soon as enough players are ready.</p>
     <!-- The player's previous game, from their match history. Hidden until
          there is one. The links open in a new tab so sharing does not cost the
