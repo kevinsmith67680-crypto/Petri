@@ -17,13 +17,36 @@ import { SERVER_URL } from "./config.js";
 import { PRACTICE } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
 import { PHASE_LOBBY, PHASE_COUNTDOWN } from "../shared/protocol.js";
+import { STAIN_COUNT } from "../shared/sim.js";
 import { createAccountClient } from "./account.js";
 
 const params = new URLSearchParams(location.search);
 const MODE = params.get("mode") === "online" ? "online" : "local";
 const NAME = (params.get("name") || "You").slice(0, 16);
+// The address a shared result points people at: this page, in the mode that
+// has the online game, and nothing else from the query string — no ?name=,
+// no ?server= pointing somewhere only this player can reach. Joined as a
+// string rather than parsed: a page opened from disk has the origin "null",
+// and a URL constructor that throws here would stop the whole client loading.
+const SHARE_URL =
+  `${location.origin || ""}${location.pathname || "/"}${MODE === "online" ? "?mode=online" : ""}`;
 
 const settings = { theme: "light", map: true, board: true, grid: true, names: true, diag: false };
+
+// The colour picked on the lobby card, kept on this device. Cosmetic, so it is
+// not worth an account column: losing it costs one click. null until the
+// player picks one, which leaves the server to choose online and the default
+// player colour in practice — so nobody's cell changes colour unasked.
+const COLOUR_KEY = "engulfs.colour";
+let colourPick = (() => {
+  try {
+    const raw = localStorage.getItem(COLOUR_KEY);
+    const ci = raw === null ? NaN : Number(raw);
+    return Number.isInteger(ci) && ci >= 0 && ci < STAIN_COUNT ? ci : null;
+  } catch {
+    return null;              // storage blocked; the pick lasts the session
+  }
+})();
 
 const canvas = document.getElementById("stage");
 const mapCanvas = document.getElementById("minimap");
@@ -62,16 +85,28 @@ function reconnect() {
   conn = connect(ui.getStake());
 }
 
+// Career totals and the last game both come from the match history, which
+// only the server holds.
+function refreshStats() {
+  if (!api?.signedIn) {
+    ui.renderCareer(null);
+    ui.renderLastGame(null);
+    return;
+  }
+  api.stats()
+    .then(r => {
+      ui.renderCareer(r.stats);
+      ui.renderLastGame(r.matches?.[0] || null);
+    })
+    .catch(() => {});
+}
+
 function applyAuth(payload) {
   ui.renderAuth(api?.account || null);
   // Signing in or out changes which transport is correct, so rebuild it.
   reconnect();
   // Career totals live server-side; refresh them whenever identity changes.
-  if (api?.signedIn) {
-    api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
-  } else {
-    ui.renderCareer(null);
-  }
+  refreshStats();
   if (payload) {
     onAccount({
       balance: payload.balance,
@@ -84,12 +119,18 @@ function applyAuth(payload) {
 
 const ui = createUI({
   settings,
+  shareUrl: SHARE_URL,
   onStart: start,
   // Google bakes its theme in at render time, so the button has to be redrawn
   // or it stays light on a dark menu.
   onThemeChange: () => renderGoogleButton(),
   onRamp: action => conn?.sendRamp(action),
   onSharp: on => renderer.setSharp(on),
+  onColour: ci => {
+    colourPick = ci;
+    try { localStorage.setItem(COLOUR_KEY, String(ci)); } catch { /* session only */ }
+    conn?.setColour?.(ci);
+  },
   auth: {
     // Every one of these guards `api`, which is null in guest mode. Without
     // the check the click throws "null is not an object" into the console and
@@ -115,11 +156,15 @@ const ui = createUI({
     },
     async rename(displayName) {
       if (!api) throw new Error(OFFLINE_AUTH_MSG);
-      const payload = await api.setDisplayName(displayName);
-      applyAuth(payload);
-      // Tell the server to re-read the name so it updates on the live cell
-      // without needing a reconnect.
-      conn?.sendRename?.();
+      await api.setDisplayName(displayName);
+      // Identity has not changed, so unlike signing in this keeps the
+      // connection. It used to go through applyAuth, which reconnects — and
+      // from the lobby that threw the player out of their place and their
+      // ready state for the sake of a new name.
+      ui.renderAuth(api.account);
+      // Tell the server to re-read the name so it updates on the live cell.
+      // Practice has no server, so it is handed the name directly.
+      conn?.sendRename?.(api.account?.displayName);
     }
   }
 });
@@ -187,16 +232,31 @@ function connect(stake = PRACTICE) {
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
       ui.setWagerAvailable(false, "Wagering needs a wss:// connection to the server.");
-      return createLocalConnection({ name: NAME, world: MODES[0].world });
+      return createLocalConnection({ name: NAME, ci: colourPick, world: MODES[0].world });
     }
     const socket = createSocketConnection({
-      url, name: NAME, stake, token: api?.token || null
+      url, name: NAME, stake, token: api?.token || null, ci: colourPick
     });
+    // Once this is no longer the connection in use — the player went back to
+    // the menu — its lobby and round messages describe a room they have left,
+    // and acting on one would put the lobby card back over the menu. Account
+    // messages still count, whichever socket carries them: the refund for
+    // leaving arrives on this one after it has been replaced.
+    const on = (kind, fn) => socket.on(kind, payload => { if (conn === socket) fn(payload); });
     socket.on("event", onEvent);
     socket.on("account", onAccount);
-    socket.on("round", onRound);
-    socket.on("welcome", w => ui.setTestMode(w.test));
-    socket.on("reconnecting", ({ attempt, of }) => {
+    on("round", onRound);
+    on("welcome", w => {
+      ui.setTestMode(w.test);
+      // A new connection's readiness is the server's to say: unready, unless
+      // it resumed a live run.
+      ready = !!w.ready;
+      ui.setReady(ready);
+      ui.setNextReady(ready);
+      // With no pick of their own, show the player the colour they were given.
+      if (colourPick === null) ui.setColour(w.ci);
+    });
+    on("reconnecting", ({ attempt, of }) => {
       // The game keeps its last frame on screen while this runs; it is a
       // pause, not an ending.
       ui.showReconnecting(attempt, of);
@@ -207,19 +267,19 @@ function connect(stake = PRACTICE) {
     // explain, and a banner over a page the player has only just loaded is
     // both wrong and alarming. In a game it does get one, because an empty
     // arena needs explaining — it just does not claim to be reconnecting.
-    socket.on("connecting", ({ attempt, of }) => {
+    on("connecting", ({ attempt, of }) => {
       ui.setMode(`Connecting… (${attempt} of ${of})`);
       if (running) ui.showConnecting(attempt, of);
     });
-    socket.on("connected", () => {
+    on("connected", () => {
       ui.hideReconnecting();
       ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     });
-    socket.on("reconnected", () => {
+    on("reconnected", () => {
       ui.hideReconnecting();
       ui.setMode(`Online at ${url.replace(/^wss?:\/\//, "")}`);
     });
-    socket.on("close", ev => {
+    on("close", ev => {
       ui.hideReconnecting();
       ui.setMode("Disconnected");
       // Another connection took this account over — almost always a second
@@ -265,7 +325,7 @@ function connect(stake = PRACTICE) {
         });
       }
     });
-    socket.on("error", () => ui.setMode(`Could not reach ${url}`));
+    on("error", () => ui.setMode(`Could not reach ${url}`));
     // Must be set on BOTH paths. The page connects as a guest before the
     // stored session has been validated, so this flag starts false; without
     // clearing it here, signing in reconnects to the server but the menu goes
@@ -276,6 +336,7 @@ function connect(stake = PRACTICE) {
   }
   const local = createLocalConnection({
     name: api?.account?.displayName || NAME,
+    ci: colourPick,
     world: MODES[0].world
   });
   local.on("event", onEvent);
@@ -326,7 +387,12 @@ function onRound(msg) {
     // press Start, you declare yourself ready and wait for the room.
     running = false;
     ui.setReady(ready);
+    // Read the history each time the card opens, not on every lobby message:
+    // those arrive on every join and leave. By now the last game is written —
+    // the fetch at the whistle can beat the server's own write of it.
+    const opening = ui.el.lobbyVeil.hidden;
     ui.showLobby(msg);
+    if (opening) refreshStats();
     return;
   }
   if (msg.type === "round_end") {
@@ -341,11 +407,12 @@ function onRound(msg) {
       nextIn: msg.nextIn,
       myName: api?.account?.displayName
     });
-    if (api?.signedIn) api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
+    refreshStats();
   } else if (msg.type === "round_start") {
     if (spectating) { spectating = false; ui.hideSpectator(); }
-    ready = false;
-    ui.setReady(false);
+    // Readiness is not reset here. The server keeps it from one round to the
+    // next, so resetting it left the next lobby offering "I'm ready" to a
+    // player it was already counting in — and pressing it did nothing.
     ui.hideLobby();
     ui.hideRoundEnd();
     // The server has already respawned us into the fresh arena, but the
@@ -366,6 +433,13 @@ function onRound(msg) {
 // Nothing about the balance is computed client-side.
 function onAccount(msg) {
   if (msg.type === "account_error") {
+    // The server sits a player out of the next round when it cannot take the
+    // stake for it, un-readying them. The buttons have to say so.
+    if (msg.code === "funds") {
+      ready = false;
+      ui.setReady(false);
+      ui.setNextReady(false);
+    }
     // Always note it in the menu, but if the player has already started the
     // menu is hidden — so put it in front of them instead of leaving a blank
     // arena with an explanation nobody can see.
@@ -492,6 +566,30 @@ document.getElementById("btnReady").addEventListener("click", () => {
   conn?.sendReady?.(ready);
 });
 
+// Back to the pregame menu from the lobby, with the practice arena behind it
+// as on page load. The socket is let go with `leave` rather than dropped: the
+// server refunds the stake there and then and says so before it closes, so
+// the menu shows the balance the player actually has. A plain close would
+// hold the stake for the six-second linger and never say it came back.
+function returnToMenu() {
+  if (spectating) stopSpectating();
+  ready = false;
+  ui.setReady(false);
+  running = false;
+  seenAlive = false;
+  ui.hideReconnecting();
+  const leaving = conn;
+  // Replaced first, so anything the old socket still delivers is recognised
+  // as belonging to a room the player has left.
+  conn = connect(PRACTICE);
+  if (leaving?.leave) leaving.leave();
+  else leaving?.close?.();
+  ui.showStart();
+  document.getElementById("btnStart")?.focus?.();
+}
+
+document.getElementById("btnLobbyMenu").addEventListener("click", returnToMenu);
+
 document.getElementById("btnSplit")
   .addEventListener("click", () => running && conn?.sendAction("split"));
 document.getElementById("btnFeed")
@@ -575,9 +673,7 @@ function frame(now) {
           of: lastOf
         });
         // The match has just been written server-side, so re-read the totals.
-        if (api?.signedIn) {
-          api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
-        }
+        refreshStats();
       }
 
       renderer.draw(fresh, camera, th, settings);
@@ -702,6 +798,8 @@ if (api) {
   // cannot work.
   ui.setAuthAvailable(false, OFFLINE_AUTH_MSG);
 }
+
+ui.setColour(colourPick);
 
 // Connect immediately so the arena is visible behind the start card.
 conn = connect();

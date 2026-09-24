@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Engulfs</title>
+<!-- What a shared link previews as. Facebook builds its whole card from these,
+     because its share address carries a link and nothing else. -->
+<meta name="description" content="You are one cell among a hundred. Grow by absorbing orbs, swallow anyone smaller than you, and stay clear of anyone larger.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Engulfs">
+<meta property="og:title" content="Engulfs">
+<meta property="og:description" content="You are one cell among a hundred. Grow by absorbing orbs, swallow anyone smaller than you, and stay clear of anyone larger.">
+<meta name="twitter:card" content="summary">
 <!-- All three are the same artwork on the same ground, so the tab, the
      bookmark and the home screen agree with each other and with the header.
      No SVG alternative is offered: a browser prefers one where it exists, and
@@ -188,8 +196,24 @@
   /* the pot bar shares the top centre, so shift it down when both show */
   .pot{ top:76px; }
 
+  /* ── lobby: the pregame menu's layout, two cards under the shared header ──
+     Everything below is scoped to the lobby, at the menu's type scale, so
+     the two screens read as one set and the menu's own cards are untouched. */
+
+  .lobby.menu{ width:min(1040px, 100%); }
+  /* A smaller mark than the menu's: the lobby is visited every round, and the
+     height is worth more to the cards below it. */
+  .lobby .logo{ width:140px; }
+  .lobby .head{ margin-bottom:14px; }
+  /* Lighter cards than the menu's, so they stay side by side on a tablet
+     rather than stacking at the menu's breakpoint. */
+  .lobby .panes{ grid-template-columns:1fr 1fr; }
+  @media (max-width:760px){ .lobby .panes{ grid-template-columns:1fr; } }
+  /* .pane-title i sets display:block, which beats the [hidden] UA rule. */
+  .pane-title i[hidden]{ display:none; }
+
   .meter{
-    margin-top:20px; height:6px; border-radius:3px;
+    margin-top:16px; height:8px; border-radius:4px;
     background:var(--key); border:1px solid var(--line); overflow:hidden;
   }
   .meter-fill{
@@ -198,32 +222,152 @@
   }
   @media (prefers-reduced-motion: reduce){ .meter-fill{ transition:none; } }
 
+  /* The pre-round count takes the meter's place, which could only read full
+     by then. The figures below it stay. */
+  .lobby-count{ margin-top:14px; display:grid; gap:4px; justify-items:center; }
+  .lobby-count[hidden]{ display:none; }
+  .lobby-count b{
+    font-size:76px; line-height:1; font-weight:600;
+    font-variant-numeric:tabular-nums; color:var(--accent);
+  }
+  .lobby-count span{ font-size:15.6px; color:var(--muted); }
+
   .lobby-nums{
     margin-top:16px; display:grid; grid-template-columns:repeat(3, 1fr);
-    gap:10px; font-size:12.5px;
+    gap:12px; font-size:16.2px;
   }
   /* Every class here that sets its own display needs this: the UA rule for
      [hidden] loses to a class selector, so hiding the element in script does
-     nothing without it. The count and the meter swap places mid-lobby. */
+     nothing without it. */
   .lobby-nums[hidden]{ display:none; }
-  .lobby-nums div{ display:grid; gap:3px; }
+  /* Figures sit on a shared baseline even when a label wraps to two lines,
+     as "Needed to start" does on a phone. */
+  .lobby-nums div{ display:grid; gap:4px; grid-template-rows:1fr auto; }
   .lobby-nums i{ font-style:normal; color:var(--muted); }
   .lobby-nums em{
-    font-style:normal; font-weight:600; font-size:20px;
+    font-style:normal; font-weight:600; font-size:26px;
     font-variant-numeric:tabular-nums;
   }
-  #btnReady[aria-pressed="true"]{ background:var(--accent); }
 
-  /* The pre-round count. It takes the place of the ready meter rather than
-     sitting beside it: once the round is seconds away, how full the lobby is
-     no longer tells the player anything they can act on. */
-  .lobby-count{ margin-top:18px; display:grid; gap:4px; justify-items:center; }
-  .lobby-count[hidden]{ display:none; }
-  .lobby-count b{
-    font-size:64px; line-height:1; font-weight:600;
-    font-variant-numeric:tabular-nums; color:var(--accent);
+  /* The player's own cell. --me is the picked colour, set from script because
+     the palette lives with the renderer. The preview sits beside the name;
+     the colours take the full width below, so all seven fit on a phone. */
+  .me{
+    --me:var(--accent);
+    display:grid; grid-template-columns:96px 1fr; gap:16px 20px; align-items:center;
   }
-  .lobby-count span{ font-size:12.5px; color:var(--muted); }
+  /* Drawn like an arena cell: fill, darker membrane, a gloss highlight up and
+     to the left, and the name in white with a dark edge. */
+  .me-cell{
+    position:relative; width:96px; height:96px; border-radius:50%;
+    background:var(--me); box-shadow:inset 0 0 0 4px rgba(0,0,0,.24);
+    display:grid; place-items:center; overflow:hidden;
+    transition:background .16s ease;
+  }
+  .me-cell::before{
+    content:""; position:absolute; left:28%; top:27%;
+    width:27%; height:27%; border-radius:50%; background:rgba(255,255,255,.22);
+  }
+  .me-cell span{
+    position:relative; max-width:88%; padding:0 2px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    /* Scaled to fit by length (--chars, set from script) between a readable
+       floor and the full size; past the floor, an ellipsis. */
+    font-size:clamp(10px, calc(118px / var(--chars, 8)), 15px);
+    font-weight:600; color:#fff;
+    text-shadow:0 0 2px rgba(0,0,0,.45), 0 1px 1px rgba(0,0,0,.34);
+  }
+  .me-field{ min-width:0; }
+  .me-colour{ grid-column:1 / -1; }
+  .me-label{ display:block; font-size:16.2px; color:var(--muted); margin-bottom:7.5px; }
+  .me-name{ display:flex; gap:10px; }
+  .me-name input{
+    flex:1; min-width:0;
+    font-family:inherit; font-size:17.5px;
+    padding:12px 15px; border-radius:6.2px;
+    background:var(--bg); color:var(--text);
+    border:1px solid var(--line-2);
+  }
+  .me-name input:focus{ outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent; }
+  .me-name button{
+    font-family:inherit; font-size:16.2px; font-weight:600;
+    padding:0 18px; border-radius:6.2px; cursor:pointer;
+    background:transparent; color:var(--text); border:1px solid var(--line-2);
+  }
+  .me-name button:hover:not([disabled]){ border-color:var(--text); }
+  .me-name button[disabled]{ opacity:.4; cursor:default; }
+  .me-name button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+  /* Room for one line of refusal ("That display name is taken.") without the
+     colours jumping when it appears. Restated because .block p outranks .err
+     and would turn the refusal grey. */
+  .lobby .err{ font-size:15.6px; line-height:1.4; margin-top:6px; min-height:1.4em; color:#c4453b; }
+  .swatches{ display:flex; flex-wrap:wrap; gap:10px; }
+  .swatch{
+    margin:0; padding:0; width:32px; height:32px; border-radius:50%;
+    border:none; box-shadow:inset 0 0 0 2px rgba(0,0,0,.18);
+    cursor:pointer; transition:transform .1s ease;
+  }
+  .swatch:hover{ transform:scale(1.1); }
+  /* Selected: a ring in the page's text colour, clear of the swatch, so it
+     reads on every hue in both themes. */
+  .swatch[aria-checked="true"]{
+    box-shadow:inset 0 0 0 2px rgba(0,0,0,.18), 0 0 0 2px var(--panel), 0 0 0 4px var(--text);
+  }
+  .swatch:focus-visible{ outline:2px solid var(--accent); outline-offset:4px; }
+
+  /* Ready is the card's one primary action, full width like Start on the
+     menu; Return to menu sits under it, outlined. */
+  .lobby-actions{ display:grid; gap:10px; }
+  .lobby-actions button{
+    width:100%; font-family:inherit; font-weight:600;
+    border-radius:6.2px; cursor:pointer;
+    transition:opacity .14s ease, background .14s ease, border-color .14s ease;
+  }
+  .lobby-actions button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+  #btnReady{
+    font-size:19.4px; padding:18.8px;
+    color:var(--panel); background:var(--text); border:none;
+  }
+  #btnReady:hover{ opacity:.84; }
+  #btnReady[aria-pressed="true"]{ background:var(--accent); }
+  #btnLobbyMenu{
+    font-size:16.9px; padding:13.8px;
+    background:transparent; color:var(--text); border:1px solid var(--line-2);
+  }
+  #btnLobbyMenu:hover{ border-color:var(--text); }
+  .lobby .lobby-hint{ margin-top:12px; font-size:15.6px; line-height:1.5; }
+
+  /* The last game's figures use the menu's fact rows. A money result carries
+     its currency small, as the pot bar does. */
+  .facts em small{ margin-left:5px; font-size:13.8px; font-weight:500; color:var(--muted); }
+  .facts em.up{ color:var(--accent); }
+  #lastStats{ margin-top:4px; }
+
+  /* What a post will say, quoted, so nobody shares blind. */
+  .lobby .share-quote{
+    padding-left:14px; border-left:2px solid var(--line-2);
+    color:var(--text);
+  }
+  /* Outlined chips at the menu's scale. Links and buttons share one look, so
+     which is which is not the player's concern. */
+  /* The chips stretch to fill each row, so however the labels fall — five in
+     a row on a wide card, two or three rows on a phone — the rows end flush
+     rather than leaving one chip stranded. */
+  .share{ margin-top:16px; display:flex; flex-wrap:wrap; gap:6px; }
+  .share a,
+  .share button{
+    flex:1 1 auto; display:inline-flex; align-items:center; justify-content:center;
+    font-family:inherit; font-size:14.4px; font-weight:600; line-height:1;
+    padding:9px 11px; border-radius:5px; cursor:pointer;
+    background:transparent; color:var(--text); text-decoration:none;
+    border:1px solid var(--line-2);
+  }
+  .share a:hover,
+  .share button:hover{ border-color:var(--text); }
+  .share a:focus-visible,
+  .share button:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+  .share .share-main{ background:var(--text); color:var(--panel); border-color:var(--text); }
+  .share button[hidden]{ display:none; }
 
   .standings{ margin-top:20px; display:grid; gap:6px; font-size:13.5px; }
   .standings div{
@@ -716,6 +860,19 @@
     .minimap{ width:96px; height:96px; }
     .card{ padding:28px 24px 24px; }
     .card h2{ font-size:27px; }
+    .me{ grid-template-columns:72px 1fr; gap:14px 14px; }
+    .me-cell{ width:72px; height:72px; }
+    .me-cell span{ font-size:clamp(9px, calc(88px / var(--chars, 8)), 12px); }
+    /* Seven in one row on a phone rather than six and an orphan. */
+    .swatches{ gap:8px; }
+    .swatch{ width:28px; height:28px; }
+    .lobby-count b{ font-size:60px; }
+    .lobby-nums em{ font-size:22px; }
+    .lobby-nums{ font-size:14.4px; }
+    /* Slimmer sides than the menu's cards, which the name field needs: beside
+       the preview it was left a hundred pixels at the menu's padding. */
+    .lobby .pane{ padding:24px 20px; }
+    .me-name button{ padding:0 14px; font-size:15px; }
   }
 
   @media (prefers-reduced-motion: reduce){
@@ -1014,24 +1171,126 @@
 </div>
 
 <div class="veil" id="lobbyVeil" hidden>
-  <div class="card">
-    <h2>Lobby</h2>
-    <p id="lobbyLine">Waiting for players.</p>
-    <div class="meter" id="lobbyMeter"><div class="meter-fill" id="lobbyFill"></div></div>
-    <div class="lobby-nums" id="lobbyNums">
-      <div><i>Ready</i><em id="lobbyReady">0</em></div>
-      <div><i>Connected</i><em id="lobbyConnected">0</em></div>
-      <div><i>Needed to start</i><em id="lobbyMin">100</em></div>
+  <!-- Laid out like the pregame menu: the shared header, two cards, the
+       footer. Looking back on the last game on the left, getting ready for
+       the next one on the right, as How it works and Play sit on the menu. -->
+  <div class="menu lobby">
+
+    <div class="head">
+      <div class="brand">
+        <img class="logo light" src="./assets/logo-light.png"
+             alt="engulfs" width="660" height="516">
+        <img class="logo dark" src="./assets/logo-dark.png"
+             alt="" aria-hidden="true" width="660" height="530">
+      </div>
     </div>
-    <!-- aria-live so the count is announced rather than only seen. Polite, not
-         assertive: five interruptions in five seconds is worse than a count
-         that is a beat behind. The number is the server's, ticked from the
-         snapshot clock. -->
-    <div class="lobby-count" id="lobbyCount" hidden aria-live="polite">
-      <b id="lobbyCountNum">5</b><span>Starting</span>
+
+    <div class="panes">
+
+      <!-- The player's previous game, from their match history. The share
+           links open in a new tab so sharing does not cost the player their
+           place in the lobby. -->
+      <section class="pane" aria-labelledby="lastTitle">
+        <div class="pane-title"><b id="lastTitle">Last game</b><i id="lastWhen" hidden></i></div>
+
+        <div id="lastGame" hidden>
+          <div class="block">
+            <h2 id="lastLine"></h2>
+            <div class="facts" id="lastStats"></div>
+          </div>
+
+          <div class="block">
+            <h2>Share your result</h2>
+            <p class="share-quote" id="shareQuote"></p>
+            <div class="share" role="group" aria-label="Share your result">
+              <button type="button" id="btnShareNative" class="share-main" hidden>Share…</button>
+              <a id="shareX" target="_blank" rel="noopener noreferrer">X</a>
+              <a id="shareFacebook" target="_blank" rel="noopener noreferrer">Facebook</a>
+              <a id="shareWhatsApp" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+              <a id="shareReddit" target="_blank" rel="noopener noreferrer">Reddit</a>
+              <button type="button" id="btnShareCopy">Copy</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- After the result, not before it: whichever of the two is shown
+           has to be the card's last block, or it keeps a divider under it. -->
+        <div class="block" id="lastEmpty">
+          <p>No games yet. When your first round ends, the result lands here, ready to share.</p>
+        </div>
+      </section>
+
+      <section class="pane" aria-labelledby="nextTitle">
+        <!-- Which room this is, and what it costs to be in it. -->
+        <div class="pane-title"><b id="nextTitle">Next round</b><i id="lobbyRoom" hidden></i></div>
+
+        <div class="block">
+          <h2>Lobby</h2>
+          <p id="lobbyLine">Waiting for players.</p>
+          <div class="meter" id="lobbyMeter"><div class="meter-fill" id="lobbyFill"></div></div>
+          <!-- aria-live so the count is announced rather than only seen.
+               Polite, not assertive: five interruptions in five seconds is
+               worse than a count that is a beat behind. The number is the
+               server's, ticked from the snapshot clock. It sits above the
+               figures so it is read first. -->
+          <div class="lobby-count" id="lobbyCount" hidden aria-live="polite">
+            <b id="lobbyCountNum">5</b><span>Starting</span>
+          </div>
+          <div class="lobby-nums" id="lobbyNums">
+            <div><i>Ready</i><em id="lobbyReady">0</em></div>
+            <div><i>Connected</i><em id="lobbyConnected">0</em></div>
+            <div><i>Needed to start</i><em id="lobbyMin">100</em></div>
+          </div>
+        </div>
+
+        <!-- Straight after the lobby's figures, so the one thing to do is
+             high on the card even on a short tablet screen. Ready is the
+             primary action, full width like Start on the menu. Return to menu
+             refunds the stake on the spot; the player can pick another room
+             or play practice from there. -->
+        <div class="block">
+          <div class="lobby-actions">
+            <button id="btnReady" type="button">I'm ready</button>
+            <button id="btnLobbyMenu" type="button">Return to menu</button>
+          </div>
+          <p class="lobby-hint" id="lobbyHint">The match begins as soon as enough players are ready.</p>
+        </div>
+
+        <!-- The player's own cell, edited while they wait. The preview is
+             drawn the way the arena draws a cell, so what is picked here is
+             what the room will see. The name is the account's display name —
+             the same one Rename changes in the menu — so it is unique and
+             checked server-side. -->
+        <div class="block">
+          <h2>Your cell</h2>
+          <div class="me" id="lobbyMe">
+            <div class="me-cell" id="mePreview" aria-hidden="true"><span id="mePreviewName"></span></div>
+            <div class="me-field">
+              <label class="me-label" for="fLobbyName">Name</label>
+              <div class="me-name">
+                <input id="fLobbyName" type="text" maxlength="16" autocomplete="off" spellcheck="false">
+                <button id="btnLobbyName" type="button" disabled>Save</button>
+              </div>
+              <p class="err" id="lobbyNameError" aria-live="polite"></p>
+            </div>
+            <div class="me-colour">
+              <span class="me-label" id="lblColour">Colour</span>
+              <div class="swatches" id="swatches" role="radiogroup" aria-labelledby="lblColour"></div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
     </div>
-    <button id="btnReady" type="button">I'm ready</button>
-    <p class="next" id="lobbyHint">The match begins as soon as enough players are ready.</p>
+
+    <footer class="menu-foot">
+      <span>18+ only. Play responsibly.</span>
+      <nav>
+        <a href="./legal/terms.html" target="_blank" rel="noopener">Terms &amp; Conditions</a>
+        <a href="./legal/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+      </nav>
+    </footer>
   </div>
 </div>
 

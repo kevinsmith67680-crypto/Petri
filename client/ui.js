@@ -4,15 +4,19 @@
 // ---------------------------------------------------------------------------
 
 import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
-import { MODES } from "../shared/modes.js";
+import { MODES, modeById } from "../shared/modes.js";
 import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
   from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
+import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
+import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, auth }) {
+export function createUI({
+  settings, onStart, onThemeChange, onRamp, onSharp, onColour, auth, shareUrl = ""
+}) {
   const el = {
     orbs: $("orbCount"),
     mass: $("statMass"),
@@ -179,19 +183,25 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
 
-    const { ready = 0, connected = 0, min = 0, max = 0, phase, starts } = state || {};
+    const { ready = 0, connected = 0, min = 0, max = 0, phase, starts, mode } = state || {};
+    // The lobby message names its room. Worth saying on the card, since the
+    // menu behind it offers more than one and each holds a different stake.
+    const room = modeById(mode);
+    $("lobbyRoom").hidden = !room;
+    if (room) $("lobbyRoom").textContent = `${room.label} · ${formatUsdc(room.stake)} USDC stake`;
     $("lobbyReady").textContent = ready;
     $("lobbyConnected").textContent = connected;
     $("lobbyMin").textContent = min;
     $("lobbyFill").style.width = `${Math.min(100, min ? (ready / min) * 100 : 0)}%`;
 
-    // The room is full and the round is seconds away. How full the lobby is
-    // has stopped being news, so the count takes the card over — the number
-    // itself is ticked by renderCountdown off the snapshot clock.
+    // The room is full and the round is seconds away, so the count replaces
+    // the meter, which could only read full — the number itself is ticked by
+    // renderCountdown off the snapshot clock. The figures below it stay: who
+    // is in and who is ready is the lobby's own information, and it is what
+    // a player deciding whether to stay needs while the count runs.
     const counting = phase === PHASE_COUNTDOWN;
     el.lobbyCount.hidden = !counting;
     $("lobbyMeter").hidden = counting;
-    $("lobbyNums").hidden = counting;
     // Written here as well as from the snapshot clock, because the card is
     // opened by this message: leaving it to the next frame shows the previous
     // count's final number for as long as it takes one to arrive.
@@ -205,7 +215,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
         : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`;
     $("lobbyHint").textContent = counting
       ? "Leaving the lobby now stops the round from starting."
-      : `The match begins as soon as ${min} players are ready. Capacity ${max}.`;
+      : `The match begins as soon as ${min} player${min === 1 ? " is" : "s are"} ready. Capacity ${max}.`;
 
     const btn = $("btnReady");
     // Nobody is being waited on once the count is running, so the button stops
@@ -356,6 +366,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     settings.theme = settings.theme === "light" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", settings.theme);
     swTheme.setAttribute("aria-checked", String(settings.theme === "dark"));
+    paintColours();
     onThemeChange?.(settings.theme);
   });
 
@@ -677,6 +688,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
       el.whoName.textContent = account.displayName;
       el.whoUser.textContent = `@${account.username}`;
       $("fPass").value = "";
+      savedName = account.displayName;
+      // Not while the player is typing in it: a rename from the menu, or the
+      // session being restored, would otherwise wipe what they had written.
+      if (document.activeElement !== nameInput) nameInput.value = savedName;
+      syncName();
     }
     // Wagering requires identity: a guest balance belongs to whoever opens
     // the next socket, which is to say nobody.
@@ -760,9 +776,182 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
   $("btnSaveName").addEventListener("click", submitRename);
   $("fNewName").addEventListener("keydown", e => { if (e.key === "Enter") submitRename(); });
 
+  // ── your cell, on the lobby card ──────────────────────────────────────────
+
+  // The display name, as the server last confirmed it, and the palette slot
+  // in use. -1 is "none picked", which the renderer draws in the theme's
+  // default player colour.
+  let savedName = "";
+  let myColour = -1;
+
+  const nameInput = $("fLobbyName");
+  const nameBtn = $("btnLobbyName");
+
+  // The preview follows the field as it is typed, so the player sees the name
+  // on the cell before committing to it. Save only lights up for a change.
+  function syncName() {
+    const typed = nameInput.value.trim();
+    const shown = typed || savedName;
+    setText($("mePreviewName"), shown);
+    // Longer names are set smaller so more of them fits inside the circle;
+    // the stylesheet turns the length into a size for each circle size.
+    $("mePreviewName").style.setProperty("--chars", String(Math.max(1, shown.length)));
+    nameBtn.disabled = !typed || typed === savedName;
+  }
+
+  async function saveLobbyName() {
+    if (nameBtn.disabled) return;
+    const err = $("lobbyNameError");
+    err.textContent = "";
+    nameBtn.disabled = true;
+    nameBtn.textContent = "Saving…";
+    try {
+      await auth?.rename(nameInput.value);
+      // Whatever the server kept, which may be tidier than what was typed.
+      nameInput.value = savedName;
+    } catch (e) {
+      err.textContent = e.message || "Could not change name.";
+    } finally {
+      nameBtn.textContent = "Save";
+      syncName();
+    }
+  }
+
+  nameInput.addEventListener("input", () => { $("lobbyNameError").textContent = ""; syncName(); });
+  nameInput.addEventListener("keydown", e => { if (e.key === "Enter") saveLobbyName(); });
+  nameBtn.addEventListener("click", saveLobbyName);
+
+  const swatches = STAIN_NAMES.map((label, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "swatch";
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-label", label);
+    b.title = label;
+    b.addEventListener("click", () => pickColour(i));
+    $("swatches").appendChild(b);
+    return b;
+  });
+
+  // Arrow keys move the pick, as in any radio group; Tab leaves the group.
+  $("swatches").addEventListener("keydown", e => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const next = (Math.max(0, myColour) + step + swatches.length) % swatches.length;
+    pickColour(next);
+    swatches[next].focus();
+  });
+
+  // Painted from the renderer's palette rather than copied into CSS, so the
+  // swatch is exactly the colour the cell will be drawn in, in either theme.
+  function paintColours() {
+    const th = THEMES[settings.theme];
+    swatches.forEach((b, i) => {
+      b.style.background = th.stains[i];
+      b.setAttribute("aria-checked", String(i === myColour));
+      // One tab stop for the whole group, on the colour that is picked.
+      b.tabIndex = i === Math.max(0, myColour) ? 0 : -1;
+    });
+    $("lobbyMe").style.setProperty("--me", colourOf(th, myColour));
+  }
+
+  function pickColour(i) {
+    if (i === myColour) return;
+    myColour = i;
+    paintColours();
+    onColour?.(i);
+  }
+
+  function setColour(ci) {
+    myColour = Number.isInteger(ci) && ci >= 0 && ci < swatches.length ? ci : -1;
+    paintColours();
+  }
+
+  // ── your last game, on the lobby card ─────────────────────────────────────
+
+  // What Share and Copy send. Fixed when the card is drawn, so a button
+  // pressed later shares the game on screen, not whichever was fetched last.
+  let shared = { text: "", url: shareUrl };
+
+  // The card is always there — the lobby is two cards like the menu — so
+  // with no game played yet it says so rather than disappearing.
+  function renderLastGame(match) {
+    $("lastGame").hidden = !match;
+    $("lastEmpty").hidden = !!match;
+    $("lastWhen").hidden = !match;
+    if (!match) return;
+    $("lastWhen").textContent = ago(match.endedAt);
+    $("lastLine").textContent = headline(match);
+    // The menu's fact rows: label left, figure right. The currency is set
+    // small after a money figure, as the pot bar does.
+    $("lastStats").innerHTML = statRows(match).map(([label, value]) => {
+      const [figure, unit] = value.split(" ");
+      return `<div><span>${escapeHtml(label)}</span>` +
+        `<em${label === "Result" && value.startsWith("+") ? ' class="up"' : ""}>${escapeHtml(figure)}` +
+        `${unit ? `<small>${escapeHtml(unit)}</small>` : ""}</em></div>`;
+    }).join("");
+
+    shared = { text: shareText(match), url: shareUrl };
+    // Quoted on the card, so nobody shares without seeing what it says.
+    $("shareQuote").textContent = shared.text;
+    const links = shareLinks(shared.text, shared.url);
+    $("shareX").href = links.x;
+    $("shareFacebook").href = links.facebook;
+    $("shareWhatsApp").href = links.whatsapp;
+    $("shareReddit").href = links.reddit;
+    // The system share sheet reaches everything installed — Instagram,
+    // Messages, Discord — so it leads wherever the browser offers one.
+    $("btnShareNative").hidden = typeof globalThis.navigator?.share !== "function";
+  }
+
+  $("btnShareNative").addEventListener("click", async () => {
+    try {
+      await navigator.share({ title: "Engulfs", text: shared.text, url: shared.url });
+    } catch { /* dismissed, or refused; the links beside it still work */ }
+  });
+
+  let copyTimer = null;
+  async function copyShare() {
+    const line = `${shared.text} ${shared.url}`;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(line);
+      ok = true;
+    } catch {
+      ok = copyBySelection(line);
+    }
+    const btn = $("btnShareCopy");
+    btn.textContent = ok ? "Copied" : "Copy failed";
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+  }
+
+  // The clipboard API needs a secure page and a permission some browsers
+  // withhold. Selecting text and copying it still works where that does not.
+  function copyBySelection(line) {
+    try {
+      const t = document.createElement("textarea");
+      t.value = line;
+      t.setAttribute("readonly", "");
+      t.style.position = "fixed";
+      t.style.opacity = "0";
+      document.body.appendChild(t);
+      t.select();
+      const ok = document.execCommand("copy");
+      t.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  $("btnShareCopy").addEventListener("click", copyShare);
+
   setAuthMode("login");
   renderAuth(null);
   renderAccount();
+  paintColours();
 
   return {
     update, bumpCounter, showDeath, setMode, el,
@@ -773,6 +962,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, au
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
+    setColour, renderLastGame,
     getStake: () => stake,
     isSignedIn: () => signedIn,
     // The Google button lives outside this form but can still CREATE an

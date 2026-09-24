@@ -26,7 +26,8 @@ const ctx2d = new Proxy({}, {
 
 class El {
   constructor(id = "") {
-    this.id = id; this.attrs = {}; this.style = {}; this.handlers = {};
+    this.id = id; this.attrs = {}; this.handlers = {};
+    this.style = { setProperty(k, v) { this[k] = String(v); } };
     this.hidden = false; this.disabled = false;
     this.textContent = ""; this.innerHTML = ""; this.value = "";
     this.offsetWidth = 0; this.clientWidth = 300; this._lock = null;
@@ -289,6 +290,98 @@ check("round_start closes the lobby", $("lobbyVeil").hidden === true);
 live.handlers.message.forEach(fn => fn({ data: lobbyMsg(1) }));   // PHASE_LIVE
 check("a lobby broadcast during a live round is ignored",
   $("lobbyVeil").hidden === true);
+
+console.log("\n-- returning to the menu from the lobby --");
+
+// The lobby card's way back to the pregame menu. It has to let the room go
+// properly — a `leave`, so the server refunds the stake now and says so — and
+// nothing the old socket still delivers may drag the lobby back over the menu.
+{
+  $("btnStart").click();
+  await settle();
+  const ws = sockets[sockets.length - 1];
+  ws.handlers.message.forEach(fn => fn({ data: lobbyMsg(4, 5) }));
+  check("the lobby is open, counting", $("lobbyVeil").hidden === false && $("lobbyCount").hidden === false);
+  check("the lobby's figures stay on screen through the count", $("lobbyNums").hidden !== true);
+  check("the card names the room and its stake",
+    $("lobbyRoom").hidden === false && $("lobbyRoom").textContent === "Standard · 1.00 USDC stake",
+    $("lobbyRoom").textContent);
+
+  $("btnReady").click();
+  const opened = sockets.length;
+  const mark = ws.sent.length;
+  $("btnLobbyMenu").click();
+  await settle();
+  check("the room is told the player is leaving",
+    ws.sent.slice(mark).some(m => String(m).includes('"type":"leave"')),
+    ws.sent.slice(mark).join(" ") || "nothing sent");
+  check("the pregame menu is back", $("startVeil").hidden === false);
+  check("and the lobby is gone", $("lobbyVeil").hidden === true);
+  check("practice behind the menu needs no socket", sockets.length === opened, `${sockets.length}`);
+
+  // Still in flight when the button was pressed.
+  ws.handlers.message.forEach(fn => fn({ data: lobbyMsg(4, 4) }));
+  check("a lobby message from the room just left is ignored", $("lobbyVeil").hidden === true);
+
+  ws.handlers.message.forEach(fn => fn({
+    data: JSON.stringify({ type: "account", balance: 5_000_000, pot: 0, stake: 0, staked: false, demo: true })
+  }));
+  check("but the refunded balance it carries is shown",
+    /^5\.00/.test($("balValue").innerHTML), $("balValue").innerHTML);
+
+  (ws.handlers.close || []).forEach(fn => fn({ code: 1000, reason: "Left" }));
+  check("the server's close is not reported as a disconnection",
+    $("errVeil").hidden !== false && !/disconnected/i.test($("modeNote").textContent),
+    $("modeNote").textContent);
+
+  $("btnStart").click();
+  await settle();
+  const again = sockets[sockets.length - 1];
+  again.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
+  check("Start goes back into a lobby", again !== ws && $("lobbyVeil").hidden === false);
+  check("not ready, since leaving un-readied them",
+    $("btnReady").getAttribute("aria-pressed") === "false", $("btnReady").getAttribute("aria-pressed"));
+}
+
+console.log("\n-- readiness follows the server across rounds --");
+
+// The server keeps a player ready from one round to the next. The client used
+// to reset its own flag at every round start, so the next lobby offered
+// "I'm ready" to a player it was already counting in.
+{
+  $("btnStart").click();
+  await settle();
+  const ws = sockets[sockets.length - 1];
+  const say = m => ws.handlers.message.forEach(fn => fn({ data: typeof m === "string" ? m : JSON.stringify(m) }));
+  const pressed = () => $("btnReady").getAttribute("aria-pressed");
+
+  // With a balance, as a real welcome has, or the menu locks the paid tier.
+  const funded = { balance: 5_000_000, pot: 1_000_000, stake: 1_000_000, staked: true, demo: true };
+  say({ type: "welcome", id: "p:9", nid: 9, tickHz: 20, ready: false, ci: 1, test: true, ...funded });
+  say(lobbyMsg(3));
+  check("a fresh connection starts unready", pressed() === "false", pressed());
+
+  $("btnReady").click();
+  say({ type: "round_start", mode: "standard", number: 1, seconds: 120 });
+  say({ type: "round_end", number: 1, standings: [], nextIn: 2 });
+  say(lobbyMsg(4, 5));
+  check("still ready in the next lobby, as the server has it", pressed() === "true", pressed());
+  check("and the button says so", $("btnReady").textContent === "Ready", $("btnReady").textContent);
+
+  say({ type: "account_error", code: "funds", reason: "Not enough balance for another round at that stake." });
+  say({ type: "account", ...funded });
+  say(lobbyMsg(3));
+  check("sat out for want of funds, the button stops claiming ready", pressed() === "false", pressed());
+
+  const resumed = sockets.length;
+  $("btnStart").click();
+  await settle();
+  const again = sockets[sockets.length - 1];
+  again.handlers.message.forEach(fn => fn({ data: JSON.stringify({ type: "welcome", id: "p:10", nid: 10, tickHz: 20, ready: true, test: true, ...funded }) }));
+  again.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
+  check("a connection that resumed a ready run is shown ready",
+    sockets.length > resumed && pressed() === "true", pressed());
+}
 
 console.log("\n-- creating an account carries the date of birth --");
 

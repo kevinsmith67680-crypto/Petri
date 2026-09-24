@@ -76,6 +76,9 @@ const SNAP_ERROR = 220;
 
 export function createSocketConnection({
   url, name = "You", stake = 0, token = null,
+  // Palette slot the player picked. Sent on every join, reconnects included,
+  // so a dropped socket does not come back in a different colour.
+  ci = null,
   // Exposed so the tests can drive a stall without waiting seconds of
   // real time for one. Nothing in the app passes them.
   stallMs = STALL_MS, joinStallMs = JOIN_STALL_MS
@@ -120,6 +123,7 @@ export function createSocketConnection({
   const frames = [];              // recent snapshots for interpolation
   const pellets = new Map();      // id -> { x, y, ci, big, gone }
   const names = new Map();        // nid -> display name
+  const colours = new Map();      // nid -> palette slot, sent alongside the name
   let board = [];
   let clockOffset = null;
   let lastAimSent = 0;
@@ -239,7 +243,7 @@ export function createSocketConnection({
 
     ws.addEventListener("open", () => {
       ws.send(JSON.stringify({
-        type: MSG.JOIN, name, stake, token, protocol: PROTOCOL_VERSION
+        type: MSG.JOIN, name, stake, token, ci, protocol: PROTOCOL_VERSION
       }));
     });
 
@@ -289,6 +293,7 @@ export function createSocketConnection({
     frames.length = 0;
     pellets.clear();
     names.clear();
+    colours.clear();
     predicted.clear();
     ghostCells.length = 0;
     ghostBlobs.length = 0;
@@ -340,6 +345,9 @@ export function createSocketConnection({
       if (msg.type === MSG.WELCOME) {
         myNid = msg.nid;
         if (msg.tickHz) serverHz = msg.tickHz;
+        // No pick of our own means the server chose one. Keep it, so a
+        // reconnect asks for the same colour instead of rolling a new one.
+        if (ci === null && Number.isInteger(msg.ci)) ci = msg.ci;
         const returning = everLive;
         everLive = true;
         if (attempt > 0) { attempt = 0; emit(returning ? "reconnected" : "connected"); }
@@ -394,9 +402,10 @@ export function createSocketConnection({
     if (snap.keyframe) {
       pellets.clear();
       names.clear();
+      colours.clear();
     }
 
-    for (const n of snap.names) names.set(n.nid, n.name);
+    for (const n of snap.names) { names.set(n.nid, n.name); colours.set(n.nid, n.ci); }
 
     // Hand over only when the real blob arrives, and drop the oldest ghost
     // per real blob rather than all of them — two quick ejects would
@@ -730,9 +739,10 @@ export function createSocketConnection({
       // Our own cells come from prediction; everyone else from interpolation.
       const cells = snap.cells.map(c => {
         const p = c.mine ? predicted.get(c.i) : null;
+        const slot = colours.get(c.o);
         return p
-          ? { ...c, x: p.x, y: p.y, m: p.mass, n: names.get(c.o) || "" }
-          : { ...c, n: names.get(c.o) || "" };
+          ? { ...c, x: p.x, y: p.y, m: p.mass, n: names.get(c.o) || "", ci: slot }
+          : { ...c, n: names.get(c.o) || "", ci: slot };
       });
       // Provisional split pieces, drawn as ours until the server confirms.
       for (let i = 0; i < ghostCells.length; i++) {
@@ -756,7 +766,13 @@ export function createSocketConnection({
         cells,
         pellets: visible,
         viruses: snap.viruses,
-        me: { ...snap.me, x: mx, y: my, id: snap.spectating ? snap.eyeNid : myNid },
+        me: {
+          ...snap.me, x: mx, y: my, id: snap.spectating ? snap.eyeNid : myNid,
+          // The colour "mine" is drawn in: whoever is being watched while
+          // spectating, and otherwise what the server says we are — falling
+          // back to our own pick until our name record has arrived.
+          ci: snap.spectating ? colours.get(snap.eyeNid) : (colours.get(myNid) ?? ci)
+        },
         round: snap.round,
         spectating: snap.spectating,
         // Resolved from the name cache the snapshot already maintains.
@@ -785,9 +801,36 @@ export function createSocketConnection({
       }
     },
 
+    // Kept even when the socket is down, so the next join carries it.
+    setColour(next) {
+      ci = next;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "colour", ci }));
+      }
+    },
+
     sendRamp(action) {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "ramp", action }));
+      }
+    },
+
+    // Back to the menu from the lobby. The server refunds the stake and closes
+    // the socket itself; until it does, its messages still arrive — the
+    // refunded balance among them — but the close is ours rather than a
+    // disconnection, so nothing is retried and nothing is reported.
+    leave() {
+      closedByUs = true;
+      clearInterval(pingTimer);
+      clearInterval(stallTimer);
+      if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+      const ws = socket;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "leave" }));
+        // A server that never answers is not waited on for ever.
+        setTimeout(() => { try { ws.close(); } catch { /* already gone */ } }, 3000);
+      } else {
+        try { ws?.close(); } catch { /* already gone */ }
       }
     },
 

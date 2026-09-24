@@ -34,7 +34,7 @@ import { WebSocketServer } from "ws";
 
 import {
   createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnRing,
-  setAim, queueAction, stepWorld, totalMass, TICK_HZ
+  setAim, queueAction, stepWorld, totalMass, TICK_HZ, STAIN_COUNT
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
@@ -615,6 +615,20 @@ function cleanName(raw) {
   return name || "Player";
 }
 
+// A palette slot, or null for "no preference", which addPlayer reads as pick
+// one at random. The palette itself lives client-side; only the index travels.
+function cleanColour(raw) {
+  return Number.isInteger(raw) && raw >= 0 && raw < STAIN_COUNT ? raw : null;
+}
+
+// Names and colours are sent once, when a player first comes into view, and
+// then remembered by each client until its next keyframe. After a change,
+// forget that anyone was told, so the new one goes out on the next snapshot
+// rather than up to five seconds later.
+function reannounce(room, player) {
+  for (const meta of room.clients.values()) meta.state?.knownNames.delete(player.nid);
+}
+
 function makeBucket(rate) { return { tokens: rate, at: Date.now(), rate }; }
 
 function allow(bucket) {
@@ -1016,7 +1030,48 @@ wss.on("connection", (ws, req) => {
           if (!meta.accountId) return;
           const fresh = await backend.getAccount(meta.accountId);
           const player = room.world.players.get(id);
-          if (fresh && player) player.name = fresh.displayName;
+          if (fresh && player) {
+            player.name = fresh.displayName;
+            reannounce(room, player);
+          }
+        } else if (msg.type === "colour") {
+          const player = room.world.players.get(id);
+          const ci = cleanColour(msg.ci);
+          // Chosen between rounds, never mid-fight: a live body keeps the
+          // colour it was born with, so nobody can change their look to
+          // shake off a chaser or pass for someone else.
+          if (!player || player.alive || ci === null) return;
+          player.ci = ci;
+          reannounce(room, player);
+        } else if (msg.type === "leave") {
+          // Back to the menu from the lobby. Nobody can be eaten there, so a
+          // linger protects nothing: the stake comes back now rather than six
+          // seconds after the socket closes, and the account push lands
+          // before the close, so the menu shows the balance the player has.
+          // A live body is not let off that way — it closes, and lingers,
+          // like any other exit.
+          const player = room.world.players.get(id);
+          if (player?.alive) { ws.close(1000, "Left"); return; }
+          meta.left = true;
+          meta.ready = false;
+          // Out of the room before anything is awaited, so a count that
+          // finishes meanwhile cannot deal them into the round.
+          room.clients.delete(ws);
+          if (player) removePlayer(room.world, id);
+          syncBots(room);
+          pushLobby(room);
+          // Only a stake still held for this round is refunded — the one
+          // locked on joining. After a round it has already been settled.
+          if (meta.stake !== PRACTICE && meta.accountId) {
+            try {
+              await backend.refund(meta.accountId);
+            } catch (err) {
+              console.error("refund on leave:", err.message);
+            }
+          }
+          meta.stake = PRACTICE;
+          await pushAccount(ws, meta);
+          ws.close(1000, "Left");
         } else if (msg.type === "ramp") {
           const result = msg.action === "withdraw"
             ? ramp.requestWithdrawal(meta.accountId, 0, null)
@@ -1153,7 +1208,8 @@ wss.on("connection", (ws, req) => {
       // without this a player carried on into round two staking nothing.
       meta.tier = stake;
 
-      const player = resumed || addPlayer(room.world, { id, name: displayName });
+      const player = resumed ||
+        addPlayer(room.world, { id, name: displayName, ci: cleanColour(msg.ci) });
       // A rename can land while the socket is down.
       if (resumed) player.name = displayName;
       meta.state = createClientState(nextClientId);   // staggers keyframes
@@ -1172,6 +1228,12 @@ wss.on("connection", (ws, req) => {
 
       ws.send(JSON.stringify({
         type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
+        // Readiness belongs to the connection, so a fresh one starts unready
+        // unless it picked a live run back up. Said, so the button agrees.
+        ready: meta.ready,
+        // The colour actually in use, which is the server's choice when the
+        // client did not make one, so the lobby can show it as selected.
+        ci: player.ci,
         mode: room.mode.id,
         modeLabel: room.mode.label,
         round: room.round.number,
@@ -1216,8 +1278,9 @@ wss.on("connection", (ws, req) => {
     if (n <= 0) connectionsByIp.delete(ip); else connectionsByIp.set(ip, n);
 
     // A replaced connection has already been reconciled by the join that
-    // replaced it; lingering here would refund a stake that is now live.
-    if (meta.joined && room && !meta.replaced) {
+    // replaced it; lingering here would refund a stake that is now live. One
+    // that left for the menu has already been refunded and removed.
+    if (meta.joined && room && !meta.replaced && !meta.left) {
       pushLobby(room);
       syncBots(room);
       // Do not delete the player immediately. Vanishing on demand is a free

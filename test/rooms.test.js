@@ -66,7 +66,10 @@ class FakeWS {
   static OPEN = 1;
   constructor() { this.OPEN = 1; this.readyState = 1; this.h = {}; this.out = []; }
   on(t, fn) { (this.h[t] ||= []).push(fn); }
-  send(d) { this.out.push(typeof d === "string" ? d : "<binary>"); }
+  send(d) {
+    this.out.push(typeof d === "string" ? d : "<binary>");
+    if (typeof d !== "string") (this.bin ||= []).push(d);   // snapshots, to decode
+  }
   close(code, why) { this.closed = { code, why }; this.readyState = 3; }
   ping() {} terminate() {}
   async deliver(o) { for (const fn of this.h.message || []) await fn(JSON.stringify(o), false); }
@@ -77,7 +80,7 @@ const health = async () => (await (await fetch(`http://localhost:${PORT}/health`
 const room = async id => (await health()).rooms.find(r => r.mode === id);
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
 
-const { PROTOCOL_VERSION, PHASE_COUNTDOWN } = await import("../shared/protocol.js");
+const { PROTOCOL_VERSION, PHASE_COUNTDOWN, decodeSnapshot } = await import("../shared/protocol.js");
 
 async function join(username, stake, protocol = PROTOCOL_VERSION) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
@@ -143,6 +146,7 @@ console.log("\n-- the join frame fits the payload limit --");
     name: "x".repeat(16),            // NAME_MAX
     stake: 2_000_000,
     token: "a".repeat(64),           // session token
+    ci: 6,                           // palette slot
     protocol: PROTOCOL_VERSION
   });
   const size = Buffer.byteLength(worst);
@@ -321,6 +325,145 @@ console.log("\n-- one round rolls into the next --");
   const after = await money();
   check("the balance paid for it", after.balance < joined.balance,
     `${joined.balance} -> ${after.balance}`);
+}
+
+console.log("\n-- the colour picked in the lobby is the one the room sees --");
+
+// Colours used to live only on the server: the snapshot named each cell's
+// owner but never said what colour they were, so every client drew everyone
+// else in whatever fill the canvas had been left with. The pick now travels
+// with the name.
+{
+  const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "painter", password: "password123", displayName: "Painter", dateOfBirth: "1990-01-01" })
+  })).json().then(d => d.token);
+
+  const ws = new FakeWS();
+  globalThis.__wss.emit("connection", ws, req);
+  await ws.deliver({ type: "join", name: "Painter", stake: 1_000_000, token: tok, ci: 4, protocol: PROTOCOL_VERSION });
+  await settle();
+  const welcome = ws.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "welcome");
+  check("the colour asked for on join is the one given", welcome && welcome.ci === 4,
+    welcome ? String(welcome.ci) : "no welcome");
+
+  // What the room has been told about this player, newest last.
+  const records = (from = 0) => (ws.bin || []).slice(from)
+    .flatMap(b => decodeSnapshot(b).names)
+    .filter(n => n.nid === welcome.nid);
+  const until = async (cond, ms = 9000) => {
+    for (let t = 0; t < ms && !(await cond()); t += 50) await settle(50);
+    return cond();
+  };
+
+  // Rounds are rolling in this room, and joining mid-round puts you straight
+  // into it — alive, where a change is refused. The lobby is where the picker
+  // is, and everyone there has been despawned.
+  const waiting = await until(async () =>
+    ["lobby", "countdown"].includes((await room("standard")).phase));
+  check("the room comes back to its lobby", waiting, (await room("standard")).phase);
+  await ws.deliver({ type: "colour", ci: 1 });
+  await ws.deliver({ type: "ready", ready: true });
+  const seen = await until(() => records().some(n => n.ci === 1));
+  check("a change in the lobby reaches the snapshot once the round starts", seen,
+    JSON.stringify(records().slice(-1)));
+  check("under the player's own name", records().at(-1)?.name === "Painter",
+    records().at(-1)?.name);
+
+  // Accepting a change re-announces the player at once — the case above — so
+  // a record carrying the new colour would be on the next snapshot or not at
+  // all. Several ticks go by to be sure.
+  const mark = ws.bin.length;
+  await ws.deliver({ type: "colour", ci: 5 });
+  await settle(400);
+  check("mid-fight, the colour does not change",
+    !records(mark).some(n => n.ci === 5), JSON.stringify(records(mark)));
+
+  const junk = new FakeWS();
+  globalThis.__wss.emit("connection", junk, req);
+  const tok2 = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "smudge", password: "password123", displayName: "Smudge", dateOfBirth: "1990-01-01" })
+  })).json().then(d => d.token);
+  await junk.deliver({ type: "join", name: "Smudge", stake: 1_000_000, token: tok2, ci: 99, protocol: PROTOCOL_VERSION });
+  await settle();
+  const w2 = junk.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "welcome");
+  check("a slot outside the palette is replaced with a real one",
+    w2 && Number.isInteger(w2.ci) && w2.ci >= 0 && w2.ci < 7, w2 ? String(w2.ci) : "no welcome");
+  await junk.drop();
+  await ws.drop();
+}
+
+console.log("\n-- leaving the lobby for the menu --");
+
+// Closing the socket from the lobby left the stake lingering for six seconds
+// before the sweep refunded it, with nothing pushed to say so — the menu the
+// player landed on showed the stake as still at risk. `leave` settles it on
+// the spot. A live body gets no such exit: it lingers like any other.
+{
+  const signup = async name => (await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: name.toLowerCase(), password: "password123", displayName: name, dateOfBirth: "1990-01-01" })
+  })).json()).token;
+  const money = async tok => (await (await fetch(`http://localhost:${PORT}/api/me`, {
+    headers: { Authorization: `Bearer ${tok}` }
+  })).json());
+  const until = async (cond, ms = 12000) => {
+    for (let t = 0; t < ms && !(await cond()); t += 50) await settle(50);
+    return cond();
+  };
+  const enter = async (tok, name, stake = 2_000_000) => {
+    const ws = new FakeWS();
+    globalThis.__wss.emit("connection", ws, req);
+    await ws.deliver({ type: "join", name, stake, token: tok, protocol: PROTOCOL_VERSION });
+    return ws;
+  };
+  const texts = ws => ws.out.filter(m => m !== "<binary>").map(JSON.parse);
+
+  // Rounds are rolling here. Anyone who joins outside a live round waits in
+  // the lobby, and stays there for the round if they never ready up.
+  const quiet = await until(async () => (await room("highstakes")).phase !== "live");
+  check("the room is between rounds", quiet, (await room("highstakes")).phase);
+
+  const tok = await signup("Leaver");
+  const opening = await money(tok);
+  const ws = await enter(tok, "Leaver");
+  const joined = await money(tok);
+  check("joining holds the stake", joined.pot === 2_000_000, `${joined.pot}`);
+  const before = await room("highstakes");
+
+  await ws.deliver({ type: "leave" });
+  const pushed = texts(ws).filter(m => m.type === "account").at(-1);
+  check("the refund is pushed before the socket closes",
+    pushed && pushed.pot === 0 && pushed.balance === opening.balance,
+    pushed ? `balance ${pushed.balance}, pot ${pushed.pot}` : "no account push");
+  check("the socket is closed normally", ws.closed?.code === 1000, JSON.stringify(ws.closed || {}));
+  const after = await money(tok);
+  check("the stake is back at once, not after the linger",
+    after.pot === 0 && after.balance === opening.balance, `${after.balance} / ${after.pot}`);
+
+  await ws.drop();
+  const gone = await room("highstakes");
+  check("nothing is left lingering", gone.lingering === before.lingering,
+    `${before.lingering} -> ${gone.lingering}`);
+  check("and the player is out of the room", gone.players === before.players - 1,
+    `${before.players} -> ${gone.players}`);
+
+  // In a round, with a body on the board: not let off early. The player
+  // readies and plays rather than relying on anyone else's rounds rolling.
+  const tok2 = await signup("Stayer");
+  await until(async () => (await room("standard")).phase !== "live");
+  const ws2 = await enter(tok2, "Stayer", 1_000_000);
+  await ws2.deliver({ type: "ready", ready: true });
+  const started = await until(() => texts(ws2).some(m => m.type === "round_start"));
+  check("they are dealt into a round", started);
+  const lingerBefore = (await room("standard")).lingering;
+  await ws2.deliver({ type: "leave" });
+  await ws2.drop();
+  const held = await money(tok2);
+  check("a live body keeps its stake at risk", held.pot === 1_000_000, `${held.pot}`);
+  check("and lingers like any other exit",
+    (await room("standard")).lingering === lingerBefore + 1);
 }
 
 console.log("\n-- a short lobby is padded without bunching the humans --");

@@ -41,7 +41,7 @@ export const WORLD_LIMIT = MAX_WORLD;
 // the server refuses a mismatch, so a stale client gets told to reload instead
 // of silently decoding every frame two bytes out of alignment — which looks
 // like opponents scattered across the map and orbs that never appear.
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 export const MSG = {
   JOIN: "join",        // text
@@ -242,9 +242,12 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   w.u8(spectating ? 1 : 0);
   w.u16(view.nid || 0);
 
-  // names
+  // names, each with the owner's colour. The colour rides here rather than on
+  // every cell record because it belongs to the player, not the cell: it is
+  // sent once when the player comes into view, the same as the name. Without
+  // it the client had no colour for anyone but itself.
   w.u16(newNames.length);
-  for (const p of newNames) { w.u16(p.nid); w.str(p.name, 32); }
+  for (const p of newNames) { w.u16(p.nid); w.str(p.name, 32); w.u8(p.ci); }
 
   // cells
   w.u16(cells.length);
@@ -344,9 +347,9 @@ export function decodeSnapshot(buffer) {
 
   const names = [];
   // Strings are variable length, so a per-record byte cost is not meaningful;
-  // bound the count by the pessimistic minimum of 3 bytes each instead.
-  const nameCount = r.expect(r.u16(), 3);
-  for (let i = 0; i < nameCount; i++) names.push({ nid: r.u16(), name: r.str() });
+  // bound the count by the pessimistic minimum of 4 bytes each instead.
+  const nameCount = r.expect(r.u16(), 4);
+  for (let i = 0; i < nameCount; i++) names.push({ nid: r.u16(), name: r.str(), ci: r.u8() });
 
   const cells = [];
   const cellCount = r.expect(r.u16(), CELL_BYTES);
