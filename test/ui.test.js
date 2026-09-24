@@ -397,6 +397,8 @@ console.log("\n-- the last game, on the lobby card --");
 
 ui.renderLastGame(null);
 check("with no game played, there is nothing to show", $("lastGame").hidden === true);
+check("and the card says so rather than vanishing",
+  $("lastEmpty").hidden === false && $("lastWhen").hidden === true);
 
 const lastMatch = {
   endedAt: Date.now() - 5 * 60_000, duration: 125, finishPosition: 2, playersInArena: 30,
@@ -405,10 +407,12 @@ const lastMatch = {
 };
 ui.renderLastGame(lastMatch);
 check("a game played is shown", $("lastGame").hidden === false);
+check("in place of the empty note", $("lastEmpty").hidden === true && $("lastWhen").hidden === false);
 check("with what happened", $("lastLine").textContent === "Finished 2nd, in the paid places",
   $("lastLine").textContent);
 check("and when", $("lastWhen").textContent === "5 min ago", $("lastWhen").textContent);
-check("the numbers are laid out", /Peak mass<\/i><em>640/.test($("lastStats").innerHTML));
+check("the numbers are laid out as fact rows", /<span>Peak mass<\/span><em>640/.test($("lastStats").innerHTML),
+  $("lastStats").innerHTML);
 check("a gain is marked as one", /<em class="up">\+0\.50<small>USDC<\/small>/.test($("lastStats").innerHTML),
   $("lastStats").innerHTML);
 
@@ -416,6 +420,8 @@ const xHref = new URL($("shareX").href);
 check("the X link carries the result", /finished 2nd/.test(xHref.searchParams.get("text")));
 check("and points at the game", xHref.searchParams.get("url") === "https://engulfs.io/?mode=online");
 check("the post carries no money", !/USDC|0\.50/.test(xHref.searchParams.get("text")));
+check("and is quoted on the card before it is shared",
+  $("shareQuote").textContent === xHref.searchParams.get("text"), $("shareQuote").textContent);
 check("Facebook, WhatsApp and Reddit are linked",
   ["shareFacebook", "shareWhatsApp", "shareReddit"].every(id => $(id).href.startsWith("https://")));
 check("no share sheet is offered where the browser has none", $("btnShareNative").hidden === true);
@@ -455,7 +461,7 @@ try { for (const fn of $("btnShareNative").handlers.click) await fn({}); } catch
 check("closing the share sheet is not an error", !threw);
 
 ui.renderLastGame(null);
-check("signing out takes it away", $("lastGame").hidden === true);
+check("signing out takes it away", $("lastGame").hidden === true && $("lastEmpty").hidden === false);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

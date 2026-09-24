@@ -248,6 +248,11 @@ function connect(stake = PRACTICE) {
     on("round", onRound);
     on("welcome", w => {
       ui.setTestMode(w.test);
+      // A new connection's readiness is the server's to say: unready, unless
+      // it resumed a live run.
+      ready = !!w.ready;
+      ui.setReady(ready);
+      ui.setNextReady(ready);
       // With no pick of their own, show the player the colour they were given.
       if (colourPick === null) ui.setColour(w.ci);
     });
@@ -405,8 +410,9 @@ function onRound(msg) {
     refreshStats();
   } else if (msg.type === "round_start") {
     if (spectating) { spectating = false; ui.hideSpectator(); }
-    ready = false;
-    ui.setReady(false);
+    // Readiness is not reset here. The server keeps it from one round to the
+    // next, so resetting it left the next lobby offering "I'm ready" to a
+    // player it was already counting in — and pressing it did nothing.
     ui.hideLobby();
     ui.hideRoundEnd();
     // The server has already respawned us into the fresh arena, but the
@@ -427,6 +433,13 @@ function onRound(msg) {
 // Nothing about the balance is computed client-side.
 function onAccount(msg) {
   if (msg.type === "account_error") {
+    // The server sits a player out of the next round when it cannot take the
+    // stake for it, un-readying them. The buttons have to say so.
+    if (msg.code === "funds") {
+      ready = false;
+      ui.setReady(false);
+      ui.setNextReady(false);
+    }
     // Always note it in the menu, but if the player has already started the
     // menu is hidden — so put it in front of them instead of leaving a blank
     // arena with an explanation nobody can see.

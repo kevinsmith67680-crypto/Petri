@@ -1228,6 +1228,9 @@ wss.on("connection", (ws, req) => {
 
       ws.send(JSON.stringify({
         type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
+        // Readiness belongs to the connection, so a fresh one starts unready
+        // unless it picked a live run back up. Said, so the button agrees.
+        ready: meta.ready,
         // The colour actually in use, which is the server's choice when the
         // client did not make one, so the lobby can show it as selected.
         ci: player.ci,

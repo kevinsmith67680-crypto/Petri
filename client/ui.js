@@ -215,7 +215,7 @@ export function createUI({
         : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`;
     $("lobbyHint").textContent = counting
       ? "Leaving the lobby now stops the round from starting."
-      : `The match begins as soon as ${min} players are ready. Capacity ${max}.`;
+      : `The match begins as soon as ${min} player${min === 1 ? " is" : "s are"} ready. Capacity ${max}.`;
 
     const btn = $("btnReady");
     // Nobody is being waited on once the count is running, so the button stops
@@ -874,22 +874,27 @@ export function createUI({
   // pressed later shares the game on screen, not whichever was fetched last.
   let shared = { text: "", url: shareUrl };
 
+  // The card is always there — the lobby is two cards like the menu — so
+  // with no game played yet it says so rather than disappearing.
   function renderLastGame(match) {
-    const box = $("lastGame");
-    if (!match) { box.hidden = true; return; }
-    box.hidden = false;
+    $("lastGame").hidden = !match;
+    $("lastEmpty").hidden = !!match;
+    $("lastWhen").hidden = !match;
+    if (!match) return;
     $("lastWhen").textContent = ago(match.endedAt);
     $("lastLine").textContent = headline(match);
-    // The currency is set small after the figure, as the pot bar does, so a
-    // money result fits one line of a three-column grid on a phone.
+    // The menu's fact rows: label left, figure right. The currency is set
+    // small after a money figure, as the pot bar does.
     $("lastStats").innerHTML = statRows(match).map(([label, value]) => {
       const [figure, unit] = value.split(" ");
-      return `<div><i>${escapeHtml(label)}</i>` +
+      return `<div><span>${escapeHtml(label)}</span>` +
         `<em${label === "Result" && value.startsWith("+") ? ' class="up"' : ""}>${escapeHtml(figure)}` +
         `${unit ? `<small>${escapeHtml(unit)}</small>` : ""}</em></div>`;
     }).join("");
 
     shared = { text: shareText(match), url: shareUrl };
+    // Quoted on the card, so nobody shares without seeing what it says.
+    $("shareQuote").textContent = shared.text;
     const links = shareLinks(shared.text, shared.url);
     $("shareX").href = links.x;
     $("shareFacebook").href = links.facebook;
