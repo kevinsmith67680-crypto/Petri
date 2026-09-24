@@ -9,11 +9,14 @@ import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
   from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
+import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
-export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, onColour, auth }) {
+export function createUI({
+  settings, onStart, onThemeChange, onRamp, onSharp, onColour, auth, shareUrl = ""
+}) {
   const el = {
     orbs: $("orbCount"),
     mass: $("statMass"),
@@ -782,7 +785,11 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, on
   // on the cell before committing to it. Save only lights up for a change.
   function syncName() {
     const typed = nameInput.value.trim();
-    setText($("mePreviewName"), typed || savedName);
+    const shown = typed || savedName;
+    setText($("mePreviewName"), shown);
+    // Longer names are set smaller so more of them fits inside the circle;
+    // the stylesheet turns the length into a size for each circle size.
+    $("mePreviewName").style.setProperty("--chars", String(Math.max(1, shown.length)));
     nameBtn.disabled = !typed || typed === savedName;
   }
 
@@ -855,6 +862,81 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, on
     paintColours();
   }
 
+  // ── your last game, on the lobby card ─────────────────────────────────────
+
+  // What Share and Copy send. Fixed when the card is drawn, so a button
+  // pressed later shares the game on screen, not whichever was fetched last.
+  let shared = { text: "", url: shareUrl };
+
+  function renderLastGame(match) {
+    const box = $("lastGame");
+    if (!match) { box.hidden = true; return; }
+    box.hidden = false;
+    $("lastWhen").textContent = ago(match.endedAt);
+    $("lastLine").textContent = headline(match);
+    // The currency is set small after the figure, as the pot bar does, so a
+    // money result fits one line of a three-column grid on a phone.
+    $("lastStats").innerHTML = statRows(match).map(([label, value]) => {
+      const [figure, unit] = value.split(" ");
+      return `<div><i>${escapeHtml(label)}</i>` +
+        `<em${label === "Result" && value.startsWith("+") ? ' class="up"' : ""}>${escapeHtml(figure)}` +
+        `${unit ? `<small>${escapeHtml(unit)}</small>` : ""}</em></div>`;
+    }).join("");
+
+    shared = { text: shareText(match), url: shareUrl };
+    const links = shareLinks(shared.text, shared.url);
+    $("shareX").href = links.x;
+    $("shareFacebook").href = links.facebook;
+    $("shareWhatsApp").href = links.whatsapp;
+    $("shareReddit").href = links.reddit;
+    // The system share sheet reaches everything installed — Instagram,
+    // Messages, Discord — so it leads wherever the browser offers one.
+    $("btnShareNative").hidden = typeof globalThis.navigator?.share !== "function";
+  }
+
+  $("btnShareNative").addEventListener("click", async () => {
+    try {
+      await navigator.share({ title: "Engulfs", text: shared.text, url: shared.url });
+    } catch { /* dismissed, or refused; the links beside it still work */ }
+  });
+
+  let copyTimer = null;
+  async function copyShare() {
+    const line = `${shared.text} ${shared.url}`;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(line);
+      ok = true;
+    } catch {
+      ok = copyBySelection(line);
+    }
+    const btn = $("btnShareCopy");
+    btn.textContent = ok ? "Copied" : "Copy failed";
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+  }
+
+  // The clipboard API needs a secure page and a permission some browsers
+  // withhold. Selecting text and copying it still works where that does not.
+  function copyBySelection(line) {
+    try {
+      const t = document.createElement("textarea");
+      t.value = line;
+      t.setAttribute("readonly", "");
+      t.style.position = "fixed";
+      t.style.opacity = "0";
+      document.body.appendChild(t);
+      t.select();
+      const ok = document.execCommand("copy");
+      t.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  $("btnShareCopy").addEventListener("click", copyShare);
+
   setAuthMode("login");
   renderAuth(null);
   renderAccount();
@@ -869,7 +951,7 @@ export function createUI({ settings, onStart, onThemeChange, onRamp, onSharp, on
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
-    setColour,
+    setColour, renderLastGame,
     getStake: () => stake,
     isSignedIn: () => signedIn,
     // The Google button lives outside this form but can still CREATE an

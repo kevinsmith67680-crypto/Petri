@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Engulfs</title>
+<!-- What a shared link previews as. Facebook builds its whole card from these,
+     because its share address carries a link and nothing else. -->
+<meta name="description" content="You are one cell among a hundred. Grow by absorbing orbs, swallow anyone smaller than you, and stay clear of anyone larger.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Engulfs">
+<meta property="og:title" content="Engulfs">
+<meta property="og:description" content="You are one cell among a hundred. Grow by absorbing orbs, swallow anyone smaller than you, and stay clear of anyone larger.">
+<meta name="twitter:card" content="summary">
 <!-- All three are the same artwork on the same ground, so the tab, the
      bookmark and the home screen agree with each other and with the header.
      No SVG alternative is offered: a browser prefers one where it exists, and
@@ -247,7 +255,10 @@
   .me-cell span{
     position:relative; max-width:88%; padding:0 2px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    font-size:13px; font-weight:600; color:#fff;
+    /* Scaled to fit by length (--chars, set from script) between a readable
+       floor and the full size; past the floor, an ellipsis. */
+    font-size:clamp(9px, calc(104px / var(--chars, 8)), 13px);
+    font-weight:600; color:#fff;
     text-shadow:0 0 2px rgba(0,0,0,.45), 0 1px 1px rgba(0,0,0,.34);
   }
   .me-edit{ min-width:0; }
@@ -280,6 +291,44 @@
   .card .swatch[aria-checked="true"]{
     box-shadow:inset 0 0 0 2px rgba(0,0,0,.18), 0 0 0 2px var(--panel), 0 0 0 4px var(--text);
   }
+
+  /* The previous game, at the foot of the lobby card: looking back comes
+     after the thing to do now. */
+  .last{ margin-top:22px; padding-top:20px; border-top:1px solid var(--line); }
+  .last[hidden]{ display:none; }
+  .last-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+  .last-head h3{ font-size:13px; font-weight:600; }
+  .last-head span{ font-size:12.5px; color:var(--muted); }
+  .card .last-line{ margin-top:6px; font-size:14px; line-height:1.5; color:var(--text); }
+  .last-stats{
+    margin-top:14px; display:grid; grid-template-columns:repeat(3, 1fr);
+    gap:12px 10px; font-size:12.5px;
+  }
+  .last-stats div{ display:grid; gap:3px; align-content:start; }
+  .last-stats i{ font-style:normal; color:var(--muted); }
+  .last-stats em{
+    font-style:normal; font-weight:600; font-size:17px;
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+  }
+  .last-stats em small{ margin-left:3px; font-size:11px; font-weight:500; color:var(--muted); }
+  .last-stats em.up{ color:var(--accent); }
+  /* Small outlined chips, the spectator bar's buttons at card scale. Links
+     and buttons share one look, so which is which is not the player's
+     concern. */
+  .share{ margin-top:16px; display:flex; flex-wrap:wrap; gap:6px; }
+  .card .share a,
+  .card .share button{
+    margin:0; display:inline-flex; align-items:center;
+    font-family:inherit; font-size:12.5px; font-weight:600; line-height:1;
+    padding:7px 9px; border-radius:4px; cursor:pointer;
+    background:transparent; color:var(--text); text-decoration:none;
+    border:1px solid var(--line-2);
+  }
+  .card .share a:hover,
+  .card .share button:hover{ opacity:1; border-color:var(--text); }
+  .card .share a:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+  .card .share .share-main{ background:var(--text); color:var(--panel); border-color:var(--text); }
+  .card .share button[hidden]{ display:none; }
 
   .standings{ margin-top:20px; display:grid; gap:6px; font-size:13.5px; }
   .standings div{
@@ -774,7 +823,7 @@
     .card h2{ font-size:27px; }
     .me{ grid-template-columns:64px 1fr; gap:14px; }
     .me-cell{ width:64px; height:64px; }
-    .me-cell span{ font-size:11px; }
+    .me-cell span{ font-size:clamp(8px, calc(80px / var(--chars, 8)), 11px); }
     /* Seven in one row on a phone rather than six and an orphan. */
     .swatches{ gap:6px; }
     .card .swatch{ width:24px; height:24px; }
@@ -1111,6 +1160,25 @@
     </div>
     <button id="btnReady" type="button">I'm ready</button>
     <p class="next" id="lobbyHint">The match begins as soon as enough players are ready.</p>
+    <!-- The player's previous game, from their match history. Hidden until
+         there is one. The links open in a new tab so sharing does not cost the
+         player their place in the lobby. -->
+    <section class="last" id="lastGame" hidden aria-labelledby="lastTitle">
+      <div class="last-head">
+        <h3 id="lastTitle">Last game</h3>
+        <span id="lastWhen"></span>
+      </div>
+      <p class="last-line" id="lastLine"></p>
+      <div class="last-stats" id="lastStats"></div>
+      <div class="share" role="group" aria-label="Share your result">
+        <button type="button" id="btnShareNative" class="share-main" hidden>Share…</button>
+        <a id="shareX" target="_blank" rel="noopener noreferrer">X</a>
+        <a id="shareFacebook" target="_blank" rel="noopener noreferrer">Facebook</a>
+        <a id="shareWhatsApp" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+        <a id="shareReddit" target="_blank" rel="noopener noreferrer">Reddit</a>
+        <button type="button" id="btnShareCopy">Copy</button>
+      </div>
+    </section>
   </div>
 </div>
 

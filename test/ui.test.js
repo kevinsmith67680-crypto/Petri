@@ -75,7 +75,8 @@ let renameImpl = async () => {};
 const ui = createUI({
   settings, onStart() {}, onThemeChange() {}, onRamp() {},
   onColour: ci => picked.push(ci),
-  auth: { rename: name => renameImpl(name) }
+  auth: { rename: name => renameImpl(name) },
+  shareUrl: "https://engulfs.io/?mode=online"
 });
 
 const locked = id => $(id).getAttribute("aria-disabled") === "true";
@@ -391,6 +392,70 @@ check("typing clears the refusal", $("lobbyNameError").textContent === "");
 typeName("   ");
 check("a blank name cannot be saved", $("btnLobbyName").disabled === true);
 check("and the cell keeps the saved one", $("mePreviewName").textContent === "Ada L");
+
+console.log("\n-- the last game, on the lobby card --");
+
+ui.renderLastGame(null);
+check("with no game played, there is nothing to show", $("lastGame").hidden === true);
+
+const lastMatch = {
+  endedAt: Date.now() - 5 * 60_000, duration: 125, finishPosition: 2, playersInArena: 30,
+  orbs: 88, playersEaten: 3, peakMass: 640, outcome: "survived", won: true,
+  stake: 1 * UNIT, payout: 1.5 * UNIT
+};
+ui.renderLastGame(lastMatch);
+check("a game played is shown", $("lastGame").hidden === false);
+check("with what happened", $("lastLine").textContent === "Finished 2nd, in the paid places",
+  $("lastLine").textContent);
+check("and when", $("lastWhen").textContent === "5 min ago", $("lastWhen").textContent);
+check("the numbers are laid out", /Peak mass<\/i><em>640/.test($("lastStats").innerHTML));
+check("a gain is marked as one", /<em class="up">\+0\.50<small>USDC<\/small>/.test($("lastStats").innerHTML),
+  $("lastStats").innerHTML);
+
+const xHref = new URL($("shareX").href);
+check("the X link carries the result", /finished 2nd/.test(xHref.searchParams.get("text")));
+check("and points at the game", xHref.searchParams.get("url") === "https://engulfs.io/?mode=online");
+check("the post carries no money", !/USDC|0\.50/.test(xHref.searchParams.get("text")));
+check("Facebook, WhatsApp and Reddit are linked",
+  ["shareFacebook", "shareWhatsApp", "shareReddit"].every(id => $(id).href.startsWith("https://")));
+check("no share sheet is offered where the browser has none", $("btnShareNative").hidden === true);
+
+// A browser that has a share sheet and a clipboard.
+const sharedWith = [];
+let clip = "";
+Object.defineProperty(globalThis, "navigator", {
+  configurable: true, writable: true,
+  value: {
+    share: async data => { sharedWith.push(data); },
+    clipboard: { writeText: async t => { clip = t; } }
+  }
+});
+ui.renderLastGame(lastMatch);
+check("a share sheet is offered where there is one", $("btnShareNative").hidden === false);
+for (const fn of $("btnShareNative").handlers.click) await fn({});
+check("it is handed the words and the link",
+  sharedWith.length === 1 && /finished 2nd/.test(sharedWith[0].text) &&
+  sharedWith[0].url === "https://engulfs.io/?mode=online", JSON.stringify(sharedWith));
+
+for (const fn of $("btnShareCopy").handlers.click) await fn({});
+check("copy puts the post and the link on the clipboard",
+  clip.startsWith("I finished 2nd") && clip.endsWith(" https://engulfs.io/?mode=online"), clip);
+check("and says so", $("btnShareCopy").textContent === "Copied");
+
+// A browser that refuses the clipboard, with no way round it.
+globalThis.navigator.clipboard.writeText = async () => { throw new Error("denied"); };
+for (const fn of $("btnShareCopy").handlers.click) await fn({});
+check("a refused copy says so rather than claiming success",
+  $("btnShareCopy").textContent === "Copy failed", $("btnShareCopy").textContent);
+
+// Dismissing the sheet is not an error worth surfacing.
+globalThis.navigator.share = async () => { throw Object.assign(new Error("cancel"), { name: "AbortError" }); };
+let threw = false;
+try { for (const fn of $("btnShareNative").handlers.click) await fn({}); } catch { threw = true; }
+check("closing the share sheet is not an error", !threw);
+
+ui.renderLastGame(null);
+check("signing out takes it away", $("lastGame").hidden === true);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

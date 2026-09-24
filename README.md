@@ -754,6 +754,10 @@ Per match: duration, finishing position, players in the arena, orbs absorbed, pl
 
 Career: matches, wins, total time played, lifetime orbs and players eaten, best peak mass, best finish, 1st places, current and longest streak, total staked and won.
 
+**The last game is on the lobby card**, from the newest row `/api/stats` already returned — no new endpoint. It is re-read each time the card opens rather than at the whistle, because the fetch at the whistle can beat the server's own fire-and-forget write of that match. The wording lives in `client/lastgame.js`, pure and tested by `test/lastgame.test.js`, and follows the round cards: a survivor's place has no denominator, and `won` is only believed for a survival, because the table counts an eaten player's top-five standing as a win.
+
+**Sharing** offers X, Facebook, WhatsApp and Reddit links, Copy, and the system share sheet wherever the browser has one. A post carries the place, peak mass and players eaten, and **never money**: it goes out under the player's name to people who never opted into a wagering game, and a winnings brag is the part most likely to count as advertising. The link is the page itself with only `?mode=online` kept. Facebook builds its preview from the page's Open Graph tags; there is no `og:image` yet, because one has to be an absolute URL and the game answers on more than one host.
+
 **What counts as a win.** Agar.io has no win condition, so one had to be chosen rather than discovered. A match is won if you **finished in the top 5**, or you **cashed out a wagered run for more than you staked**. It is a generated column, so the rule lives in one place and old rows cannot disagree with new ones.
 
 If `rebuild_stats()` fails with `ERROR: 42702 column reference "n" is ambiguous`, you have the first schema version; `migrations/002_win_top5.sql` now redefines the function before calling it, so re-running it fixes itself. `migrations/003_fix_rebuild_stats.sql` applies the same fix on its own.

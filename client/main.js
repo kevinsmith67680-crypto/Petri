@@ -23,6 +23,13 @@ import { createAccountClient } from "./account.js";
 const params = new URLSearchParams(location.search);
 const MODE = params.get("mode") === "online" ? "online" : "local";
 const NAME = (params.get("name") || "You").slice(0, 16);
+// The address a shared result points people at: this page, in the mode that
+// has the online game, and nothing else from the query string — no ?name=,
+// no ?server= pointing somewhere only this player can reach. Joined as a
+// string rather than parsed: a page opened from disk has the origin "null",
+// and a URL constructor that throws here would stop the whole client loading.
+const SHARE_URL =
+  `${location.origin || ""}${location.pathname || "/"}${MODE === "online" ? "?mode=online" : ""}`;
 
 const settings = { theme: "light", map: true, board: true, grid: true, names: true, diag: false };
 
@@ -78,16 +85,28 @@ function reconnect() {
   conn = connect(ui.getStake());
 }
 
+// Career totals and the last game both come from the match history, which
+// only the server holds.
+function refreshStats() {
+  if (!api?.signedIn) {
+    ui.renderCareer(null);
+    ui.renderLastGame(null);
+    return;
+  }
+  api.stats()
+    .then(r => {
+      ui.renderCareer(r.stats);
+      ui.renderLastGame(r.matches?.[0] || null);
+    })
+    .catch(() => {});
+}
+
 function applyAuth(payload) {
   ui.renderAuth(api?.account || null);
   // Signing in or out changes which transport is correct, so rebuild it.
   reconnect();
   // Career totals live server-side; refresh them whenever identity changes.
-  if (api?.signedIn) {
-    api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
-  } else {
-    ui.renderCareer(null);
-  }
+  refreshStats();
   if (payload) {
     onAccount({
       balance: payload.balance,
@@ -100,6 +119,7 @@ function applyAuth(payload) {
 
 const ui = createUI({
   settings,
+  shareUrl: SHARE_URL,
   onStart: start,
   // Google bakes its theme in at render time, so the button has to be redrawn
   // or it stays light on a dark menu.
@@ -356,7 +376,12 @@ function onRound(msg) {
     // press Start, you declare yourself ready and wait for the room.
     running = false;
     ui.setReady(ready);
+    // Read the history each time the card opens, not on every lobby message:
+    // those arrive on every join and leave. By now the last game is written —
+    // the fetch at the whistle can beat the server's own write of it.
+    const opening = ui.el.lobbyVeil.hidden;
     ui.showLobby(msg);
+    if (opening) refreshStats();
     return;
   }
   if (msg.type === "round_end") {
@@ -371,7 +396,7 @@ function onRound(msg) {
       nextIn: msg.nextIn,
       myName: api?.account?.displayName
     });
-    if (api?.signedIn) api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
+    refreshStats();
   } else if (msg.type === "round_start") {
     if (spectating) { spectating = false; ui.hideSpectator(); }
     ready = false;
@@ -605,9 +630,7 @@ function frame(now) {
           of: lastOf
         });
         // The match has just been written server-side, so re-read the totals.
-        if (api?.signedIn) {
-          api.stats().then(r => ui.renderCareer(r.stats)).catch(() => {});
-        }
+        refreshStats();
       }
 
       renderer.draw(fresh, camera, th, settings);
