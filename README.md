@@ -72,6 +72,14 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
 | `LOBBY_MAX` | 150 | Seats per room. When every room of a mode is full, another opens |
+| `MATCHMAKER` | `embedded` | `embedded` serves `/api/match` from this process, with this server as the only one. `external` leaves matchmaking to `npm run matchmaker` and answers it on `/internal/*` |
+| `SERVER_ID` | `local` | This server's name in the matchmaker's `GAME_SERVERS`. Required when `MATCHMAKER=external`. No `#` |
+| `REGION` | `local` | The region the matchmaker groups this server under |
+| `PUBLIC_URL` | *(unset)* | The `wss://` address players are told to connect to. Unset means the host that served the page |
+| `MATCH_SECRET` | random per boot | Signs tickets and internal requests. Required, 32+ characters and identical everywhere, when `MATCHMAKER=external` |
+| `TICKET_SECONDS` | 30 | How long a ticket, and the seat it reserves, lasts |
+| `SEAT_TTL_SECONDS` | 30 | Seat lease lifetime; a dead server's players are free to play elsewhere after this |
+| `MATCH_RATE` / `MATCH_BURST` | 2 / 10 | Matches per second per address, and the burst allowed |
 | `MAX_ROOMS` | 4 | Rooms one process may run across both modes. Never fewer than one per mode |
 | `ALLOWED_ORIGINS` | *(unset)* | Comma-separated origin allowlist. Unset means allow anything — dev only |
 | `MAX_CONN_PER_IP` | 3 | Connection cap per address |
@@ -95,6 +103,10 @@ server/     index.js       authoritative tick loop + static file serving
             ledger.js      in-memory ledger + ramp placeholder
             accounts.js    signup, login, sessions, display names
             api.js         HTTP routes for the account endpoints
+            ticket.js      signed match tickets and signed internal requests
+            matchmaker/    core.js   region + stake grouping, reservations
+                           http.js   the /match request, shared by both hosts
+                           index.js  the matchmaker as its own service
             store.js       JSON file persistence for the memory backend
             db/schema.sql  Postgres schema + atomic settlement functions
             db/pg.js       Supabase/Postgres backend
@@ -118,7 +130,8 @@ assets/     logo-light.png header logo, dark wordmark
 
 client/     main.js        entry point: transport choice, input, render loop
             account.js     /api client and session token storage
-            config.js      SERVER_URL for statically-hosted clients
+            config.js      SERVER_URL / MATCHMAKER_URL for split hosting
+            match.js       asks the matchmaker for a ticket
             local.js       offline connection (simulation in-tab)
             net.js         networked connection (WebSocket + interpolation)
             render.js      canvas drawing, themes, camera, minimap
@@ -128,6 +141,8 @@ test/       sim.test.js       headless simulation checks
             wager.test.js     ledger conservation and ramp interlock
             accounts.test.js  hashing, sessions, name rules, throttling
             backend.test.js   same contract run against memory and Postgres
+            matchmaker.test.js tickets and matchmaking against fake servers
+            fleet.test.js     matchmaker + two game servers + Postgres, for real
 index.html  markup and CSS
 ```
 
@@ -170,7 +185,7 @@ The corollary is worth internalising: **never move a rule back to the client for
 | Speed hack, teleport, mass editing | Client sends inputs only; the server simulates |
 | Seeing the whole map | Area-of-interest culling in `protocol.js` — a player physically cannot be sent what is outside their view radius |
 | Message flooding | Token buckets: 80 messages/sec, 12 actions/sec, then the socket is closed |
-| Oversized payloads | `maxPayload` of 128 bytes; an aim frame is 5 |
+| Oversized payloads | `maxPayload` of 1024 bytes, which the join's match ticket needs; an aim frame is 5 |
 | Malformed binary frames | Every read is bounds-checked; counts validated before allocating; decode failure closes the socket |
 | `NaN`/`Infinity` injection into physics | Aim values are checked with `Number.isFinite` and magnitude-capped in `setAim` |
 | Multi-boxing, connection floods | `MAX_CONN_PER_IP`, default 3 |
@@ -232,7 +247,7 @@ The server treats any decode failure as "close the socket", since a client that 
 ### Remaining bandwidth work
 
 - Cells are still sent in full each tick. They move constantly so there is less to win, but quantising positions relative to the view origin would save a few bytes each.
-- The 100-player figures assume one world. Rooms now open on demand within a process (see *Rooms on demand*), but a process is one thread: past one CPU core the next step is several processes with something routing players between them.
+- The 100-player figures assume one world. Rooms open on demand within a process (see *Rooms on demand*), but a process is one thread: past one CPU core, run several game servers and let the matchmaker route between them (see *Matchmaking*).
 - Client-side prediction of your own cells, so movement does not wait a round trip. `moveCells` is pure, so it can be re-run locally against unacknowledged input.
 - WebTransport instead of WebSocket, with WebSocket as fallback. It reached Baseline in March 2026, and its unreliable datagrams suit positional updates you would discard on arrival anyway. Keyframes already exist, which is what makes lossy transport survivable.
 
@@ -266,7 +281,7 @@ Three reasons it works this way. A balance has to belong to a person; a guest "a
 | GET | `/api/me` | Current account plus balance |
 | POST | `/api/name` | Change display name |
 
-Auth is on HTTP rather than the WebSocket because it happens before the socket exists, and a password exchange has no business sharing a path with the 20Hz gameplay loop. The join message then carries the session token, and the server resolves identity from that alone — **the display name on your cell comes from the account, never from the join payload**, so a modified client cannot impersonate anyone.
+Auth is on HTTP rather than the WebSocket because it happens before the socket exists, and a password exchange has no business sharing a path with the 20Hz gameplay loop. The session token goes to the matchmaker, which resolves the account and signs a ticket naming it; the join carries only that ticket — **the display name on your cell comes from the account, never from anything the client says**, so a modified client cannot impersonate anyone. See *Matchmaking*.
 
 ### What it gets right
 
@@ -284,7 +299,7 @@ This is credible scaffolding, **not audited authentication**. Before it guards a
 
 Two specific weaknesses worth naming:
 
-**The session token lives in `localStorage`**, which means any XSS on the page can read it. An HttpOnly cookie would not be readable, but the WebSocket join needs to carry the token in its payload, and cookies would add CSRF handling for no gain there. It is a deliberate trade-off, not an oversight — but revisit it rather than inherit it if real funds are ever involved.
+**The session token lives in `localStorage`**, which means any XSS on the page can read it. An HttpOnly cookie would not be readable, but the matchmaker is its own service on its own origin, and a bearer header works across origins where a cookie would need CSRF handling for no gain. It is a deliberate trade-off, not an oversight — but revisit it rather than inherit it if real funds are ever involved.
 
 **`FileStore` is a JSON file, not a database.** It has no transactions, so concurrent writes to related records can interleave. It exists so accounts survive a process restart in development.
 
@@ -591,6 +606,44 @@ A server that cannot hold its tick feels identical to bad netcode from the playe
 
 `avgMs` well under `budgetMs` means the server is fine and any remaining lag is network. `avgMs` approaching or exceeding the budget, or `overruns` climbing steadily, means the instance is starved — on Render's free 0.1 CPU that happens quickly with bots in the arena. Lower `BOTS` or move up an instance size.
 
+## Matchmaking
+
+A player never picks a server or a room. The client asks the matchmaker for a seat; the matchmaker picks a game server and a room, has that server **reserve** the seat, and answers with where to connect and a short-lived **signed ticket**. The socket presents the ticket and nothing else.
+
+```
+client ──POST /match (Bearer session, stake, region)──▶ matchmaker
+                                                         │ session + seat: Postgres
+                                                         │ rooms: GET  /internal/status   (each server in the region)
+                                                         │ seat:  POST /internal/reserve  (the best one)
+client ◀──────────── { url, ticket } ────────────────────┘
+client ──WebSocket url, join { ticket }──▶ game server: checks the signature and the reservation,
+                                           claims the seat lease, takes the stake
+```
+
+**The ticket** (`server/ticket.js`) is `base64url(claims).HMAC-SHA256`, signed with `MATCH_SECRET`: the server id and room (the room's address), a single-use reservation id, the account, its display name, the stake and region, and an expiry 30 seconds out. The join costs no database lookup and a client cannot choose its own server, room, stake or name. A ticket is spent by the first join that presents it; an expired, forged, replayed or misdirected one is refused with close code 4003, and the client goes back to the matchmaker. Tickets and internal requests are MACed over different purpose prefixes, so one can never be passed off as the other.
+
+**Grouping.** The stake picks the mode; the region picks the servers (an unknown or missing region gets `DEFAULT_REGION`). Across a region the matchmaker applies the rule each server applies to its own rooms: an existing room with a free seat beats opening a new one, between rounds beats mid-round, fuller beats emptier — so a quiet region fills rooms instead of scattering players across half-empty lobbies. A server that does not answer within 1.5 seconds is skipped; one that refuses a reservation (its picture was a moment stale) passes the player to the next.
+
+**Reservations** count as taken seats until the ticket is presented or lapses, so a burst of matches cannot overfill a room, and a room with reservations outstanding is not closed. One per account per server: asking again replaces the last.
+
+**Seat leases** (`petri.seats`, migration 007). An account's escrow is one pot in one database, so two servers that each believed they held a player could each move it — the second join would refund the stake the first server's live round is playing for. A game server must win the account's seat before it touches the account's money, and renews it every `SEAT_TTL/3` while the player is connected or their body lingers. The matchmaker reads it too: **a player already held by a server goes back to that server, whatever region they asked for** — which is also how a reconnect finds its own body. A server that dies stops renewing, its seats lapse within `SEAT_TTL`, and the next server to take the player refunds the stale escrow before locking a new stake. A server that loses a lease anyway (a stall longer than `SEAT_TTL`) drops that player rather than touch money another server now owns. The holder is `<server id>#<boot id>`, so a restarted process cannot take over players its predecessor is still settling; on SIGTERM a server stops ticking, closes its sockets with 1012, waits a second for writes in flight, and hands its seats back, so a deploy does not lock players out.
+
+**Two ways to run it.**
+
+- *One box* (the default, and what `render.yaml` deploys): `MATCHMAKER=embedded`. The game server answers `POST /api/match` itself with the same core, as its own only server, and signs with a random per-boot secret. Nothing to configure.
+- *A fleet*: run `npm run matchmaker` as its own service with `DATABASE_URL`, `MATCH_SECRET` and `GAME_SERVERS`, and every game server with `MATCHMAKER=external`, `SERVER_ID`, `REGION`, `PUBLIC_URL`, the same `MATCH_SECRET` and the same `DATABASE_URL`. Point the client at the matchmaker with `MATCHMAKER_URL` in `client/config.js` (or `?mm=`). The matchmaker keeps nothing between requests; run as many as you like behind one address.
+
+```
+GAME_SERVERS='[{"id":"eu-1","region":"eu","url":"wss://eu-1.engulfs.io","internal":"https://eu-1.engulfs.io"},
+               {"id":"us-1","region":"us","url":"wss://us-1.engulfs.io","internal":"https://us-1.engulfs.io"}]'
+```
+
+`url` is where players connect; `internal` is where the matchmaker reaches the server's `/internal/*`, which answer only requests signed with `MATCH_SECRET`. The matchmaker's `/health` says whether each server is answering.
+
+**What it does not do yet.** The client names its region only through `?region=`; nothing measures latency to choose one. Every match asks each server in the region for its rooms rather than caching them, which is fine for a handful of servers and not for hundreds. Cross-server state is limited to the seat lease: the per-address connection cap is still per server.
+
+`test/matchmaker.test.js` pins the decisions against fake servers. `test/fleet.test.js` (in `npm run test:db`) starts the matchmaker and two game servers as separate processes on Postgres and plays through them over real sockets: region routing, a ticket refused at the wrong server, a second server refused a player the first holds, a reconnect routed back to its body from another region, a graceful restart, and a server killed with a stake in escrow — with the money totalled before and after.
+
 ## Between rounds
 
 A round ends, standings go up, and the next one begins. Three things used to break that.
@@ -619,7 +672,7 @@ Retrying is only safe because of the escrow fix above: the server evicts an acco
 
 **"Sign in to play" was hiding database failures.** The session lookup was wrapped in `.catch(() => null)`, so a Supabase hiccup, a reset connection or a timeout all produced the same answer as a genuinely missing session — telling a signed-in player to sign in. Since that refusal is final, the client did not even retry. The two cases are now distinct: a missing session closes 1008 and is final; a failed lookup closes 1011, says "the server could not check your session", and is retried without putting a card in front of the player.
 
-**A refusal is not retried.** The client used to retry any close except a takeover, so a deliberate rejection — wrong stake, stale client, room full, connection cap — was repeated through the entire backoff before the player was told anything. Refreshing the page hit exactly this: the old socket was still registered server-side, the cap rejected the new one, and the reload crawled through eight attempts. Codes 1000, 1002, 1008, 1013 and 4001 are now final; only 1006, 1001 and 1011 are worth another go.
+**A refusal is not retried.** The client used to retry any close except a takeover, so a deliberate rejection — wrong stake, stale client, room full, connection cap — was repeated through the entire backoff before the player was told anything. Refreshing the page hit exactly this: the old socket was still registered server-side, the cap rejected the new one, and the reload crawled through eight attempts. Codes 1000, 1002, 1008, 1013 and 4001 are now final; 1006, 1001, 1011 and 1012 are worth another go, and so are 4003 (the ticket lapsed or was already spent) and 4004 (the seat is held by another server). Every attempt asks the matchmaker for a fresh ticket.
 
 `MAX_CONN_PER_IP` also rose from 3 to 8. Three was too tight for ordinary use: a refresh transiently doubles your count, and households and offices share one address behind NAT.
 
@@ -671,7 +724,7 @@ Each mode starts with one room (`standard-1`, `highstakes-1`) and always keeps a
 
 **Limits.** `MAX_ROOMS` (default 4) caps the rooms in one process across both modes, and can never be fewer than the number of modes. Above that sits a CPU check: once the tick is already spending 60% of its budget, no further room opens, because another world would slow every round in the process, including the ones people are playing. An arrival turned away by either limit gets the `full` refusal and close code 1013, and is never escrowed.
 
-One process is one thread, so every room in it shares a single core. A full 100-player room costs roughly 10 ms a tick; at 30 Hz, three of them are the whole budget. Past that the answer is more processes, which needs something in front of them to route players — this change is the part that lives inside one.
+One process is one thread, so every room in it shares a single core. A full 100-player room costs roughly 10 ms a tick; at 30 Hz, three of them are the whole budget. Past that the answer is more processes, and the matchmaker is what routes players between them — see *Matchmaking*.
 
 **Two guards keep money safe while rooms come and go:**
 

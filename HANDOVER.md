@@ -7,11 +7,12 @@ Engulfs — an agar.io-style game with real-money wagering, at [engulfs.io](http
 analysis. This file is the shorter thing you want first — what state it is in, what is
 dangerous, and what will waste your afternoon.
 
-**Current state.** Everything is merged. `main` is at `5f340b4` (PR #16, merged
-2026-09-24), and the working branch `claude/nice-keller-z8vfyf` adds rooms on demand (see
-"Things worth knowing"), which `main` does not have yet. All sixteen test suites
-green. Supabase
-migrations `002`–`006` applied; nothing since needs a new one.
+**Current state.** `main` is at `5f340b4` (PR #16, merged 2026-09-24). The working
+branch `claude/nice-keller-z8vfyf` adds two things `main` does not have: rooms on
+demand, and a matchmaker with signed tickets and seat leases (see "Things worth
+knowing"). All seventeen suites green, and `npm run test:db` green against Postgres
+16. Supabase migrations `002`–`006` are applied; **the branch needs `007` applied
+before it deploys** — see "Before deploying".
 
 Render deploys from `main`, so the site should be running all of it — but that has not
 been confirmed from outside. If it has not deployed yet, read "Before deploying" first:
@@ -105,6 +106,15 @@ well as by the suite.
 | `76ef53c` | The lobby laid out like the pregame menu: *Last game* and *Next round* cards. Readiness now survives between rounds on the client too |
 
 ### Before deploying
+
+**This branch: apply `server/db/migrations/007_seats.sql` first.** A join now claims
+the account's seat lease before touching its money. Without the table every join is
+refused with "could not take your seat" and retried until the client gives up — the
+game is unplayable while the page, sign-in and menu all look fine.
+
+**This branch: `PROTOCOL_VERSION` 9 → 10.** The join presents a match ticket instead
+of a session token and stake. Open tabs on the old build are told to reload, as below.
+Nothing else needs configuring: one instance runs its matchmaker in-process.
 
 **`PROTOCOL_VERSION` went 7 → 8 → 9.** 8: viruses carry a compact id and a feed count.
 9: each name record in the snapshot carries the owner's colour. The version check is
@@ -212,18 +222,20 @@ the tick keeps sending snapshots. The tick's countdown branch is guarded with
 | A compiled Python file was committed with the manual script | `scripts/__pycache__/` |
 | Two unreferenced images ship in the container, 868 KB | `assets/ChatGPT Image Sep 12…png`, `assets/image-1789204331359.png` |
 | `mark.png` is 796 KB and only used by the icon build script, never at runtime | `assets/mark.png`, `scripts/icons.mjs` |
-| `npm install && npm test` fails — see the `ws` trap below | `test/rooms.test.js`, `test/resume.test.js` |
-| README's cheating table is stale in three places | see below |
+| `npm install && npm test` fails — see the `ws` trap below | `test/rooms.test.js`, `test/resume.test.js`, `test/factory.test.js` |
+| The client chooses a region only through `?region=`; nothing measures latency to pick one | `client/main.js`, `getTicket` |
+| Each match asks every server in the region for its rooms. Fine for a handful of servers, not for hundreds; cache the status for a second or two first | `server/matchmaker/core.js`, `rank()` |
+| The per-address connection cap is still per game server, not fleet-wide | `server/index.js`, `connectionsByIp` |
+| README's cheating table is stale in two places | see below |
 
-The three stale README claims, all still stale:
+The two stale README claims (the `maxPayload` one is fixed — it is 1024 now):
 
 | README says | Code does |
 |---|---|
-| `maxPayload` 128 bytes | 512 (`MAX_PAYLOAD`, raised when the join frame grew) |
 | `MAX_CONN_PER_IP` default 3 | 8, in both the code and `render.yaml` |
 | 30-second ping, two missed rounds | 10-second ping |
 
-They are three one-line edits in `README.md` and nobody has made them. Note that the
+They are two one-line edits in `README.md` and nobody has made them. Note that the
 **player manual does not have this problem** — it reads its numbers out of `shared/`
 at build time, so it cannot drift.
 
@@ -235,8 +247,9 @@ at build time, so it cannot drift.
 npm install
 npm start                  # http://localhost:8080
 npm run dev                # TEST_MODE=1: rounds start with one ready player
-npm test                   # all sixteen suites
-DATABASE_URL=… npm run test:db
+npm test                   # all seventeen suites (needs NO node_modules/ws: see below)
+DATABASE_URL=… npm run test:db   # backend contract, a real fleet, Docker (needs the real ws)
+npm run matchmaker         # the matchmaker as its own service (see README "Matchmaking")
 python3 scripts/manual.py  # rebuild the player manual (needs: pip install reportlab)
 ```
 
@@ -251,14 +264,19 @@ wait for others instead of counting down at once, run without `TEST_MODE` and wi
 
 ### The `ws` trap, which will cost you an hour
 
-`test/rooms.test.js` and `test/resume.test.js` boot the real server against a **fake
-`ws` package that they write into `node_modules/ws`**, and only when no real one is
-installed. Two consequences:
+`test/rooms.test.js`, `test/resume.test.js` and `test/factory.test.js` boot the real
+server against a **fake `ws` package that they write into `node_modules/ws`**, and
+only when no real one is installed. `test/fleet.test.js` is the opposite: it runs
+real processes over real sockets and needs the real package. Three consequences:
 
 - After `npm install`, both suites crash. Move `node_modules/ws` aside to run them.
 - If a stub is ever left behind, the server starts fine and answers every WebSocket
   upgrade with `200` and the page itself. That looks exactly like a broken deployment
-  and is not one.
+  and is not one. A suite that crashes part-way leaves its stub behind — it happened
+  during the matchmaker work — so check `node_modules/ws/package.json` for
+  `0.0.0-test` whenever a real server misbehaves.
+- `npm test` and `npm run test:db` want opposite things. Run `npm test` with
+  `node_modules/ws` moved aside, and `test:db` with it back.
 
 It cannot reach production: the image runs `npm install --omit=dev` in a clean layer
 and `node_modules/` is gitignored. Replacing the stub with a real client connection in
@@ -298,6 +316,7 @@ Environment that matters:
 | `REAL_MONEY=1` | Deliberately a hard startup error until a real ramp exists |
 | `TEST_MODE=1` | Never set in production: one ready player starts a round |
 | `COUNTDOWN_SECONDS` | Length of the pre-round count, default 5 |
+| `MATCHMAKER` | `embedded` (default) matches in-process at `/api/match`; `external` for a fleet, which also needs `SERVER_ID`, `REGION`, `PUBLIC_URL`, `MATCH_SECRET` |
 
 Diagnosing a refused connection: `/health` reports whether a socket from a given
 origin would be accepted and which guard would refuse it. A rejected WebSocket
@@ -324,6 +343,27 @@ process, and an empty room closes while its mode has another. It is still one
 process on one core, so this is headroom, not scale — see "Rooms on demand" in
 `README.md`.
 
+**Matchmaking decides where everyone plays, and the ticket is all the server
+believes.** The client asks `/match` (the game server's own `/api/match` on one box,
+`npm run matchmaker` in a fleet) with its session and stake; the matchmaker reserves a
+seat and returns a signed ticket naming server, room, account, name and stake, valid
+for 30 seconds and spent on use. The join carries nothing else. README "Matchmaking"
+has the whole flow.
+
+**One server holds a player at a time — the seat lease.** A join must win the
+account's row in `petri.seats` before it touches the account's money, and the holder
+renews it while the player is connected or lingering. The matchmaker routes anyone
+with a live lease back to its holder, regardless of region, which is also how a
+reconnect finds its body. A killed server's players can play elsewhere after
+`SEAT_TTL_SECONDS` (30); a SIGTERM'd one hands its seats back at once. Without this,
+a second server's join would have refunded a stake the first server was playing for.
+
+**The tick scheduler used to leak an interval every tick.** The "SLOW tick" reporter
+had been pasted inside the scheduler's callback (in "Update to latest"), so each tick
+created another 60-second interval that never stopped: 30 a second on the live
+config, about 108,000 an hour, each one firing every minute. Fixed on this branch; if
+the live server's memory or CPU crept up with uptime, that was why.
+
 **Mass sets your rank, never your payout.** A top-five finish pays out your own escrow:
 your stake plus whatever you took off players you ate. There is no shared pot. If you
 were handed a diagram showing pooled stakes and mass-weighted shares, that is a
@@ -349,11 +389,13 @@ disagreed with the ready count.
 | Path | What |
 |---|---|
 | `shared/` | Simulation, wire protocol, money primitives, modes. Imported by both ends |
-| `server/index.js` | Connection handling, rooms, rounds, settlement |
+| `server/index.js` | Connection handling, rooms, rounds, settlement, seat leases, the embedded matchmaker |
+| `server/matchmaker/` | The matchmaker: `core.js` decides, `index.js` runs it as its own service |
+| `server/ticket.js` | Signed match tickets and signed internal requests |
 | `server/ledger.js` | The in-memory ledger and the ramp interface |
 | `server/db/` | Postgres backend, `schema.sql`, migrations |
-| `client/` | `net.js` transport and prediction, `main.js` wiring, `ui.js`, `render.js`, and `lastgame.js` for the last-game card's wording and share links |
+| `client/` | `net.js` transport and prediction, `match.js` ticket requests, `main.js` wiring, `ui.js`, `render.js`, and `lastgame.js` for the last-game card's wording and share links |
 | `legal/` | Draft privacy policy and terms. **Drafts** — unreviewed |
 | `docs/` | The generated player manual. Not served |
 | `scripts/manual.py` | Builds the manual; reads every number out of `shared/` at build time. Re-run after changing any tuning constant |
-| `test/` | Sixteen suites, plain Node, no framework |
+| `test/` | Seventeen suites, plain Node, no framework, plus `fleet.test.js` in `test:db` |

@@ -14,7 +14,8 @@
 //     fresh arrival would have been seated elsewhere.
 //   * An empty extra room closes, but not while a lingering body in it still
 //     holds escrow, and a mode's last room never closes.
-//   * A burst of simultaneous arrivals cannot overfill the last seat.
+//   * A burst of simultaneous arrivals cannot overfill the last seat, now
+//     that seats are reserved by the matchmaker and filled by the join.
 //
 // It boots its own server because it needs room sizes and a room cap that the
 // other suites must not see.
@@ -49,6 +50,7 @@ function check(label, cond, detail = "") {
 const PORT = 9100 + (process.pid % 200);
 process.env.PORT = String(PORT);
 process.env.TEST_MODE = "1";
+process.env.MATCH_BURST = "1000";
 process.env.BOTS = "0";
 process.env.LOBBY_MAX = "2";
 process.env.MAX_ROOMS = "3";
@@ -99,12 +101,22 @@ const money = async token => (await (await fetch(`http://localhost:${PORT}/api/m
   headers: { Authorization: `Bearer ${token}` }
 })).json());
 
-// Opens a socket and starts the join without waiting for it, so several can
-// be put in flight at once.
+// Asks the matchmaker for a seat and joins with the ticket, as the client
+// does, without waiting for either, so several can be in flight at once. A
+// refusal from the matchmaker is kept as `refused`: no socket is opened.
 function connect(token, stake) {
   const ws = new FakeWS();
-  globalThis.__wss.emit("connection", ws, req);
-  ws.joined = ws.deliver({ type: "join", name: "x", stake, token, protocol: PROTOCOL_VERSION });
+  ws.joined = (async () => {
+    const res = await fetch(`http://localhost:${PORT}/api/match`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ stake })
+    });
+    const got = await res.json();
+    if (!res.ok) { ws.refused = { status: res.status, ...got }; return; }
+    globalThis.__wss.emit("connection", ws, req);
+    await ws.deliver({ type: "join", ticket: got.ticket, protocol: PROTOCOL_VERSION });
+  })();
   return ws;
 }
 
@@ -153,12 +165,10 @@ console.log("\n-- the process stops at MAX_ROOMS --");
 
 {
   const eve = await enter(tokens.eve);
-  const err = texts(eve).find(m => m.type === "account_error");
-  check("a fifth Standard arrival is turned away", err && err.code === "full",
-    err ? err.code : "no error sent");
-  check("with the room-full close code", eve.closed && eve.closed.code === 1013,
-    JSON.stringify(eve.closed || {}));
-  check("and told why", err && /full/i.test(err.reason), err ? err.reason : "—");
+  check("a fifth Standard arrival is turned away by the matchmaker",
+    eve.refused?.code === "full", JSON.stringify(eve.refused || {}));
+  check("before any socket is opened", !welcome(eve) && eve.out.length === 0);
+  check("and told why", /full/i.test(eve.refused?.error || ""), eve.refused?.error || "—");
   check("no fourth room was opened", (await roomIds()).length === 3,
     JSON.stringify(await roomIds()));
   check("nothing was escrowed for the refused join", (await money(tokens.eve)).pot === 0,
@@ -246,15 +256,16 @@ console.log("\n-- a burst of arrivals cannot overfill the last seat --");
 
 {
   // standard-3 has one seat left and the process is at its cap, so of three
-  // simultaneous joins exactly one may get in. Each join awaits the database
-  // before it is seated, which is the window a burst used to fall through.
+  // simultaneous arrivals exactly one may get in. The seat is reserved when
+  // the ticket is issued and only filled when the ticket is presented, which
+  // is the window a burst could otherwise fall through.
   const burst = [connect(tokens.dee, STANDARD), connect(tokens.ivy, STANDARD),
     connect(tokens.joy, STANDARD)];
   await Promise.all(burst.map(ws => ws.joined));
   await settle();
 
   const seated = burst.filter(ws => welcome(ws));
-  const refused = burst.filter(ws => texts(ws).some(m => m.type === "account_error" && m.code === "full"));
+  const refused = burst.filter(ws => ws.refused?.code === "full");
   check("exactly one of three is seated", seated.length === 1, `${seated.length} seated`);
   check("and the other two are told the mode is full", refused.length === 2,
     `${refused.length} refused`);

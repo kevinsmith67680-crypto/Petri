@@ -42,6 +42,7 @@ function check(label, cond, detail = "") {
 const PORT = 8700 + (process.pid % 200);
 process.env.PORT = String(PORT);
 process.env.TEST_MODE = "1";
+process.env.MATCH_BURST = "1000";
 delete process.env.BOTS;
 // Short rounds so a full cycle can be observed without a long wait. The
 // pre-round count is shortened for the same reason, not switched off: a round
@@ -80,6 +81,17 @@ const health = async () => (await (await fetch(`http://localhost:${PORT}/health`
 const room = async id => (await health()).rooms.find(r => r.mode === id);
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
 
+// Joining takes a ticket from the matchmaker first, exactly as the client does.
+async function matched(token, stake, extra = {}) {
+  const res = await fetch(`http://localhost:${PORT}/api/match`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ stake })
+  });
+  const got = await res.json();
+  return { type: "join", ticket: got.ticket, protocol: PROTOCOL_VERSION, ...extra };
+}
+
 const { PROTOCOL_VERSION, PHASE_COUNTDOWN, decodeSnapshot } = await import("../shared/protocol.js");
 
 async function join(username, stake, protocol = PROTOCOL_VERSION) {
@@ -89,7 +101,7 @@ async function join(username, stake, protocol = PROTOCOL_VERSION) {
   })).json().then(d => d.token);
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver({ type: "join", name: username, stake, token, protocol });
+  await ws.deliver(await matched(token, stake, { protocol }));
   await settle();
   return ws;
 }
@@ -141,11 +153,18 @@ console.log("\n-- the join frame fits the payload limit --");
 {
   const src = fs.readFileSync(path.join(root, "..", "server", "index.js"), "utf8");
   const limit = Number(/const MAX_PAYLOAD = (\d+)/.exec(src)[1]);
+  // The join carries a match ticket now, so the worst case is the longest
+  // ticket the matchmaker could issue: every claim at its longest plausible
+  // length, and a server id and region far longer than any deployment uses.
+  const { signTicket } = await import("../server/ticket.js");
+  const ticket = signTicket({
+    srv: "x".repeat(32), room: "highstakes-99999", rsv: "x".repeat(12),
+    acct: "00000000-0000-0000-0000-000000000000", name: "x".repeat(16),
+    stake: 2_000_000, region: "x".repeat(24), exp: 9_999_999_999_999
+  }, "s".repeat(64));
   const worst = JSON.stringify({
     type: "join",
-    name: "x".repeat(16),            // NAME_MAX
-    stake: 2_000_000,
-    token: "a".repeat(64),           // session token
+    ticket,
     ci: 6,                           // palette slot
     protocol: PROTOCOL_VERSION
   });
@@ -173,7 +192,7 @@ console.log("\n-- the pot always equals the stake you chose --");
   const enter = async stake => {
     const ws = new FakeWS();
     globalThis.__wss.emit("connection", ws, req);
-    await ws.deliver({ type: "join", name: "Potter", stake, token: tok, protocol: PROTOCOL_VERSION });
+    await ws.deliver(await matched(tok, stake));
     await settle();
     return ws;
   };
@@ -214,6 +233,7 @@ console.log("\n-- a database blip is not a sign-in problem --");
 // resolveSession failures used to be swallowed into "sign in to play", which
 // told a signed-in player their session was missing whenever the database
 // hiccuped — and that refusal is final, so the client did not even retry.
+// The session is checked by the matchmaker now, so that is where it must hold.
 {
   // The server does not export its Accounts instance, so the behaviour is
   // induced on the prototype it was built from.
@@ -221,24 +241,44 @@ console.log("\n-- a database blip is not a sign-in problem --");
   const realResolve = Accounts.prototype.resolveSession;
   Accounts.prototype.resolveSession = async () => { throw new Error("connection reset"); };
 
-  const ws = new FakeWS();
-  globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver({
-    type: "join", name: "Blip", stake: 1_000_000,
-    token: "b".repeat(64), protocol: PROTOCOL_VERSION
+  const res = await fetch(`http://localhost:${PORT}/api/match`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${"b".repeat(64)}` },
+    body: JSON.stringify({ stake: 1_000_000 })
   });
-  await settle();
-
-  const said = ws.out.filter(m => m !== "<binary>").map(JSON.parse);
-  const err = said.find(m => m.type === "account_error");
+  const err = await res.json();
   check("it is reported as retryable, not as a sign-in failure",
-    err && err.code === "retry", err ? err.code : "nothing sent");
+    err.code === "retry", err.code || "no code");
   check("and the message does not blame the player",
-    err && !/sign in/i.test(err.reason), err ? err.reason : "—");
-  check("the socket closes with a retryable code",
-    ws.closed && ws.closed.code === 1011, JSON.stringify(ws.closed || {}));
+    !/sign in/i.test(err.error || ""), err.error || "—");
+  check("with a status the client retries on", res.status === 503, String(res.status));
 
   Accounts.prototype.resolveSession = realResolve;
+}
+
+// The join's own database step is claiming the seat. A blip there is a
+// server fault the client retries, not a verdict on the player.
+{
+  const { MemoryRepo } = await import("../server/db/memory.js");
+  const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "blip", password: "password123", displayName: "Blip", dateOfBirth: "1990-01-01" })
+  })).json().then(d => d.token);
+  const frame = await matched(tok, 1_000_000);
+
+  const realClaim = MemoryRepo.prototype.claimSeat;
+  MemoryRepo.prototype.claimSeat = async () => { throw new Error("connection reset"); };
+  const ws = new FakeWS();
+  globalThis.__wss.emit("connection", ws, req);
+  await ws.deliver(frame);
+  await settle();
+  MemoryRepo.prototype.claimSeat = realClaim;
+
+  const err = ws.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "account_error");
+  check("a failed seat claim is reported as retryable",
+    err && err.code === "retry", err ? err.code : "nothing sent");
+  check("and closes with a retryable code",
+    ws.closed && ws.closed.code === 1011, JSON.stringify(ws.closed || {}));
 }
 
 console.log("\n-- a stale client is turned away --");
@@ -295,7 +335,7 @@ console.log("\n-- one round rolls into the next --");
 
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver({ type: "join", name: "Runner", stake: 1_000_000, token: tok, protocol: PROTOCOL_VERSION });
+  await ws.deliver(await matched(tok, 1_000_000));
   await settle();
 
   const joined = await money();
@@ -341,7 +381,7 @@ console.log("\n-- the colour picked in the lobby is the one the room sees --");
 
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver({ type: "join", name: "Painter", stake: 1_000_000, token: tok, ci: 4, protocol: PROTOCOL_VERSION });
+  await ws.deliver(await matched(tok, 1_000_000, { ci: 4 }));
   await settle();
   const welcome = ws.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "welcome");
   check("the colour asked for on join is the one given", welcome && welcome.ci === 4,
@@ -385,7 +425,7 @@ console.log("\n-- the colour picked in the lobby is the one the room sees --");
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: "smudge", password: "password123", displayName: "Smudge", dateOfBirth: "1990-01-01" })
   })).json().then(d => d.token);
-  await junk.deliver({ type: "join", name: "Smudge", stake: 1_000_000, token: tok2, ci: 99, protocol: PROTOCOL_VERSION });
+  await junk.deliver(await matched(tok2, 1_000_000, { ci: 99 }));
   await settle();
   const w2 = junk.out.filter(m => m !== "<binary>").map(JSON.parse).find(m => m.type === "welcome");
   check("a slot outside the palette is replaced with a real one",
@@ -415,7 +455,7 @@ console.log("\n-- leaving the lobby for the menu --");
   const enter = async (tok, name, stake = 2_000_000) => {
     const ws = new FakeWS();
     globalThis.__wss.emit("connection", ws, req);
-    await ws.deliver({ type: "join", name, stake, token: tok, protocol: PROTOCOL_VERSION });
+    await ws.deliver(await matched(tok, stake));
     return ws;
   };
   const texts = ws => ws.out.filter(m => m !== "<binary>").map(JSON.parse);

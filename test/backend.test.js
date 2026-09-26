@@ -65,6 +65,39 @@ async function runContract(name, backend) {
   await accounts.destroySession(token);
   check("destroyed session stops resolving", (await accounts.resolveSession(token)) === null);
 
+  // ── seats ──
+  // One game server holds an account at a time. Both backends must agree on
+  // exactly when a lease blocks another holder and when it has lapsed.
+  {
+    const A = `srv-a#${uniq()}`, B = `srv-b#${uniq()}`;
+    check("a free seat can be claimed", await backend.claimSeat(ada.id, A, 30_000));
+    check("and is found under its holder", (await backend.findSeat(ada.id))?.holder === A,
+      JSON.stringify(await backend.findSeat(ada.id)));
+    check("another holder cannot take a live lease", !(await backend.claimSeat(ada.id, B, 30_000)));
+    check("the holder can claim it again", await backend.claimSeat(ada.id, A, 30_000));
+
+    const kept = await backend.renewSeats(A, [ada.id, bob.id], 30_000);
+    check("renewing reports only the seats still held",
+      kept.length === 1 && kept[0] === ada.id, JSON.stringify(kept));
+    check("renewing nothing is a no-op", (await backend.renewSeats(A, [], 30_000)).length === 0);
+
+    await backend.releaseSeat(ada.id, B);
+    check("a non-holder cannot release it", (await backend.findSeat(ada.id))?.holder === A);
+    await backend.releaseSeat(ada.id, A);
+    check("the holder can", (await backend.findSeat(ada.id)) === null);
+
+    // A holder that stops renewing loses the seat on its own. Nothing has to
+    // clean up after a server that died.
+    await backend.claimSeat(bob.id, A, 150);
+    await new Promise(r => setTimeout(r, 400));
+    check("a lapsed lease is not found", (await backend.findSeat(bob.id)) === null);
+    check("and another holder can take it", await backend.claimSeat(bob.id, B, 30_000));
+    check("after which the old holder's renewal loses it",
+      (await backend.renewSeats(A, [bob.id], 30_000)).length === 0);
+    check("and the new holder keeps it", (await backend.findSeat(bob.id))?.holder === B);
+    await backend.releaseSeat(bob.id, B);
+  }
+
   // ── money ──
   await backend.deposit(ada.id, 5 * UNIT, "test");
   await backend.deposit(bob.id, 5 * UNIT, "test");

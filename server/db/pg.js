@@ -221,6 +221,57 @@ export class PgRepo {
     return rowCount;
   }
 
+  // ── seats ─────────────────────────────────────────────────────────────────
+  // A lease on an account, held by one game server at a time. See the seats
+  // table in schema.sql for why it exists. The clock is the database's, so
+  // servers with drifting clocks still agree on when a lease has run out.
+
+  // Take the seat, or keep it if this holder already has it. Someone else's
+  // lease that has not run out wins. Returns whether the caller now holds it.
+  async claimSeat(accountId, holder, ttlMs) {
+    const { rows } = await this.pool.query(
+      `insert into petri.seats as s (account_id, holder, expires_at)
+       values ($1, $2, now() + make_interval(secs => $3))
+       on conflict (account_id) do update
+         set holder = excluded.holder, expires_at = excluded.expires_at
+         where s.holder = excluded.holder or s.expires_at <= now()
+       returning holder`,
+      [accountId, holder, ttlMs / 1000]
+    );
+    return rows.length === 1;
+  }
+
+  // Extend every lease this holder still has among these accounts, and say
+  // which those are. An account missing from the answer was taken by someone
+  // else after the lease lapsed, and its money is no longer ours to move.
+  async renewSeats(holder, accountIds, ttlMs) {
+    if (!accountIds.length) return [];
+    const { rows } = await this.pool.query(
+      `update petri.seats set expires_at = now() + make_interval(secs => $3)
+        where holder = $1 and account_id = any($2::uuid[])
+       returning account_id`,
+      [holder, accountIds, ttlMs / 1000]
+    );
+    return rows.map(r => r.account_id);
+  }
+
+  async releaseSeat(accountId, holder) {
+    await this.pool.query(
+      "delete from petri.seats where account_id = $1 and holder = $2",
+      [accountId, holder]
+    );
+  }
+
+  async findSeat(accountId) {
+    const { rows } = await this.pool.query(
+      `select holder, expires_at from petri.seats
+        where account_id = $1 and expires_at > now()`,
+      [accountId]
+    );
+    if (!rows[0]) return null;
+    return { holder: rows[0].holder, expiresAt: new Date(rows[0].expires_at).getTime() };
+  }
+
   // ── money ─────────────────────────────────────────────────────────────────
   // Every one of these is a single atomic statement on the server. bigint
   // comes back from pg as a string, so it is parsed explicitly rather than

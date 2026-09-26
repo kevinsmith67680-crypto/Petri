@@ -23,6 +23,9 @@ export class MemoryRepo {
   constructor(store, { rakeBps = DEFAULT_RAKE_BPS } = {}) {
     this.store = store;
     this.ledger = new Ledger({ rakeBps });
+    // Seat leases are about which live process holds a player, so they are
+    // never mirrored to the data file: after a restart none of them is true.
+    this.seats = new Map();      // account -> { holder, expiresAt }
   }
 
   // ── accounts ──────────────────────────────────────────────────────────────
@@ -108,6 +111,39 @@ export class MemoryRepo {
       if (s.expiresAt < now) { this.store.remove("sessions", s.id); n++; }
     }
     return n;
+  }
+
+  // ── seats ─────────────────────────────────────────────────────────────────
+  // Same rules as PgRepo: someone else's unexpired lease wins, and renewing
+  // reports which leases the holder still has.
+
+  async claimSeat(accountId, holder, ttlMs) {
+    const now = Date.now();
+    const seat = this.seats.get(accountId);
+    if (seat && seat.holder !== holder && seat.expiresAt > now) return false;
+    this.seats.set(accountId, { holder, expiresAt: now + ttlMs });
+    return true;
+  }
+
+  async renewSeats(holder, accountIds, ttlMs) {
+    const until = Date.now() + ttlMs;
+    const kept = [];
+    for (const id of accountIds) {
+      const seat = this.seats.get(id);
+      if (seat?.holder !== holder) continue;
+      seat.expiresAt = until;
+      kept.push(id);
+    }
+    return kept;
+  }
+
+  async releaseSeat(accountId, holder) {
+    if (this.seats.get(accountId)?.holder === holder) this.seats.delete(accountId);
+  }
+
+  async findSeat(accountId) {
+    const seat = this.seats.get(accountId);
+    return seat && seat.expiresAt > Date.now() ? { ...seat } : null;
   }
 
   // ── money ─────────────────────────────────────────────────────────────────

@@ -49,7 +49,7 @@ function harness(mode = MODES[0]) {
   me.cells[0].y = mode.world.size / 2;
   const cs = createClientState(0);
 
-  const conn = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const conn = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
   const sock = sockets[0];
   sock.fire("open");
   sock.fire("message", { data: JSON.stringify({ type: "welcome", nid: me.nid, tickHz: TICK_HZ }) });
@@ -327,7 +327,7 @@ console.log("\n-- a dropped connection recovers --");
   const w = createWorld(11, MODES[0].world);
   const p = addPlayer(w, { id: "me", name: "Me" });
   const cs = createClientState(0);
-  const conn = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const conn = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
 
   let reconnecting = 0, recovered = 0, ended = 0;
   conn.on("reconnecting", () => reconnecting++);
@@ -375,7 +375,7 @@ console.log("\n-- a dropped connection recovers --");
   sockets.length = 0;
   const w2 = createWorld(12, MODES[0].world);
   const p2 = addPlayer(w2, { id: "me", name: "Me" });
-  const conn2 = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const conn2 = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
   let ended2 = 0, retried = 0;
   conn2.on("close", () => ended2++);
   conn2.on("reconnecting", () => retried++);
@@ -397,7 +397,7 @@ console.log("\n-- a refusal is not retried --");
 // the reload crawled through eight attempts.
 for (const [code, label] of [[1008, "policy"], [1013, "room full"], [1002, "protocol fault"], [1000, "normal"]]) {
   sockets.length = 0;
-  const c = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const c = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
   let retried = 0, done = 0;
   c.on("reconnecting", () => retried++);
   c.on("close", () => done++);
@@ -411,7 +411,7 @@ for (const [code, label] of [[1008, "policy"], [1013, "room full"], [1002, "prot
 
 // But a dropped link still recovers.
 sockets.length = 0;
-const drop = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+const drop = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
 let dropRetries = 0;
 drop.on("connecting", () => dropRetries++);
 drop.on("reconnecting", () => dropRetries++);
@@ -435,7 +435,7 @@ console.log("\n-- a first connection is not a reconnection --");
   const w = createWorld(14, MODES[0].world);
   const p = addPlayer(w, { id: "me", name: "Me" });
   const cs = createClientState(0);
-  const fresh = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const fresh = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
   const first = [], again = [];
   fresh.on("connecting", e => first.push(e));
   fresh.on("reconnecting", e => again.push(e));
@@ -479,7 +479,7 @@ console.log("\n-- giving up is distinct from being refused --");
 // message; an exhausted retry has none.
 {
   sockets.length = 0;
-  const refused = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const refused = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
   sockets[0].fire("open");
   sockets[0].fire("close", { code: 1008 });
   await new Promise(r => setTimeout(r, 60));
@@ -487,7 +487,7 @@ console.log("\n-- giving up is distinct from being refused --");
   refused.close();
 
   sockets.length = 0;
-  const unreachable = createSocketConnection({ url: "ws://x", name: "Me", stake: 1e6, token: "t" });
+  const unreachable = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
   let tries = 0, gone = 0;
   unreachable.on("connecting", () => tries++);
   unreachable.on("close", () => gone++);
@@ -529,7 +529,7 @@ console.log("\n-- a connection that has gone quiet is not waited out --");
   const p = addPlayer(w, { id: "me", name: "Me" });
   const cs = createClientState(0);
   const conn = createSocketConnection({
-    url: "ws://x", name: "Me", stake: 1e6, token: "t",
+    getTicket: () => ({ url: "ws://x", ticket: "t" }),
     stallMs: 400, joinStallMs: 400
   });
 
@@ -570,6 +570,109 @@ console.log("\n-- a connection that has gone quiet is not waited out --");
   check("the replacement re-joins", sockets[1].sent.some(m => String(m).includes("join")));
 
   conn.close();
+}
+
+console.log("\n-- every connection attempt asks the matchmaker first --");
+
+// The harness connection at the top of this file is never closed, and once
+// its frames stop its watchdog reconnects in the background. Each case below
+// uses its own address and counts only its own sockets.
+const socketsTo = url => sockets.filter(x => x.url === url);
+
+// The server believes nothing a join says about the player except the signed
+// ticket in it, and a ticket is spent on use and lives for seconds. So every
+// attempt, reconnects included, has to start by asking for a new one.
+{
+  const w = createWorld(21, MODES[0].world);
+  const p = addPlayer(w, { id: "me", name: "Me" });
+  let asked = 0;
+  const conn = createSocketConnection({
+    getTicket: async () => ({ url: `ws://game-${++asked}`, ticket: `ticket-${asked}` })
+  });
+  check("nothing is opened before the matchmaker answers", socketsTo("ws://game-1").length === 0);
+  await new Promise(r => setTimeout(r, 0));
+  const first = socketsTo("ws://game-1")[0];
+  check("then the socket goes where the matchmaker said", !!first);
+  first.fire("open");
+  const join = JSON.parse(first.sent[0]);
+  check("and the join presents that ticket", join.type === "join" && join.ticket === "ticket-1",
+    first.sent[0]);
+  check("with nothing else about the player in it",
+    !("token" in join) && !("stake" in join) && !("name" in join), Object.keys(join).join(","));
+  first.fire("message", { data: JSON.stringify({ type: "welcome", nid: p.nid, tickHz: TICK_HZ }) });
+
+  first.fire("close", { code: 1006 });
+  await new Promise(r => setTimeout(r, 50));
+  check("a reconnect asks again rather than reusing the ticket", asked === 2, `${asked} asks`);
+  const second = socketsTo("ws://game-2")[0];
+  second.fire("open");
+  check("and presents the new one", JSON.parse(second.sent[0]).ticket === "ticket-2",
+    second.sent[0]);
+  conn.close();
+}
+
+{
+  // An expired or already-spent ticket (4003), or a seat still held by the
+  // server the player was on (4004), is not an answer: ask again.
+  let asked = 0, ended = 0;
+  const conn = createSocketConnection({ getTicket: () => ({ url: "ws://t4003", ticket: `t${++asked}` }) });
+  conn.on("close", () => ended++);
+  socketsTo("ws://t4003")[0].fire("open");
+  socketsTo("ws://t4003")[0].fire("close", { code: 4003 });
+  await new Promise(r => setTimeout(r, 50));
+  check("a rejected ticket sends it back to the matchmaker", asked === 2 && ended === 0,
+    `${asked} asks, ${ended} closes`);
+  socketsTo("ws://t4003")[1].fire("open");
+  socketsTo("ws://t4003")[1].fire("close", { code: 4004 });
+  await new Promise(r => setTimeout(r, 200));
+  check("and so does a seat held elsewhere", asked === 3 && ended === 0,
+    `${asked} asks, ${ended} closes`);
+  conn.close();
+}
+
+{
+  // A refusal the player can act on is final, and reads exactly like the
+  // server refusing: an account_error with the reason, then a close.
+  const said = [];
+  let closed = null, asked = 0;
+  const refusal = code => Object.assign(new Error(`refused: ${code}`), { code });
+  const conn = createSocketConnection({ getTicket: async () => { asked++; throw refusal("full"); } });
+  conn.on("account", m => said.push(m));
+  conn.on("close", ev => { closed = ev; });
+  await new Promise(r => setTimeout(r, 200));
+  check("a full mode is reported as the server would",
+    said[0]?.type === "account_error" && said[0]?.code === "full", JSON.stringify(said[0] || {}));
+  check("with the room-full close code", closed?.code === 1013, JSON.stringify(closed));
+  check("and it is not asked again", asked === 1, `${asked} asks`);
+  conn.close();
+
+  // One that is not the player's to fix — the matchmaker was unreachable,
+  // or busy — is retried like a dropped connection.
+  let asks = 0, retrying = 0, ended = 0;
+  const flaky = createSocketConnection({
+    getTicket: async () => {
+      if (++asks === 1) throw refusal("unavailable");
+      return { url: "ws://flaky", ticket: "t" };
+    }
+  });
+  flaky.on("connecting", () => retrying++);
+  flaky.on("close", () => ended++);
+  await new Promise(r => setTimeout(r, 50));
+  check("an unreachable matchmaker is retried", retrying === 1 && ended === 0 && asks === 2,
+    `${retrying} retries, ${ended} closes, ${asks} asks`);
+  check("and the second answer is used", socketsTo("ws://flaky").length === 1,
+    `${socketsTo("ws://flaky").length} sockets`);
+  flaky.close();
+
+  // Closing while the matchmaker is still answering must not open a socket
+  // afterwards: the player has gone back to the menu.
+  let answer;
+  const slow = createSocketConnection({ getTicket: () => new Promise(r => { answer = r; }) });
+  slow.close();
+  answer({ url: "ws://slow", ticket: "t" });
+  await new Promise(r => setTimeout(r, 20));
+  check("an answer that arrives after closing opens nothing", socketsTo("ws://slow").length === 0,
+    `${socketsTo("ws://slow").length} sockets`);
 }
 
 console.log("\n-- diagnostics --");

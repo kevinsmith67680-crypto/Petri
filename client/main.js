@@ -13,7 +13,8 @@ import { createLocalConnection } from "./local.js";
 import { createSocketConnection } from "./net.js";
 import { createRenderer, THEMES } from "./render.js";
 import { createUI } from "./ui.js";
-import { SERVER_URL } from "./config.js";
+import { SERVER_URL, MATCHMAKER_URL } from "./config.js";
+import { requestTicket } from "./match.js";
 import { PRACTICE } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
 import { PHASE_LOBBY, PHASE_COUNTDOWN } from "../shared/protocol.js";
@@ -177,6 +178,15 @@ function serverUrl() {
   return (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 }
 
+// Where to ask for a seat. Precedence: ?mm=, then config.js, then the game
+// server itself — which answers /api/match whenever it is running its own
+// matchmaker, as it does on one box.
+function matchUrl() {
+  const override = params.get("mm") || MATCHMAKER_URL;
+  if (override) return override;
+  return serverUrl().replace(/^ws/, "http").replace(/\/+$/, "") + "/api/match";
+}
+
 // A refused WebSocket handshake reaches the browser as a bare close: no code
 // worth reading, no reason, nothing to tell an unreachable server from one
 // that is deliberately turning this page away. Both arrive as "could not
@@ -235,7 +245,16 @@ function connect(stake = PRACTICE) {
       return createLocalConnection({ name: NAME, ci: colourPick, world: MODES[0].world });
     }
     const socket = createSocketConnection({
-      url, name: NAME, stake, token: api?.token || null, ci: colourPick
+      ci: colourPick,
+      // A fresh ticket for every attempt. The matchmaker answers with the
+      // game server to use; on one box it has none to name, and the page's
+      // own server is the one.
+      getTicket: async () => {
+        const got = await requestTicket({
+          endpoint: matchUrl(), token: api?.token || null, stake, region: params.get("region")
+        });
+        return { url: got.url || url, ticket: got.ticket };
+      }
     });
     // Once this is no longer the connection in use — the player went back to
     // the menu — its lobby and round messages describe a room they have left,
@@ -431,6 +450,8 @@ function onRound(msg) {
 
 // Every figure shown to the player originates here, from the server ledger.
 // Nothing about the balance is computed client-side.
+const RETRYABLE = new Set(["retry", "ticket", "elsewhere", "unavailable", "throttled"]);
+
 function onAccount(msg) {
   if (msg.type === "account_error") {
     // The server sits a player out of the next round when it cannot take the
@@ -446,8 +467,10 @@ function onAccount(msg) {
     ui.setRampNote(msg.reason);
     // A retryable fault is handled by the socket layer reopening; putting a
     // card in front of the player would be wrong twice over — it is not their
-    // problem to solve, and it is about to fix itself.
-    if (msg.code === "retry") {
+    // problem to solve, and it is about to fix itself. That covers a ticket
+    // that lapsed, a seat still held by the server the player was on, and a
+    // matchmaker that could not be reached.
+    if (RETRYABLE.has(msg.code)) {
       // Same rule as above: only a connection that had been live has anything
       // to reconnect to, and only a player in a game needs a banner.
       if (conn?.everBeenLive?.()) ui.showReconnecting(1, 8);
