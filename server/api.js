@@ -8,8 +8,9 @@
 // The session token is returned as a bearer token for the client to store.
 // That is a real trade-off: a bearer token in localStorage is readable by any
 // XSS on the page, whereas an HttpOnly cookie is not. It is used here because
-// the WebSocket handshake needs to carry the token in its join payload, and
-// cookies would add CSRF handling for no gain in that path. If this ever
+// the matchmaker can be its own service on its own origin, where a header
+// travels and a cookie would need CSRF handling for no gain. The socket never
+// sees the token at all: it presents the ticket the matchmaker signed. If this ever
 // guards real funds, revisit the decision rather than inheriting it.
 // ---------------------------------------------------------------------------
 

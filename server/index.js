@@ -24,9 +24,11 @@
 //   ALLOWED_ORIGINS   comma-separated; unset means allow any (dev only)
 //   MAX_CONN_PER_IP   default 3
 //   TRUST_PROXY       set to 1 behind Render / Fly / a reverse proxy
+//   MAX_ROOMS         default 4; rooms open as others fill, up to this many
 // ---------------------------------------------------------------------------
 
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,7 +42,7 @@ import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
   PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
 } from "../shared/protocol.js";
-import { isValidStake, PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
+import { PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
 import { createRamp, InsufficientFunds } from "./ledger.js";
@@ -48,6 +50,9 @@ import { createStore } from "./store.js";
 import { MemoryRepo } from "./db/memory.js";
 import { Accounts } from "./accounts.js";
 import { handleApi } from "./api.js";
+import { verifyTicket, verifyRequest, TicketError, assertSecret } from "./ticket.js";
+import { createMatchmaker } from "./matchmaker/core.js";
+import { answerMatch, createRateLimit } from "./matchmaker/http.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -114,8 +119,25 @@ const COUNTDOWN_SECONDS = envInt("COUNTDOWN_SECONDS", 5);
 // is what makes a full round reachable while testing.
 const LOBBY_MIN_OVERRIDE = process.env.LOBBY_MIN !== undefined
   ? Number(process.env.LOBBY_MIN) : null;
+const LOBBY_MAX_OVERRIDE = process.env.LOBBY_MAX !== undefined
+  ? Number(process.env.LOBBY_MAX) : null;
 const ROUND_SECONDS_OVERRIDE = process.env.ROUND_SECONDS !== undefined
   ? Number(process.env.ROUND_SECONDS) : null;
+
+// Rooms this process may run at once, across every mode. Each mode always
+// keeps one, so this can never be fewer than there are modes; the rest are
+// opened when every room of a mode is full and closed again once empty.
+//
+// One process is one thread, so every room here shares a single core. A full
+// 100-player room costs roughly 10ms a tick, so at 30Hz three of them are the
+// whole budget. The headroom check in seatFor() is what actually protects the
+// tick; this is the ceiling above it.
+const MAX_ROOMS = Math.max(MODES.length, envInt("MAX_ROOMS", 4));
+
+// No further room is opened once the tick is already spending this share of
+// its budget. Another world would slow every round in the process, including
+// the ones people are already playing, so the arrival is turned away instead.
+const OPEN_ROOM_BELOW = 0.6;
 
 // Only the top finishers are paid. There is no voluntary cash-out, so the
 // only way to realise a pot is to still be alive AND placed when the whistle
@@ -161,12 +183,60 @@ const LIMITS = {
 // measured 138 bytes and the server closed the socket the moment a player
 // tried to enter. Anyone with a long display name could never connect at all.
 //
-// 512 is still small enough to be useless to an attacker and leaves room for
-// the join frame to grow without silently breaking connections again.
-const MAX_PAYLOAD = 512;
+// The join now carries a match ticket in place of the session token, and a
+// ticket is about 350 bytes. 1024 keeps the same headroom the 512 limit was
+// chosen for, and is still far too small to be any use to an attacker.
+const MAX_PAYLOAD = 1024;
 // How long your cells stay in the arena after you vanish, motionless and
 // edible. Also the window in which a reconnect gets them back.
 const LINGER_SEC = envInt("LINGER_SEC", 6);
+
+// ── matchmaking ─────────────────────────────────────────────────────────────
+//
+// Players do not pick a room, or even a server. They ask the matchmaker, which
+// reserves a seat on a game server and hands back a signed ticket naming the
+// server, room, account and stake; the join presents that ticket and nothing
+// else is believed. See server/matchmaker/.
+//
+// MATCHMAKER=embedded (the default) runs the matchmaker inside this process
+// at /api/match, with this server as its only server. That is the one-box
+// deployment, and it needs no configuration. MATCHMAKER=external leaves
+// matchmaking to the separate service, which this server answers on
+// /internal/*; then SERVER_ID and MATCH_SECRET must be set, and must match
+// the matchmaker's GAME_SERVERS list and its own secret.
+const MATCHMAKER = process.env.MATCHMAKER === "external" ? "external" : "embedded";
+if (MATCHMAKER === "external" && !process.env.SERVER_ID) {
+  throw new Error("MATCHMAKER=external needs SERVER_ID: the matchmaker's tickets name the server they are for.");
+}
+const SERVER_ID = process.env.SERVER_ID || "local";
+if (SERVER_ID.includes("#")) {
+  throw new Error(`SERVER_ID may not contain "#": seat holders are written "<server>#<boot>".`);
+}
+const REGION = process.env.REGION || "local";
+// Where players connect to reach this server, as the matchmaker should tell
+// them. Unset means "wherever the page came from", which is right for one box.
+const PUBLIC_URL = process.env.PUBLIC_URL || null;
+// Shared with the matchmaker in external mode. Embedded, the signer and the
+// checker are this one process, so a fresh random secret per boot is enough.
+const MATCH_SECRET = (process.env.MATCH_SECRET || MATCHMAKER === "external")
+  ? assertSecret(process.env.MATCH_SECRET)
+  : crypto.randomBytes(32).toString("hex");
+const TICKET_MS = envInt("TICKET_SECONDS", 30) * 1000;
+
+// The seat lease: while this server is responsible for an account — it is
+// connected, or its body lingers — the database says so, and no other server
+// may touch that account's money. Renewed well inside its lifetime; a server
+// that stops renewing loses its players' seats within SEAT_TTL.
+//
+// The holder carries a per-boot id as well as the server id. Two processes
+// with the same SERVER_ID overlap during a deploy, and the new one must not
+// take over players the old one is still settling.
+const SEAT_TTL_MS = envInt("SEAT_TTL_SECONDS", 30) * 1000;
+const SEAT_RENEW_MS = Math.max(250, Math.floor(SEAT_TTL_MS / 3));
+const SEAT_HOLDER = `${SERVER_ID}#${crypto.randomBytes(4).toString("hex")}`;
+
+// Set once SIGTERM arrives: no more ticks, reservations or joins. See shutdown().
+let shuttingDown = false;
 
 // ── static files ────────────────────────────────────────────────────────────
 
@@ -184,8 +254,63 @@ const MIME = {
   ".woff2": "font/woff2"
 };
 
+function sendJson(res, status, payload) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(JSON.stringify(payload));
+}
+
+// The matchmaker's side door: what rooms this server has, and holding a seat
+// in one. Both hand out places in paid rooms, so nothing is answered without
+// a request signed with MATCH_SECRET.
+async function handleInternal(req, res, pathname) {
+  let raw = "";
+  for await (const chunk of req) {
+    raw += chunk;
+    if (raw.length > 1024) return sendJson(res, 413, { error: "Request too large." });
+  }
+  if (!verifyRequest(req.headers["x-match-signature"], pathname, raw, MATCH_SECRET)) {
+    return sendJson(res, 401, { error: "Bad signature." });
+  }
+  if (pathname === "/internal/status" && req.method === "GET") {
+    return sendJson(res, 200, localStatus());
+  }
+  if (pathname === "/internal/reserve" && req.method === "POST") {
+    let body;
+    try { body = JSON.parse(raw); } catch { return sendJson(res, 400, { error: "Malformed JSON." }); }
+    return sendJson(res, 200, reserveSeat(body || {}));
+  }
+  sendJson(res, 404, { error: "No such endpoint." });
+}
+
+// MATCH_RATE matches a second per address, in bursts of MATCH_BURST.
+const matchAllowed = createRateLimit({
+  rate: Number(process.env.MATCH_RATE) || 2,
+  burst: Number(process.env.MATCH_BURST) || 10
+});
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname === "/api/match" && req.method === "POST") {
+    if (!matchmaker) {
+      sendJson(res, 404, {
+        error: "Matchmaking for this server is a separate service.", code: "external"
+      });
+      return;
+    }
+    await answerMatch(req, (status, payload) => sendJson(res, status, payload), matchmaker, {
+      allowed: matchAllowed, ip: ipOf(req)
+    });
+    return;
+  }
+
+  if (url.pathname.startsWith("/internal/")) {
+    await handleInternal(req, res, url.pathname);
+    return;
+  }
 
   if (url.pathname.startsWith("/api/")) {
     await handleApi(req, res, {
@@ -212,11 +337,19 @@ const server = http.createServer(async (req, res) => {
       // browser: "nothing happens when I press ready" is almost always a
       // lobby minimum of 100 on a server nobody set TEST_MODE on.
       test: TEST_MODE,
+      server: SERVER_ID,
+      region: REGION,
+      matchmaker: MATCHMAKER,
+      maxRooms: MAX_ROOMS,
       rooms: [...rooms.values()].map(r => ({
+        id: r.id,
         mode: r.mode.id,
         players: r.clients.size,
         ready: readyCount(r),
         startsAt: r.lobbyMin,
+        cap: r.lobbyMax,
+        // Seats promised to tickets that have not joined yet.
+        reserved: r.reserved.size,
         phase: ["", "live", "intermission", "lobby", "countdown"][r.round.phase] || r.round.phase,
         round: r.round.number,
         arena: r.world.size,
@@ -337,6 +470,21 @@ if (DATABASE_URL) {
 const ramp = createRamp({ backend, real: REAL_MONEY });
 const accounts = new Accounts(backend);
 
+// Embedded, this server is the matchmaker's only server, and the two talk by
+// function call instead of signed HTTP. The tickets are the same tickets and
+// the join checks them the same way, so one box and a fleet run one path.
+const matchmaker = MATCHMAKER === "embedded" ? createMatchmaker({
+  servers: [{
+    id: SERVER_ID, region: REGION, url: PUBLIC_URL,
+    status: async () => localStatus(),
+    reserve: async req => reserveSeat(req)
+  }],
+  secret: MATCH_SECRET,
+  resolveSession: token => accounts.resolveSession(token),
+  findSeat: accountId => backend.findSeat(accountId),
+  ticketTtlMs: TICKET_MS
+}) : null;
+
 setInterval(() => {
   accounts.sweepSessions().catch(err => console.error("session sweep:", err.message));
 }, 3600_000).unref?.();
@@ -357,28 +505,43 @@ const connectionsByIp = new Map();
 
 // ── rooms ───────────────────────────────────────────────────────────────────
 //
-// One room per game mode, each fully independent: its own world, arena size,
+// Rooms are made on demand, each fully independent: its own world, arena size,
 // lobby, round clock, bots and connected clients. Nothing is shared but the
 // ledger and the account store, because a player's balance follows them
 // between rooms while nothing else should.
 //
-// Everything below that used to be module-level state now lives on a room,
-// which is what makes two concurrent games possible at all.
+// Every mode keeps at least one room open. When all of a mode's rooms are
+// full, the next arrival opens another, up to MAX_ROOMS in this process, and
+// an empty room closes as long as its mode has another open. The stake
+// still chooses the mode; which room of that mode is the server's decision,
+// so a client cannot pick its table.
+
+let roomSerial = 0;
+const roomsOpened = new Map();   // mode id -> rooms ever opened, for naming
 
 function createRoom(mode) {
-  const world = createWorld(Date.now() & 0xffffffff, mode.world);
+  const n = (roomsOpened.get(mode.id) || 0) + 1;
+  roomsOpened.set(mode.id, n);
+  // Two rooms opened in the same millisecond must not share an orb layout.
+  const world = createWorld((Date.now() + ++roomSerial) & 0xffffffff, mode.world);
+  const lobbyMax = LOBBY_MAX_OVERRIDE ?? mode.lobbyMax;
   const room = {
+    // Numbers are never reused, so a log line naming standard-2 cannot mean
+    // two different rooms.
+    id: `${mode.id}-${n}`,
     mode,
     world,
     clients: new Map(),          // ws -> meta
+    arriving: 0,                 // joins that have a seat but are still awaiting the database
+    reserved: new Map(),         // reservation id -> { account, until }, one per match ticket
     lastEater: new Map(),        // victim id -> killer id, for settlement
     lingering: [],               // players whose socket dropped
     round: { number: 0, phase: PHASE_LOBBY, endsAt: Infinity },
     // Test mode fills the room to the size the mode is built for, so a solo
     // test is representative rather than an empty field.
-    bots: TEST_MODE ? Math.min(BOTS_OVERRIDE ?? mode.lobbyMin, mode.lobbyMax - 1) : 0,
+    bots: TEST_MODE ? Math.min(BOTS_OVERRIDE ?? mode.lobbyMin, lobbyMax - 1) : 0,
     lobbyMin: TEST_MODE ? 1 : (LOBBY_MIN_OVERRIDE ?? mode.lobbyMin),
-    lobbyMax: mode.lobbyMax,
+    lobbyMax,
     roundSeconds: ROUND_SECONDS_OVERRIDE ?? (TEST_MODE ? 120 : mode.roundSeconds),
     paidPositions: PAID_OVERRIDE ?? mode.paidPositions
   };
@@ -388,8 +551,122 @@ function createRoom(mode) {
   return room;
 }
 
-const rooms = new Map(MODES.map(m => [m.id, createRoom(m)]));
-const roomForStake = stake => [...rooms.values()].find(r => r.mode.stake === stake) || null;
+const rooms = new Map();
+
+function openRoom(mode) {
+  const room = createRoom(mode);
+  rooms.set(room.id, room);
+  return room;
+}
+
+for (const mode of MODES) openRoom(mode);
+
+const modeForStake = stake => MODES.find(m => m.stake === stake) || null;
+
+// Seats promised count as taken: reservations waiting for their ticket to be
+// presented, and joins in flight between presenting it and entering. Without
+// both, a burst of arrivals could all be handed the same last seat.
+const seatsTaken = room => room.clients.size + room.arriving + room.reserved.size;
+const hasSeat = room => seatsTaken(room) < room.lobbyMax;
+
+// A room between rounds beats one in the middle of a round: someone seated in
+// a live room only watches the lobby card until the whistle. After that the
+// fuller room, so one lobby reaches its minimum rather than several getting
+// halfway there and none starting.
+const betweenRounds = room => room.round.phase !== PHASE_LIVE;
+const betterSeat = (a, b) =>
+  betweenRounds(a) !== betweenRounds(b) ? betweenRounds(a) : seatsTaken(a) > seatsTaken(b);
+
+// tickCost covers every room in the process, so it is the right measure of
+// whether one more world fits.
+const hasHeadroom = () => tickCost.avgMs < (1000 / HZ) * OPEN_ROOM_BELOW;
+
+// Where a new arrival for this mode sits. A new room is opened only when every
+// existing one is full: filling rooms before opening more keeps a quiet server
+// from splitting its players across lobbies that never reach their minimum.
+function seatFor(mode) {
+  let best = null;
+  for (const room of rooms.values()) {
+    if (room.mode !== mode || !hasSeat(room)) continue;
+    if (!best || betterSeat(room, best)) best = room;
+  }
+  if (best) return best;
+  if (rooms.size >= MAX_ROOMS || !hasHeadroom()) return null;
+  const room = openRoom(mode);
+  console.log(`[${room.id}] opened, ${rooms.size} of ${MAX_ROOMS} room(s) in use`);
+  return room;
+}
+
+// Close any room with nothing left in it, as long as its mode keeps another.
+// A lingering body still holds escrow the sweep has yet to refund, a start in
+// flight is still re-staking, and a reservation is a player on their way, so
+// any of them keeps the room open.
+function retireIdleRooms() {
+  for (const room of rooms.values()) {
+    if (room.clients.size || room.arriving || room.reserved.size ||
+        room.lingering.length || room.starting) continue;
+    const sibling = [...rooms.values()].some(r => r !== room && r.mode === room.mode);
+    if (!sibling) continue;
+    rooms.delete(room.id);
+    console.log(`[${room.id}] closed, ${rooms.size} of ${MAX_ROOMS} room(s) in use`);
+  }
+}
+
+// A ticket nobody presented stops holding its seat. The grace covers a join
+// that started just inside the ticket's life and is still in flight.
+const RESERVATION_GRACE_MS = 5000;
+
+function sweepReservations(now = Date.now()) {
+  for (const room of rooms.values()) {
+    for (const [rsv, held] of room.reserved) if (held.until <= now) room.reserved.delete(rsv);
+  }
+}
+
+// One outstanding reservation per account on this server. Asking again
+// replaces the last, so an account cannot hold seats it is not going to use.
+function dropReservations(account) {
+  for (const room of rooms.values()) {
+    for (const [rsv, held] of room.reserved) if (held.account === account) room.reserved.delete(rsv);
+  }
+}
+
+// What the matchmaker asks for: hold a seat for this account at this stake,
+// in the room it suggests if that still has one, else wherever this server
+// would seat them. A player whose body is still standing mid-round goes back
+// to that room whatever was suggested, and past a full cap: it is their own
+// seat they are returning to, not a new one.
+function reserveSeat({ account, stake, room: hint }) {
+  if (shuttingDown) return { ok: false, code: "closing" };
+  const mode = modeForStake(Number(stake));
+  if (!mode || typeof account !== "string") return { ok: false, code: "bad" };
+  dropReservations(account);
+
+  let room = resumableRoom(account, mode);
+  if (!room) {
+    const suggested = typeof hint === "string" ? rooms.get(hint) : null;
+    room = suggested && suggested.mode === mode && hasSeat(suggested)
+      ? suggested
+      : seatFor(mode);
+  }
+  if (!room) return { ok: false, code: "full" };
+
+  const now = Date.now();
+  const rsv = crypto.randomBytes(9).toString("base64url");
+  room.reserved.set(rsv, { account, until: now + TICKET_MS + RESERVATION_GRACE_MS });
+  return { ok: true, room: room.id, rsv, expiresAt: now + TICKET_MS };
+}
+
+// What the matchmaker ranks servers by.
+function localStatus() {
+  return {
+    id: SERVER_ID,
+    region: REGION,
+    canOpen: !shuttingDown && rooms.size < MAX_ROOMS && hasHeadroom(),
+    rooms: shuttingDown ? [] : [...rooms.values()].map(r => ({
+      id: r.id, mode: r.mode.id, taken: seatsTaken(r), cap: r.lobbyMax, between: betweenRounds(r)
+    }))
+  };
+}
 
 // One live connection per account. Without this a second join escrowed
 // another stake on top of the first, so the "at risk" figure climbed 1.00 ->
@@ -402,21 +679,100 @@ function evictExistingConnection(accountId) {
   for (const room of rooms.values()) {
     for (const [ws, meta] of room.clients) {
       if (meta.accountId !== accountId) continue;
-      // The close handler must not treat this as a player walking away: that
-      // would linger the cell and later refund an escrow we are about to
-      // reconcile ourselves.
-      meta.replaced = true;
-      meta.stake = PRACTICE;
-      room.clients.delete(ws);
-      removePlayer(room.world, meta.id);
-      room.lastEater.delete(meta.id);
-      try { ws.close(4001, "Replaced by a newer connection"); } catch { /* already gone */ }
-      pushLobby(room);
+      dropConnection(room, ws, meta, "Replaced by a newer connection");
       return true;
     }
   }
   return false;
 }
+
+// Take a connection out of play without the close handler treating it as a
+// player walking away: that would linger the cell and later refund an escrow
+// that someone else is now responsible for.
+function dropConnection(room, ws, meta, reason) {
+  meta.replaced = true;
+  meta.stake = PRACTICE;
+  room.clients.delete(ws);
+  removePlayer(room.world, meta.id);
+  room.lastEater.delete(meta.id);
+  try { ws.close(4001, reason); } catch { /* already gone */ }
+  pushLobby(room);
+}
+
+// ── seat leases ─────────────────────────────────────────────────────────────
+//
+// This server holds an account's seat from the moment a join claims it until
+// the account has neither a connection nor a lingering body here. Released
+// only once any refund owed has landed: releasing first would let another
+// server reconcile the escrow while our refund was still in flight.
+
+const seatsInFlight = new Map();   // account -> joins that claimed it and have not entered yet
+const seatClaimedAt = new Map();   // account -> when this process last claimed it
+
+function holdsHere(accountId) {
+  if (seatsInFlight.get(accountId) > 0) return true;
+  for (const room of rooms.values()) {
+    for (const meta of room.clients.values()) if (meta.accountId === accountId) return true;
+    if (room.lingering.some(l => l.accountId === accountId)) return true;
+  }
+  return false;
+}
+
+function releaseSeatIfIdle(accountId) {
+  if (!accountId || holdsHere(accountId)) return;
+  seatClaimedAt.delete(accountId);
+  backend.releaseSeat(accountId, SEAT_HOLDER)
+    .catch(err => console.error("release seat:", err.message));
+}
+
+// Our lease ran out and another server took the account: a stalled process,
+// or a database we could not reach for longer than SEAT_TTL. That server has
+// already reconciled the escrow, so nothing here may move this account's
+// money again. The connection goes, and a lingering body stays standing
+// without the refund it would have had.
+function loseSeat(accountId) {
+  console.warn(`seat for ${accountId} was taken by another server; dropping it here`);
+  seatClaimedAt.delete(accountId);
+  for (const room of rooms.values()) {
+    for (const [ws, meta] of room.clients) {
+      if (meta.accountId === accountId) dropConnection(room, ws, meta, "Playing on another server");
+    }
+    for (const l of room.lingering) if (l.accountId === accountId) l.accountId = null;
+  }
+}
+
+function accountsHeldHere() {
+  const held = new Set(seatsInFlight.keys());
+  for (const room of rooms.values()) {
+    for (const meta of room.clients.values()) if (meta.accountId) held.add(meta.accountId);
+    for (const l of room.lingering) if (l.accountId) held.add(l.accountId);
+  }
+  return held;
+}
+
+async function renewSeats() {
+  const held = accountsHeldHere();
+  if (!held.size) return;
+  const started = Date.now();
+  let kept;
+  try {
+    kept = new Set(await backend.renewSeats(SEAT_HOLDER, [...held], SEAT_TTL_MS));
+  } catch (err) {
+    // Nothing is lost yet: the leases have SEAT_TTL to run. Another server
+    // cannot take them while the database is unreachable to it too.
+    console.error("seat renewal:", err.message);
+    return;
+  }
+  for (const accountId of held) {
+    if (kept.has(accountId) || !holdsHere(accountId)) continue;
+    // Claimed again while this renewal was in flight: that claim is newer
+    // than the answer, and the answer says nothing about it.
+    if ((seatClaimedAt.get(accountId) ?? 0) >= started) continue;
+    loseSeat(accountId);
+  }
+}
+
+setInterval(() => { renewSeats(); }, SEAT_RENEW_MS).unref?.();
 
 // Picking your own body back up after a dropped socket.
 //
@@ -444,16 +800,35 @@ function evictExistingConnection(accountId) {
 // linger window had their live stake handed back a few seconds later and
 // carried on with nothing at risk. Rejoining on a different tier did it too,
 // because the stale entry sat in the room they left.
-function claimLingering(accountId) {
+function findLingering(accountId) {
   if (!accountId) return null;
   for (const room of rooms.values()) {
-    const i = room.lingering.findIndex(l => l.accountId === accountId);
-    if (i === -1) continue;
-    const { id: oldId } = room.lingering[i];
-    room.lingering.splice(i, 1);
-    return { room, oldId, player: room.world.players.get(oldId) || null };
+    const index = room.lingering.findIndex(l => l.accountId === accountId);
+    if (index === -1) continue;
+    const oldId = room.lingering[index].id;
+    return { room, index, oldId, player: room.world.players.get(oldId) || null };
   }
   return null;
+}
+
+function claimLingering(accountId) {
+  const found = findLingering(accountId);
+  if (found) found.room.lingering.splice(found.index, 1);
+  return found;
+}
+
+// Is there still a run to come back to? A round that has moved on, or a body
+// that was eaten while its owner was away, leaves nothing to resume.
+const canResume = ({ room, player }) =>
+  room.round.phase === PHASE_LIVE && !!player && player.alive && player.cells.length > 0;
+
+// The room holding this account's body, if the player can step back into it.
+// A mode has several rooms now, so "the room for this stake" is no longer
+// where the body is; a reconnect seated anywhere else would start from
+// scratch while its old self stood in another arena waiting to be eaten.
+function resumableRoom(accountId, mode) {
+  const found = findLingering(accountId);
+  return found && found.room.mode === mode && canResume(found) ? found.room : null;
 }
 
 // Step two: move a claimed body onto the new connection, or clear it away if
@@ -463,10 +838,8 @@ function resumeLingering(claim, room, newId) {
   if (!claim) return null;
 
   const { room: oldRoom, oldId, player } = claim;
-  const usable =
-    oldRoom === room &&                     // same tier; a switch is a new run
-    room.round.phase === PHASE_LIVE &&      // nothing to come back to otherwise
-    player && player.alive && player.cells.length;
+  // Same room: a tier switch is a new run, and so is being seated elsewhere.
+  const usable = oldRoom === room && canResume(claim);
 
   if (!usable) {
     // Eaten while away, a tier change, or the round moved on. Clear the old
@@ -953,7 +1326,7 @@ async function startRound(room) {
     type: "round_start", mode: room.mode.id,
     number: round.number, seconds: room.roundSeconds
   });
-  console.log(`[${room.mode.id}] round ${round.number} started with ${readyCount(room)} player(s)`);
+  console.log(`[${room.id}] round ${round.number} started with ${readyCount(room)} player(s)`);
 }
 
 // Bring the bot population to whatever this room should currently have,
@@ -1070,6 +1443,9 @@ wss.on("connection", (ws, req) => {
             }
           }
           meta.stake = PRACTICE;
+          // Only now, with the refund landed: released any earlier, another
+          // server could reconcile this escrow while ours was in flight.
+          releaseSeatIfIdle(meta.accountId);
           await pushAccount(ws, meta);
           ws.close(1000, "Left");
         } else if (msg.type === "ramp") {
@@ -1086,7 +1462,7 @@ wss.on("connection", (ws, req) => {
       }
 
       if (msg.type !== MSG.JOIN || meta.joining) return;
-      // Resolving a session is a database round trip, so a second JOIN could
+      // Claiming the seat is a database round trip, so a second JOIN could
       // arrive mid-await and create two players for one socket.
       meta.joining = true;
 
@@ -1103,151 +1479,172 @@ wss.on("connection", (ws, req) => {
         return;
       }
 
-      const stake = Number(msg.stake) || PRACTICE;
-      if (!isValidStake(stake) || stake === PRACTICE) {
+      const refuse = (code, reason, closeCode, closeWhy) => {
         meta.joining = false;
-        ws.close(1008, "Bad stake");
+        ws.send(JSON.stringify({ type: "account_error", code, reason }));
+        ws.close(closeCode, closeWhy);
+      };
+
+      if (shuttingDown) {
+        refuse("retry", "This server is restarting. Finding you another seat.", 1012, "Server restarting");
         return;
       }
 
-      // The stake chooses the room. There is exactly one room per stake, so a
-      // client cannot ask for a 2 USDC seat and pay 1.
-      const room = roomForStake(stake);
-      if (!room) { meta.joining = false; ws.close(1008, "No such mode"); return; }
-
-      // Identity comes from the session token, never from anything else the
-      // client says. Guests play locally against bots and never reach here.
-      //
-      // "No such session" and "the lookup failed" are different answers and
-      // must not be collapsed. Swallowing the second into the first told a
-      // signed-in player to sign in whenever the database hiccuped — and
-      // because that refusal is final, the client did not even retry.
-      let authed = null;
+      // The ticket is the matchmaker's word on who this is, what they are
+      // staking and where they sit. Nothing else the client says about itself
+      // is believed, and checking it costs no database round trip. Guests
+      // play locally against bots and never get one.
+      let ticket;
       try {
-        authed = await accounts.resolveSession(msg.token);
+        ticket = verifyTicket(msg.ticket, MATCH_SECRET);
+        if (ticket.srv !== SERVER_ID) throw new TicketError("server");
       } catch (err) {
-        console.error("session lookup failed:", err.message);
-        meta.joining = false;
-        ws.send(JSON.stringify({
-          type: "account_error", code: "retry",
-          reason: "The server could not check your session. Retrying."
-        }));
-        // 1011 is a server fault, which the client treats as retryable.
-        ws.close(1011, "Session lookup failed");
-        return;
-      }
-      if (!authed) {
-        meta.joining = false;
-        ws.send(JSON.stringify({
-          type: "account_error", code: "auth",
-          reason: "Sign in to play against other people. Guests play against bots."
-        }));
-        ws.close(1008, "Sign in required");
+        if (!(err instanceof TicketError)) throw err;
+        // Not final: the client goes back to the matchmaker for a new one.
+        refuse("ticket", "Finding you a seat again.", 4003, `Ticket ${err.reason}`);
         return;
       }
 
-      if (room.clients.size >= room.lobbyMax) {
-        meta.joining = false;
-        ws.send(JSON.stringify({
-          type: "account_error",
-          code: "full",
-          reason: `${room.mode.label} is full (${room.lobbyMax} players). Try the other mode.`
-        }));
-        ws.close(1013, "Room full");
+      // The seat it names must still be held, for this account. A reservation
+      // is spent by the first join that presents it, so one ticket cannot be
+      // replayed into a second seat.
+      const mode = modeForStake(Number(ticket.stake));
+      const room = rooms.get(ticket.room);
+      const held = room?.reserved.get(ticket.rsv);
+      if (!mode || !room || room.mode !== mode || !held || held.account !== ticket.acct) {
+        refuse("ticket", "Finding you a seat again.", 4003, "Ticket not reserved");
         return;
       }
+      room.reserved.delete(ticket.rsv);
 
-      meta.accountId = authed.id;
-      const displayName = authed.displayName;
-      if (!ramp.isReal) await ramp.grant(meta.accountId);
-
-      // Drop any earlier connection for this account, then return whatever it
-      // left in escrow. Only after that is the new stake locked, so the pot is
-      // always exactly the stake the player chose — never a sum of attempts.
-      evictExistingConnection(meta.accountId);
-
-      // A resumed run is already paid for. Its stake never left escrow, so
-      // refunding and re-locking it would be two database round trips spent
-      // to arrive back where we started — and two round trips is most of how
-      // long a reconnect takes.
-      const claim = claimLingering(meta.accountId);
-      const resumed = resumeLingering(claim, room, id);
-
-      if (!resumed) {
+      // Counted as taken across the database round trips below. It also keeps
+      // a room opened for this join from being closed as empty before the
+      // player is in it.
+      room.arriving++;
+      const accountId = ticket.acct;
+      seatsInFlight.set(accountId, (seatsInFlight.get(accountId) || 0) + 1);
+      try {
+        // Before anything touches this account's money, make sure no other
+        // server is. If one holds the seat, the matchmaker sends them there.
+        let mine;
         try {
-          const before = await backend.snapshot(meta.accountId);
-          if (before.pot > 0) await backend.refund(meta.accountId);
+          mine = await backend.claimSeat(accountId, SEAT_HOLDER, SEAT_TTL_MS);
         } catch (err) {
-          console.error("clearing stale escrow:", err.message);
-        }
-      }
-
-      try {
-        if (!resumed) await backend.lockStake(meta.accountId, stake);
-      } catch (err) {
-        meta.joining = false;
-        // Postgres raises a check-constraint violation (23514) when the
-        // balance would go negative; the memory backend throws its own type.
-        if (err instanceof InsufficientFunds || err.code === "23514") {
-          ws.send(JSON.stringify({
-            type: "account_error", code: "funds",
-            reason: "Not enough balance for that stake."
-          }));
-          ws.close(1008, "Insufficient funds");
+          console.error("seat claim failed:", err.message);
+          // 1011 is a server fault, which the client treats as retryable.
+          refuse("retry", "The server could not take your seat. Retrying.", 1011, "Seat claim failed");
           return;
         }
-        throw err;
+        if (!mine) {
+          refuse("elsewhere", "You are still in a game on another server. Taking you back to it.",
+            4004, "Seat held elsewhere");
+          return;
+        }
+        seatClaimedAt.set(accountId, Date.now());
+
+        meta.accountId = accountId;
+        const displayName = cleanName(ticket.name);
+        const stake = mode.stake;
+        if (!ramp.isReal) await ramp.grant(meta.accountId);
+
+        // Drop any earlier connection for this account, then return whatever it
+        // left in escrow. Only after that is the new stake locked, so the pot is
+        // always exactly the stake the player chose — never a sum of attempts.
+        evictExistingConnection(meta.accountId);
+
+        // A resumed run is already paid for. Its stake never left escrow, so
+        // refunding and re-locking it would be two database round trips spent
+        // to arrive back where we started — and two round trips is most of how
+        // long a reconnect takes.
+        const claim = claimLingering(meta.accountId);
+        const resumed = resumeLingering(claim, room, id);
+
+        if (!resumed) {
+          try {
+            const before = await backend.snapshot(meta.accountId);
+            if (before.pot > 0) await backend.refund(meta.accountId);
+          } catch (err) {
+            console.error("clearing stale escrow:", err.message);
+          }
+        }
+
+        try {
+          if (!resumed) await backend.lockStake(meta.accountId, stake);
+        } catch (err) {
+          meta.joining = false;
+          // Postgres raises a check-constraint violation (23514) when the
+          // balance would go negative; the memory backend throws its own type.
+          if (err instanceof InsufficientFunds || err.code === "23514") {
+            ws.send(JSON.stringify({
+              type: "account_error", code: "funds",
+              reason: "Not enough balance for that stake."
+            }));
+            ws.close(1008, "Insufficient funds");
+            return;
+          }
+          throw err;
+        }
+
+        meta.joined = true;
+        meta.joining = false;
+        meta.room = room;
+        meta.stake = stake;
+        // The tier they chose, kept for the life of the connection. meta.stake
+        // is only the CURRENT round's escrow and is cleared at settlement, so
+        // without this a player carried on into round two staking nothing.
+        meta.tier = stake;
+
+        const player = resumed ||
+          addPlayer(room.world, { id, name: displayName, ci: cleanColour(msg.ci) });
+        // A rename can land while the socket is down.
+        if (resumed) player.name = displayName;
+        meta.state = createClientState(nextClientId);   // staggers keyframes
+        // The run never stopped, so the player is already in it rather than
+        // waiting to be let in.
+        meta.ready = !!resumed;
+        room.clients.set(ws, meta);
+        syncBots(room);
+        pushLobby(room);
+
+        // Arrivals wait in the lobby rather than dropping into a live round.
+        if (!resumed && room.round.phase !== PHASE_LIVE) {
+          player.alive = false;
+          player.cells = [];
+        }
+
+        ws.send(JSON.stringify({
+          type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
+          // Readiness belongs to the connection, so a fresh one starts unready
+          // unless it picked a live run back up. Said, so the button agrees.
+          ready: meta.ready,
+          // The colour actually in use, which is the server's choice when the
+          // client did not make one, so the lobby can show it as selected.
+          ci: player.ci,
+          mode: room.mode.id,
+          room: room.id,
+          server: SERVER_ID,
+          region: REGION,
+          modeLabel: room.mode.label,
+          round: room.round.number,
+          roundSeconds: room.roundSeconds,
+          lobbyMin: room.lobbyMin,
+          lobbyMax: room.lobbyMax,
+          test: TEST_MODE,
+          demo: !ramp.isReal,
+          stake,
+          signedIn: true,
+          displayName,
+          ...(await backend.snapshot(meta.accountId))
+        }));
+        return;
+      } finally {
+        room.arriving--;
+        const inFlight = seatsInFlight.get(accountId) - 1;
+        if (inFlight > 0) seatsInFlight.set(accountId, inFlight);
+        else seatsInFlight.delete(accountId);
+        // A join that did not get in leaves nothing here to hold the seat for.
+        if (!meta.joined) releaseSeatIfIdle(accountId);
       }
-
-      meta.joined = true;
-      meta.joining = false;
-      meta.room = room;
-      meta.stake = stake;
-      // The tier they chose, kept for the life of the connection. meta.stake
-      // is only the CURRENT round's escrow and is cleared at settlement, so
-      // without this a player carried on into round two staking nothing.
-      meta.tier = stake;
-
-      const player = resumed ||
-        addPlayer(room.world, { id, name: displayName, ci: cleanColour(msg.ci) });
-      // A rename can land while the socket is down.
-      if (resumed) player.name = displayName;
-      meta.state = createClientState(nextClientId);   // staggers keyframes
-      // The run never stopped, so the player is already in it rather than
-      // waiting to be let in.
-      meta.ready = !!resumed;
-      room.clients.set(ws, meta);
-      syncBots(room);
-      pushLobby(room);
-
-      // Arrivals wait in the lobby rather than dropping into a live round.
-      if (!resumed && room.round.phase !== PHASE_LIVE) {
-        player.alive = false;
-        player.cells = [];
-      }
-
-      ws.send(JSON.stringify({
-        type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
-        // Readiness belongs to the connection, so a fresh one starts unready
-        // unless it picked a live run back up. Said, so the button agrees.
-        ready: meta.ready,
-        // The colour actually in use, which is the server's choice when the
-        // client did not make one, so the lobby can show it as selected.
-        ci: player.ci,
-        mode: room.mode.id,
-        modeLabel: room.mode.label,
-        round: room.round.number,
-        roundSeconds: room.roundSeconds,
-        lobbyMin: room.lobbyMin,
-        lobbyMax: room.lobbyMax,
-        test: TEST_MODE,
-        demo: !ramp.isReal,
-        stake,
-        signedIn: true,
-        displayName,
-        ...(await backend.snapshot(meta.accountId))
-      }));
-      return;
     }
 
     if (!meta.joined) return;
@@ -1290,6 +1687,9 @@ wss.on("connection", (ws, req) => {
         id, until: room.world.time + LINGER_SEC,
         accountId: meta.stake === PRACTICE ? null : meta.accountId
       });
+      // A lingering stake keeps the seat until the sweep has refunded it.
+      // With nothing at stake there is nothing left here to hold it for.
+      releaseSeatIfIdle(meta.accountId);
     }
   };
 
@@ -1355,7 +1755,12 @@ function tickRoom(room, dt) {
       // Survived the linger window unclaimed, so the run is void rather than
       // lost. Refunding is the only defensible outcome: nobody beat them.
       if (accountId) {
-        backend.refund(accountId).catch(err => console.error("refund:", err.message));
+        // The seat is released once the refund has landed, not before. If the
+        // refund fails the seat is not renewed either, so it lapses and the
+        // next server to claim it clears the stale escrow itself.
+        backend.refund(accountId)
+          .then(() => releaseSeatIfIdle(accountId))
+          .catch(err => console.error("refund:", err.message));
       }
       removePlayer(world, goneId);
       room.lastEater.delete(goneId);
@@ -1384,6 +1789,8 @@ function tick() {
   lastTick = tickStart;
 
   for (const room of rooms.values()) tickRoom(room, dt);
+  sweepReservations();
+  retireIdleRooms();
 
   const cost = Number(process.hrtime.bigint() - tickStart) / 1e6;
   tickCost.avgMs = tickCost.avgMs * 0.95 + cost * 0.05;
@@ -1398,27 +1805,11 @@ const TICK_MS = 1000 / HZ;
 let nextTickAt = Date.now();
 
 function scheduleTick() {
+  if (shuttingDown) return;
   nextTickAt += TICK_MS;
   const drift = Date.now() - nextTickAt;
   if (drift > 500) nextTickAt = Date.now();
-  setTimeout(() => { tick(); scheduleTick();
-
-// A tick that consistently overruns is the difference between a game that
-// feels right and one that does not, and it is invisible from the outside —
-// it shows up as players blaming their connection. Say so in the log.
-let lastOverruns = 0;
-setInterval(() => {
-  const since = tickCost.behind - lastOverruns;
-  lastOverruns = tickCost.behind;
-  const budget = 1000 / HZ;
-  if (since > HZ * 2) {           // more than ~3% of the last minute's ticks
-    console.warn(
-      `  SLOW    : ${since} of ~${HZ * 60} ticks overran their ${budget.toFixed(1)}ms budget ` +
-      `in the last minute (avg ${tickCost.avgMs.toFixed(1)}ms). ` +
-      `Lower TICK_HZ, lower BOTS, or move to a larger instance.`
-    );
-  }
-}, 60_000).unref?.(); }, Math.max(0, nextTickAt - Date.now()));
+  setTimeout(() => { tick(); scheduleTick(); }, Math.max(0, nextTickAt - Date.now()));
 }
 
 scheduleTick();
@@ -1439,6 +1830,38 @@ setInterval(() => {
     );
   }
 }, 60_000).unref?.();
+
+// ── shutdown ────────────────────────────────────────────────────────────────
+//
+// A deploy starts the new process before stopping this one. The new one has
+// a different boot id, so it cannot take the seats this one leases until they
+// lapse — up to SEAT_TTL, which is longer than a client keeps retrying — and
+// every player mid-game would be told the server was unreachable.
+//
+// So on SIGTERM: stop the tick, which ends all settlement; close every
+// connection; give writes already in flight a moment to land; then hand the
+// seats back. Any stake left in escrow is refunded when its player joins the
+// new process, exactly as after any restart.
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close();
+  for (const room of rooms.values()) {
+    for (const [ws] of room.clients) {
+      // 1012 "service restart": the client reconnects, through the matchmaker.
+      try { ws.close(1012, "Server restarting"); } catch { /* already gone */ }
+    }
+  }
+  await new Promise(r => setTimeout(r, 1000));
+  const held = [...accountsHeldHere()];
+  await Promise.allSettled(held.map(id => backend.releaseSeat(id, SEAT_HOLDER)));
+  console.log(`${signal}: stopped, ${held.length} seat(s) handed back`);
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => { shutdown("SIGTERM"); });
+process.on("SIGINT", () => { shutdown("SIGINT"); });
 
 // The mass readout is display-only, but if it is ever mistaken for a payout
 // rate the exposure is enormous. Say so loudly at startup.
@@ -1466,6 +1889,14 @@ server.listen(PORT, () => {
       `arena ${r.world.size}  ${r.roundSeconds}s  ${r.bots} bots on demand`
     );
   }
+  console.log(
+    `  server  : ${SERVER_ID} in region ${REGION}, matchmaker ${MATCHMAKER}` +
+    (MATCHMAKER === "embedded" ? " at /api/match" : " (answering /internal/*)")
+  );
+  console.log(
+    `  rooms   : ${rooms.size} open, up to ${MAX_ROOMS} as they fill ` +
+    `(none past ${Math.round(OPEN_ROOM_BELOW * 100)}% of the tick budget)`
+  );
   if (TEST_MODE && BOTS_OVERRIDE !== null) {
     console.warn(
       `  NOTE    : BOTS=${BOTS_OVERRIDE} is overriding the per-mode bot counts ` +

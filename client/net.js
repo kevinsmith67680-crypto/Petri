@@ -63,7 +63,7 @@ const CORRECT_PER_SEC = 6;
 const STALL_MS = 2500;
 
 // Before the welcome there is deliberately nothing to hear: the server is
-// doing an account lookup and a stake, which is a database round trip or
+// claiming the seat and taking the stake, which is a database round trip or
 // several. Give the join its own, longer window.
 const JOIN_STALL_MS = 8000;
 
@@ -74,8 +74,19 @@ const STALL_CODE = 4002;
 // pop, or a teleport after respawn. Snap rather than slide across the arena.
 const SNAP_ERROR = 220;
 
+// Refusals from the matchmaker that asking again will not change. Anything
+// else — it was unreachable, busy, or the player's server was mid-restart —
+// goes round the same retry path as a dropped socket.
+// "external" is a game server saying matchmaking is somebody else's job: the
+// page is pointed at the wrong place, and no number of retries will fix it.
+const FINAL_MATCH = new Set(["auth", "stake", "full", "external"]);
+
 export function createSocketConnection({
-  url, name = "You", stake = 0, token = null,
+  // Called before every connection attempt, reconnects included, for
+  // { url, ticket }: where to connect and the signed ticket to present
+  // there. May answer synchronously. A ticket is spent on use and lives for
+  // seconds, so one is never reused. See client/match.js.
+  getTicket,
   // Palette slot the player picked. Sent on every join, reconnects included,
   // so a dropped socket does not come back in a different colour.
   ci = null,
@@ -233,8 +244,39 @@ export function createSocketConnection({
     }
   }
 
+  // Ask for a seat, then connect to it. The socket is null while the ticket
+  // is being fetched, which the stall watchdog reads as nothing to watch:
+  // the request carries its own timeout.
   function open() {
     const gen = ++generation;
+    socket = null;
+    let pending;
+    try { pending = getTicket(); }
+    catch (err) { matchFailed(err); return; }
+    if (pending && typeof pending.then === "function") {
+      pending.then(
+        t => { if (gen === generation && !closedByUs) connect(gen, t); },
+        err => { if (gen === generation && !closedByUs) matchFailed(err); }
+      );
+    } else {
+      connect(gen, pending);
+    }
+  }
+
+  // A refusal the player can act on is final and reported the way the server
+  // reports its own: an account_error, then a close with the matching code.
+  // Anything else is treated as the connection failing, and retried.
+  function matchFailed(err) {
+    const code = err?.code || "unavailable";
+    if (FINAL_MATCH.has(code)) {
+      emit("account", { type: "account_error", code, reason: err.message });
+      emit("close", { code: code === "full" ? 1013 : 1008, reason: err.message });
+      return;
+    }
+    lost({ code: 1011, reason: err?.message || "Could not get a seat" });
+  }
+
+  function connect(gen, { url, ticket }) {
     const ws = new WebSocket(url);
     socket = ws;
     ws.binaryType = "arraybuffer";
@@ -242,9 +284,9 @@ export function createSocketConnection({
     heard = false;
 
     ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({
-        type: MSG.JOIN, name, stake, token, ci, protocol: PROTOCOL_VERSION
-      }));
+      // Who this is, what they staked and where they sit are all in the
+      // ticket. The colour is the one thing the player still chooses here.
+      ws.send(JSON.stringify({ type: MSG.JOIN, ticket, ci, protocol: PROTOCOL_VERSION }));
     });
 
     ws.addEventListener("message", ev => {
@@ -281,6 +323,9 @@ export function createSocketConnection({
     // are worth another go.
     //   1000 normal      1002 protocol fault    1008 policy (auth, stake,
     //   1013 room full   4001 taken over         stale client)
+    // Not final, so a fresh ticket is fetched on the next attempt:
+    //   4003 ticket expired or already spent
+    //   4004 seat held by another server, which the matchmaker will route to
     if (ev && FINAL_CLOSE.has(ev.code)) {
       emit("close", ev);
       return;

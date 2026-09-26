@@ -52,6 +52,15 @@ services:
       - key: ALLOWED_ORIGINS
         value: "https://engulfs.io,https://www.engulfs.io"
 
+      # Matchmaking runs inside this service: MATCHMAKER defaults to
+      # "embedded", which is right for one instance and needs no settings. For
+      # several game servers, see "Matchmaking" in README.md — a separate
+      # matchmaker service, and MATCHMAKER=external, SERVER_ID, REGION,
+      # PUBLIC_URL and MATCH_SECRET on each game server.
+      #
+      # Migration 007 (seat leases) must be applied before this build runs
+      # against the database, or every join is refused at the seat claim.
+
       # Supabase session pooler string, port 5432. Without it accounts and
       # balances live in memory and are lost on every deploy.
       - key: DATABASE_URL

@@ -51,6 +51,7 @@ function check(label, cond, detail = "") {
 const PORT = 8900 + (process.pid % 200);
 process.env.PORT = String(PORT);
 process.env.TEST_MODE = "1";
+process.env.MATCH_BURST = "1000";
 // A long round, so nothing here races a settlement, and no bots, so the count
 // of bodies in the arena means what it says.
 process.env.ROUND_SECONDS = "60";
@@ -81,6 +82,17 @@ class FakeWS {
 }
 
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
+
+// Joining takes a ticket from the matchmaker first, exactly as the client does.
+async function matched(token, stake, extra = {}) {
+  const res = await fetch(`http://localhost:${PORT}/api/match`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ stake })
+  });
+  const got = await res.json();
+  return { type: "join", ticket: got.ticket, protocol: PROTOCOL_VERSION, ...extra };
+}
 const room = async id =>
   (await (await fetch(`http://localhost:${PORT}/health`)).json()).rooms.find(r => r.mode === id);
 
@@ -100,7 +112,7 @@ const STAKE = 1_000_000;
 const enter = async () => {
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver({ type: "join", name: "Dropper", stake: STAKE, token: tok, protocol: PROTOCOL_VERSION });
+  await ws.deliver(await matched(tok, STAKE));
   await settle();
   return ws;
 };

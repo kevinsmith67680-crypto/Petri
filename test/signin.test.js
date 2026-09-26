@@ -109,6 +109,8 @@ const signupBodies = [];
 // What /health should say about whether it would accept a socket from us.
 let healthSocket = null;
 let signedInOnServer = false;
+// Every staked start asks the matchmaker for a ticket before opening a socket.
+const matchRequests = [];
 
 globalThis.fetch = async (url, opts = {}) => {
   const path = String(url);
@@ -145,6 +147,16 @@ globalThis.fetch = async (url, opts = {}) => {
     });
   }
   if (path.endsWith("/api/stats")) return json(200, { stats: { matches: 0 }, matches: [] });
+  if (path.endsWith("/api/match")) {
+    matchRequests.push({
+      body: JSON.parse(opts.body || "{}"),
+      auth: opts.headers?.Authorization || null
+    });
+    return json(200, {
+      ticket: `ticket-${matchRequests.length}`, url: null, server: "local",
+      region: "local", room: "standard-1", mode: "standard", expiresAt: Date.now() + 30_000
+    });
+  }
   return json(404, { error: "no route" });
 };
 
@@ -152,6 +164,8 @@ globalThis.fetch = async (url, opts = {}) => {
 
 await import("../client/main.js");
 const settle = () => new Promise(r => setTimeout(r, 0));
+// A staked start asks the matchmaker first and connects with its answer.
+const afterMatch = async () => { for (let i = 0; i < 6; i++) await settle(); };
 await settle(); await settle();   // let restore() and config() resolve
 
 const $ = id => document.getElementById(id);
@@ -204,14 +218,18 @@ console.log("\n-- a refusal is never silent --");
 {
   $("stake1").click();
   $("btnStart").click();
-  await settle();
+  await afterMatch();
   check("starting a staked run is what opens the socket", sockets.length === 1,
     `${sockets.length}`);
   const live = sockets[sockets.length - 1];
   // The join is written when the socket opens, so drive that first.
   (live.handlers.open || []).forEach(fn => fn());
-  check("and it carries the tier that was chosen",
-    /"stake":1000000/.test(String(live.sent[0] || "")), String(live.sent[0] || "").slice(0, 60));
+  const asked = matchRequests.at(-1);
+  check("the matchmaker is asked for the tier that was chosen",
+    asked?.body.stake === 1_000_000, JSON.stringify(asked?.body));
+  check("as the signed-in player", asked?.auth === `Bearer ${"t".repeat(64)}`, String(asked?.auth));
+  check("and the join presents the ticket it answered with",
+    /"ticket":"ticket-\d+"/.test(String(live.sent[0] || "")), String(live.sent[0] || "").slice(0, 60));
   live.handlers.message.forEach(fn => fn({
     data: JSON.stringify({ type: "round_start", mode: "standard", number: 1, seconds: 120 })
   }));
@@ -250,7 +268,7 @@ console.log("\n-- lobby and ready --");
 const sock = sockets[sockets.length - 1];
 $("stake1").click();
 $("btnStart").click();
-await settle();
+await afterMatch();
 
 const live = sockets[sockets.length - 1];
 const lobbyMsg = (p, starts = null) => JSON.stringify({
@@ -298,7 +316,7 @@ console.log("\n-- returning to the menu from the lobby --");
 // nothing the old socket still delivers may drag the lobby back over the menu.
 {
   $("btnStart").click();
-  await settle();
+  await afterMatch();
   const ws = sockets[sockets.length - 1];
   ws.handlers.message.forEach(fn => fn({ data: lobbyMsg(4, 5) }));
   check("the lobby is open, counting", $("lobbyVeil").hidden === false && $("lobbyCount").hidden === false);
@@ -335,7 +353,7 @@ console.log("\n-- returning to the menu from the lobby --");
     $("modeNote").textContent);
 
   $("btnStart").click();
-  await settle();
+  await afterMatch();
   const again = sockets[sockets.length - 1];
   again.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
   check("Start goes back into a lobby", again !== ws && $("lobbyVeil").hidden === false);
@@ -350,7 +368,7 @@ console.log("\n-- readiness follows the server across rounds --");
 // "I'm ready" to a player it was already counting in.
 {
   $("btnStart").click();
-  await settle();
+  await afterMatch();
   const ws = sockets[sockets.length - 1];
   const say = m => ws.handlers.message.forEach(fn => fn({ data: typeof m === "string" ? m : JSON.stringify(m) }));
   const pressed = () => $("btnReady").getAttribute("aria-pressed");
@@ -375,7 +393,7 @@ console.log("\n-- readiness follows the server across rounds --");
 
   const resumed = sockets.length;
   $("btnStart").click();
-  await settle();
+  await afterMatch();
   const again = sockets[sockets.length - 1];
   again.handlers.message.forEach(fn => fn({ data: JSON.stringify({ type: "welcome", id: "p:10", nid: 10, tickHz: 20, ready: true, test: true, ...funded }) }));
   again.handlers.message.forEach(fn => fn({ data: lobbyMsg(3) }));
@@ -434,7 +452,7 @@ console.log("\n-- a refusal the browser cannot see is explained anyway --");
   let handled = sockets.length;
   $("stake1").click();
   $("btnStart").click();
-  await settle();
+  await afterMatch();
 
   const deadline = Date.now() + 25000;
   const named = () => /staging\.example/.test($("errText").textContent);
@@ -486,7 +504,7 @@ console.log("\n-- a round opening is not a death --");
 
   $("stake1").click();
   $("btnStart").click();
-  await settle();
+  await afterMatch();
   const ws = sockets[sockets.length - 1];
   (ws.handlers.open || []).forEach(fn => fn());
   const deliver = (data, binary) =>

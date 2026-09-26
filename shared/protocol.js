@@ -41,7 +41,11 @@ export const WORLD_LIMIT = MAX_WORLD;
 // the server refuses a mismatch, so a stale client gets told to reload instead
 // of silently decoding every frame two bytes out of alignment — which looks
 // like opponents scattered across the map and orbs that never appear.
-export const PROTOCOL_VERSION = 9;
+//
+// 10: the join presents a match ticket instead of a session token and stake.
+// A page from before that would be refused every ticket and retry until it
+// gave up; told its version is stale, it asks the player to reload instead.
+export const PROTOCOL_VERSION = 10;
 
 export const MSG = {
   JOIN: "join",        // text

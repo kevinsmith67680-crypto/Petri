@@ -72,6 +72,27 @@ create table if not exists petri.sessions (
 create index if not exists sessions_expires_at on petri.sessions (expires_at);
 create index if not exists sessions_account_id on petri.sessions (account_id);
 
+-- ── seats ───────────────────────────────────────────────────────────────────
+-- Which game server an account is playing on, as a lease that has to be kept
+-- renewed. An account's escrow is one pot in this database, so two servers
+-- each believing they held the same player could each move it: the second
+-- join refunds the stake the first server's live round is still playing for.
+-- A server takes the seat before it touches an account's money and renews it
+-- while the player is connected or their body lingers. A server that dies
+-- stops renewing, and the seat frees itself when the lease runs out.
+--
+-- `holder` is "<server id>#<boot id>". The server id is what the matchmaker
+-- routes by; the boot id tells a restarted process from the one it replaced,
+-- so a new instance cannot take over players the old one is still settling.
+-- See migration 007.
+
+create table if not exists petri.seats (
+  account_id  uuid primary key references petri.accounts(id) on delete cascade,
+  holder      text not null,
+  expires_at  timestamptz not null
+);
+create index if not exists seats_holder on petri.seats (holder);
+
 -- ── money ───────────────────────────────────────────────────────────────────
 -- Amounts are bigint counts of micro-USDC (1 USDC = 1,000,000). Never numeric,
 -- never float. The check constraints make "no account may go negative" a
@@ -228,6 +249,7 @@ create or replace view petri.money_total as
 
 alter table petri.accounts       enable row level security;
 alter table petri.sessions       enable row level security;
+alter table petri.seats          enable row level security;
 alter table petri.balances       enable row level security;
 alter table petri.house          enable row level security;
 alter table petri.ledger_entries enable row level security;
