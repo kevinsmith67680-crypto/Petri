@@ -71,7 +71,8 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
-| `LOBBY_MAX` | 150 | Hard connection cap |
+| `LOBBY_MAX` | 150 | Seats per room. When every room of a mode is full, another opens |
+| `MAX_ROOMS` | 4 | Rooms one process may run across both modes. Never fewer than one per mode |
 | `ALLOWED_ORIGINS` | *(unset)* | Comma-separated origin allowlist. Unset means allow anything — dev only |
 | `MAX_CONN_PER_IP` | 3 | Connection cap per address |
 | `TRUST_PROXY` | *(unset)* | Set to `1` behind Render, Fly, or any reverse proxy, so client IPs come from `X-Forwarded-For` |
@@ -231,7 +232,7 @@ The server treats any decode failure as "close the socket", since a client that 
 ### Remaining bandwidth work
 
 - Cells are still sent in full each tick. They move constantly so there is less to win, but quantising positions relative to the view origin would save a few bytes each.
-- The 100-player figures assume one world. Past roughly one CPU core you shard into rooms and processes; a single-threaded game loop cannot use a bigger instance.
+- The 100-player figures assume one world. Rooms now open on demand within a process (see *Rooms on demand*), but a process is one thread: past one CPU core the next step is several processes with something routing players between them.
 - Client-side prediction of your own cells, so movement does not wait a round trip. `moveCells` is pure, so it can be re-run locally against unacknowledged input.
 - WebTransport instead of WebSocket, with WebSocket as fallback. It reached Baseline in March 2026, and its unreliable datagrams suit positional updates you would discard on arrival anyway. Keyframes already exist, which is what makes lossy transport survivable.
 
@@ -638,19 +639,19 @@ If a player ever reports scattered opponents or missing orbs, a hard refresh is 
 
 ## Game modes
 
-Two independent rooms run side by side. Each has its own world, arena, lobby, round clock and connected clients. Only the ledger and the account store are shared, because a balance follows a player between modes while nothing else should.
+Two modes, each served by as many independent rooms as it needs. Each room has its own world, arena, lobby, round clock and connected clients. Only the ledger and the account store are shared, because a balance follows a player between rooms while nothing else should.
 
 | | Standard | High stakes |
 |---|---|---|
 | Stake | 1.00 USDC | **2.00 USDC** |
 | Starts at | 100 ready | **50 ready** |
-| Capacity | 150 | 75 |
+| Capacity per room | 150 | 75 |
 | Arena | 8800 × 8800 | **6200 × 6200** |
 | Orbs / spores | 4100 / 90 | 2035 / 45 |
 | Round | 10 minutes | 10 minutes |
 | Paid | Top 5 | Top 5 |
 
-Modes live in `shared/modes.js`, imported by both ends, so a mode cannot mean one thing in the menu and another on the server. **The stake selects the room** — there is exactly one room per stake, so a client cannot ask for a 2.00 seat and pay 1.00.
+Modes live in `shared/modes.js`, imported by both ends, so a mode cannot mean one thing in the menu and another on the server. **The stake selects the mode** — there is exactly one mode per stake, so a client cannot ask for a 2.00 seat and pay 1.00. Which room of that mode a player sits in is the server's decision, never the client's.
 
 **Arena size is per world, not a constant.** A 50-player round in the board built for 100 would be half as dense and you would spend it wandering. Both sizes hold ~770k units² per player, and orbs and spores scale with area so the density is identical (52.9 orbs per million units² in both).
 
@@ -658,13 +659,32 @@ That meant the size had to travel: it is a `u16` in the snapshot header, because
 
 Practice remains outside all of this: it runs locally in the player's tab against bots, with no room, no lobby and no server presence.
 
-Overrides apply to every room at once: `LOBBY_MIN`, `ROUND_SECONDS`, `PAID_POSITIONS`. `GET /health` reports each room separately.
+Overrides apply to every room at once: `LOBBY_MIN`, `LOBBY_MAX`, `ROUND_SECONDS`, `PAID_POSITIONS`. `GET /health` reports each room separately, by id.
+
+### Rooms on demand
+
+Each mode starts with one room (`standard-1`, `highstakes-1`) and always keeps at least one. When **every** room of a mode is full, the next arrival opens another — `standard-2`, `standard-3` — and an empty room closes as long as its mode has another open. Numbers are never reused, so a log line naming `standard-2` always means the same room.
+
+**Where an arrival sits.** A room between rounds is preferred to one mid-round, since someone seated in a live room only watches the lobby card until the whistle. After that, the fuller room wins, so one lobby reaches its minimum rather than several getting halfway and none starting. New rooms are opened only when the existing ones are full, not whenever one is mid-round: on a quiet server, splitting players across lobbies is how nothing ever starts.
+
+**A reconnect goes back to its own body.** If the account's cells are still standing in a live round, the player is returned to that room, wherever the placement rule would have put a stranger. Otherwise they are seated like anyone else.
+
+**Limits.** `MAX_ROOMS` (default 4) caps the rooms in one process across both modes, and can never be fewer than the number of modes. Above that sits a CPU check: once the tick is already spending 60% of its budget, no further room opens, because another world would slow every round in the process, including the ones people are playing. An arrival turned away by either limit gets the `full` refusal and close code 1013, and is never escrowed.
+
+One process is one thread, so every room in it shares a single core. A full 100-player room costs roughly 10 ms a tick; at 30 Hz, three of them are the whole budget. Past that the answer is more processes, which needs something in front of them to route players — this change is the part that lives inside one.
+
+**Two guards keep money safe while rooms come and go:**
+
+- **A seat is held while its join is in flight.** Choosing a room and entering it are separated by database round trips (session, escrow, stake). Joins in flight count against the room's capacity (`room.arriving`), so a burst of arrivals cannot all be handed the same last seat, and a room opened for a join cannot be closed as empty before the player reaches it.
+- **A room with lingering bodies stays open.** A dropped player's escrow is refunded by the linger sweep, which runs inside the room's tick. Closing the room first would strand the stake, so a room closes only with no clients, no joins in flight, no lingering bodies and no round start in progress.
+
+`test/factory.test.js` pins all of the above with two-seat rooms and a three-room cap.
 
 ### Lobby and arena size
 
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
 
-A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and the server refuses connections past **`LOBBY_MAX`** (default 150) with a "server full" close. The cycle is lobby → **5s countdown** → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
+A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and a room holds at most **`LOBBY_MAX`** (default 150). Past that the arrival is seated in another room of the same mode, opened if need be; only when the process cannot open one does it refuse with a "full" close (see *Rooms on demand*). The cycle is lobby → **5s countdown** → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
 
 **The countdown is its own round phase** (`PHASE_COUNTDOWN`), not a flag on the lobby. That puts it on the snapshot clock every other timer already rides on, so the number on the card is the server's and cannot drift away from when the round actually starts. The lobby card stays up and swaps its ready meter for the count. If anyone un-readies or drops their connection during it the count is abandoned and the room goes back to waiting — checked every tick rather than only where readiness changes, so a dropped socket aborts it the same as a released button. `COUNTDOWN_SECONDS` overrides the length.
 

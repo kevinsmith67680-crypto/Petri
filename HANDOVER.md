@@ -8,8 +8,9 @@ analysis. This file is the shorter thing you want first — what state it is in,
 dangerous, and what will waste your afternoon.
 
 **Current state.** Everything is merged. `main` is at `5f340b4` (PR #16, merged
-2026-09-24), and the working branch `claude/nice-keller-z8vfyf` has nothing `main`
-lacks apart from this handover update. All fifteen test suites green. Supabase
+2026-09-24), and the working branch `claude/nice-keller-z8vfyf` adds rooms on demand (see
+"Things worth knowing"), which `main` does not have yet. All sixteen test suites
+green. Supabase
 migrations `002`–`006` applied; nothing since needs a new one.
 
 Render deploys from `main`, so the site should be running all of it — but that has not
@@ -234,7 +235,7 @@ at build time, so it cannot drift.
 npm install
 npm start                  # http://localhost:8080
 npm run dev                # TEST_MODE=1: rounds start with one ready player
-npm test                   # all fifteen suites
+npm test                   # all sixteen suites
 DATABASE_URL=… npm run test:db
 python3 scripts/manual.py  # rebuild the player manual (needs: pip install reportlab)
 ```
@@ -317,6 +318,12 @@ client decides differently.
 two of which change the total. `server/db/schema.sql` enforces the invariant and
 `test/wager.test.js` asserts it over randomised operations.
 
+**Rooms open on demand.** Each mode keeps at least one room; when all of a mode's
+rooms are full the next arrival opens another, up to `MAX_ROOMS` (default 4) per
+process, and an empty room closes while its mode has another. It is still one
+process on one core, so this is headroom, not scale — see "Rooms on demand" in
+`README.md`.
+
 **Mass sets your rank, never your payout.** A top-five finish pays out your own escrow:
 your stake plus whatever you took off players you ate. There is no shared pot. If you
 were handed a diagram showing pooled stakes and mass-weighted shares, that is a
@@ -349,4 +356,4 @@ disagreed with the ready count.
 | `legal/` | Draft privacy policy and terms. **Drafts** — unreviewed |
 | `docs/` | The generated player manual. Not served |
 | `scripts/manual.py` | Builds the manual; reads every number out of `shared/` at build time. Re-run after changing any tuning constant |
-| `test/` | Fifteen suites, plain Node, no framework |
+| `test/` | Sixteen suites, plain Node, no framework |
