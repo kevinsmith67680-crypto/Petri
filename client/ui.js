@@ -11,6 +11,7 @@ import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
 import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
 import { isBotLevel, DEFAULT_BOT_LEVEL } from "../shared/sim.js";
+import { levelOf, rankOf, PROVISIONAL_GAMES } from "../shared/progress.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -261,6 +262,9 @@ export function createUI({
     // The round ending supersedes a death card: if you were eaten seconds
     // before the whistle, the standings are the more useful thing to see.
     el.overVeil.hidden = true;
+    // The last round's gain is not this one's. This round's arrives a moment
+    // after the standings, once the server has written it.
+    $("roundGain").hidden = true;
     // Only survivors are listed, so a row of our own means we were still
     // standing at the whistle — and the position on it is the one the round
     // actually finished on. Anyone absorbed before then has no row and keeps
@@ -401,6 +405,51 @@ export function createUI({
     const s = ["th", "st", "nd", "rd"], v = n % 100;
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
   };
+
+  // ── level and rank ──────────────────────────────────────────────────────
+
+  // progress: { xp, rating, ratedGames } from the server, or null signed out.
+  function renderProgress(progress) {
+    const box = $("progressBox");
+    if (!progress) { box.hidden = true; return; }
+    box.hidden = false;
+    const lv = levelOf(progress.xp);
+    $("lvlNum").textContent = `Level ${lv.level}`;
+    $("lvlXp").textContent = `${lv.into} / ${lv.need} XP`;
+    const pct = Math.round((lv.into / lv.need) * 100);
+    $("xpFill").style.width = `${pct}%`;
+    $("xpBar").setAttribute("aria-valuenow", String(pct));
+    $("rankName").textContent = rankOf(progress.rating);
+    $("rankRating").textContent = String(Math.round(progress.rating));
+    // A new rating moves fast and means little, and saying so is kinder than
+    // letting someone read Bronze after one bad round as a verdict.
+    const left = PROVISIONAL_GAMES - (progress.ratedGames || 0);
+    const note = $("rankNote");
+    note.hidden = left <= 0;
+    note.textContent = left > 0
+      ? `Provisional: ${left} more rated round${left === 1 ? "" : "s"} to settle it`
+      : "";
+  }
+
+  // What the round just played was worth, on the round-over card.
+  function showProgressGain({ gained = 0, ratingChange = 0, rated = false, xp = 0 }) {
+    const line = $("roundGain");
+    const parts = [];
+    if (gained > 0) {
+      const before = levelOf(xp - gained).level;
+      const now = levelOf(xp).level;
+      parts.push(`<span class="up">+${gained} XP</span>`);
+      if (now > before) parts.push(`<span class="up">Level ${now}!</span>`);
+    }
+    if (rated) {
+      const d = Math.round(ratingChange);
+      parts.push(d >= 0
+        ? `<span class="up">Rating +${d}</span>`
+        : `<span class="down">Rating ${d}</span>`);
+    }
+    line.innerHTML = parts.join(" &middot; ");
+    line.hidden = parts.length === 0;
+  }
 
   function renderCareer(stats) {
     const box = $("careerBox");
@@ -762,6 +811,7 @@ export function createUI({
     }
     // Wagering requires identity: a guest balance belongs to whoever opens
     // the next socket, which is to say nobody.
+    if (!account) renderProgress(null);
     paintStakes();
   }
 
@@ -1022,6 +1072,7 @@ export function createUI({
   return {
     update, bumpCounter, showDeath, setMode, el,
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
+    renderProgress, showProgressGain,
     setAuthAvailable, showGoogle, setAuthError, showError, setErrorText, hideError, showStart,
     renderIntermission, renderCountdown, setNextReady,
     showReconnecting, showConnecting, hideReconnecting,

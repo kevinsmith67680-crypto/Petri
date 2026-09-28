@@ -82,6 +82,8 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `SEAT_TTL_SECONDS` | 30 | Seat lease lifetime; a dead server's players are free to play elsewhere after this |
 | `MATCH_RATE` / `MATCH_BURST` | 2 / 10 | Matches per second per address, and the burst allowed |
 | `MAX_ROOMS` | 4 | Rooms one process may run across both modes. Never fewer than one per mode |
+| `SKILL_WINDOW` | 200 | Rating points either side of a room's mean within which it seats a player — see [Levels and skill matchmaking](#levels-and-skill-matchmaking) |
+| `SKILL_WIDEN` | 10 | Points the window grows for every second a room's lobby waits. `0` keeps it fixed |
 | `ALLOWED_ORIGINS` | *(unset)* | Comma-separated origin allowlist. Unset means allow anything — dev only |
 | `MAX_CONN_PER_IP` | 3 | Connection cap per address |
 | `TRUST_PROXY` | *(unset)* | Set to `1` behind Render, Fly, or any reverse proxy, so client IPs come from `X-Forwarded-For` |
@@ -641,9 +643,51 @@ GAME_SERVERS='[{"id":"eu-1","region":"eu","url":"wss://eu-1.engulfs.io","interna
 
 `url` is where players connect; `internal` is where the matchmaker reaches the server's `/internal/*`, which answer only requests signed with `MATCH_SECRET`. The matchmaker's `/health` says whether each server is answering.
 
+**Skill.** Within a mode, rooms are also chosen by rating — see [Levels and skill matchmaking](#levels-and-skill-matchmaking).
+
 **What it does not do yet.** The client names its region only through `?region=`; nothing measures latency to choose one. Every match asks each server in the region for its rooms rather than caching them, which is fine for a handful of servers and not for hundreds. Cross-server state is limited to the seat lease: the per-address connection cap is still per server.
 
 `test/matchmaker.test.js` pins the decisions against fake servers. `test/fleet.test.js` (in `npm run test:db`) starts the matchmaker and two game servers as separate processes on Postgres and plays through them over real sockets: region routing, a ticket refused at the wrong server, a second server refused a player the first holds, a reconnect routed back to its body from another region, a graceful restart, and a server killed with a stake in escrow — with the money totalled before and after.
+
+## Levels and skill matchmaking
+
+Live player-versus-player rounds carry two separate numbers per account, both in `shared/progress.js`:
+
+| | XP and level | Rating |
+|---|---|---|
+| Measures | How much you have won | How good you are |
+| Moves | Up only | Up and down |
+| Earned by | Finishing a live round in the paid places | Every live round you are dealt into, against the other people in it |
+| Used for | Showing progress | Matchmaking |
+| Stored in | `petri.progress` (migration 008) | the same row |
+
+Neither is money. Neither moves a balance, and neither is affected by the stake.
+
+**XP goes to winners.** A win is the same thing the payout means by one: standing at the whistle in the paid places, with position counted among everyone standing, bots included, exactly as `cashOut` counts it. First to fifth earn 100, 70, 50, 35 and 25. Being eaten earns nothing, and neither does standing at the whistle outside the paid places. Levels are XP on a curve: reaching level *L* takes 50·*L*·(*L*−1) in total, so one first place is level 2, about ten is level 5, and about forty-five is level 10.
+
+**Only the life you were dealt in with counts.** Players who were ready at the whistle are the round's entrants (`dealEntrants` in `server/index.js`). An entrant is out the moment they are eaten, or the moment their body leaves the round if they walked away (a lingering body timing out, a replaced connection, leaving). A mid-round respawn is a new, unstaked life. It can play on, but it cannot win XP or move a rating.
+
+**The rating is multiplayer Elo.** New accounts start at 1000. At the whistle the entrants are put in finishing order: survivors by position, then the eliminated, last out first. Every pair is scored as a head-to-head, won by the better finish, against what their two ratings predicted, and each player's total is scaled by 1/(n−1). So one round moves a rating by at most K however big the field, and finishing above a stronger player is worth more than finishing above a weaker one. K is 48 for an account's first ten rated rounds, so a new player finds their level quickly, and 24 after that. A round with a single person in it (alone with bots in test mode) earns its XP but is not rated: there is nobody to be rated against. Ratings fall into named ranks: Bronze below 900, Silver, Gold from 1100, Platinum from 1300, Diamond from 1500.
+
+The scoring is a pure function, `scoreRound` in `server/awards.js`, and `test/progress.test.js` pins its edge cases: the respawn, the walk-out, the same account twice. The server writes one round's results in one statement, `recordProgress`, which moves every column by increment. Two writers can never lose each other's update, and a result is written for players who have already left.
+
+**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
+
+### Skill matchmaking
+
+Each room describes itself by the mean rating of the people in it, counting seats promised to reservations, and a window around that mean: `SKILL_WINDOW` (200) plus `SKILL_WIDEN` (10) for every second its lobby has waited since it last began taking players. The matchmaker looks up the player's rating and ranks the rooms in the region:
+
+1. **A room whose window the player fits.** Between rounds before mid-round, then the fuller one, as before.
+2. **Otherwise a new room**, on a server that can open one. The room takes its rating from them.
+3. **Otherwise the room with a seat nearest their rating.** Skill decides where someone sits, never whether they get a seat.
+
+The game server applies the same rule when it is asked to choose (`seatFor`), and reports each room's skill in `/internal/status` and `/health`. An empty room fits anyone. So does a player with no rating: a failed lookup, or a matchmaker without one, seats by fill alone, which is how matching worked before ratings.
+
+**The widening window is what keeps a quiet server playable.** A lobby that fills fast keeps a tight window, so a busy server sorts players by skill. A lobby that waits, which with `LOBBY_MIN` at 100 is every lobby on a new game, soon takes anybody. A 60-second wait already means ±800, so a quiet evening is not split into lobbies that never start. At the start everyone is rated 1000 and everyone fits everywhere. Rooms only separate as ratings spread.
+
+**Known limits.**
+- **Sandbagging.** A rating that can be lowered can be lowered on purpose. A strong player who deliberately loses rounds drops into weaker rooms, and with money on the table that is worth doing. It is the same problem as multi-accounting (see the cheating section), and nothing here detects either.
+- **Uneven room sizes.** Rooms are matched on their mean, so a room that has drifted wide still reads as one number.
 
 ## Between rounds
 

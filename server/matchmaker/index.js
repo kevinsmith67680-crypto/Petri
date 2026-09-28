@@ -86,6 +86,7 @@ export async function startMatchmaker(env = process.env) {
     secret,
     resolveSession: token => accounts.resolveSession(token),
     findSeat: accountId => backend.findSeat(accountId),
+    findSkill: async accountId => (await backend.getProgress(accountId)).rating,
     ticketTtlMs: (Number(env.TICKET_SECONDS) || 30) * 1000,
     defaultRegion: env.DEFAULT_REGION || servers[0].region
   });

@@ -10,7 +10,7 @@ dangerous, and what will waste your afternoon.
 **Current state.** `main` is at `5f340b4` (PR #16, merged 2026-09-24). The working
 branch `claude/nice-keller-z8vfyf` adds two things `main` does not have: rooms on
 demand, and a matchmaker with signed tickets and seat leases (see "Things worth
-knowing"). All seventeen suites green, and `npm run test:db` green against Postgres
+knowing"). All nineteen suites green, and `npm run test:db` green against Postgres
 16. Supabase migrations `002`–`006` are applied; **the branch needs `007` applied
 before it deploys** — see "Before deploying".
 
@@ -111,6 +111,11 @@ well as by the suite.
 the account's seat lease before touching its money. Without the table every join is
 refused with "could not take your seat" and retried until the client gives up — the
 game is unplayable while the page, sign-in and menu all look fine.
+
+**This branch: apply `server/db/migrations/008_progress.sql` too.** XP and ratings
+live in `petri.progress`. Without it the game still plays: joins and matches fall back
+to the starting figures and fill-only seating, and the menu's career stats still load.
+But nothing a round earns is saved. The round-end write fails and logs `progress:`.
 
 **This branch: `PROTOCOL_VERSION` 9 → 10.** The join presents a match ticket instead
 of a session token and stake. Open tabs on the old build are told to reload, as below.

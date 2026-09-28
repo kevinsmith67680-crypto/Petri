@@ -17,6 +17,8 @@
 // memory mode does not require it to be installed.
 // ---------------------------------------------------------------------------
 
+import { START_RATING } from "../../shared/progress.js";
+
 let Pool = null;
 
 async function loadDriver() {
@@ -89,6 +91,10 @@ const toSession = row => row && {
   createdAt: new Date(row.created_at).getTime(),
   expiresAt: new Date(row.expires_at).getTime()
 };
+
+// An account with no progress row has earned nothing and plays at the
+// starting rating.
+export const emptyProgress = () => ({ xp: 0, rating: START_RATING, ratedGames: 0 });
 
 export function emptyStats() {
   return {
@@ -334,6 +340,44 @@ export class PgRepo {
       "select petri.refund_pot($1) as moved", [accountId]
     );
     return Number(rows[0].moved);
+  }
+
+  // ── progress ──────────────────────────────────────────────────────────────
+
+  async getProgress(accountId) {
+    const { rows } = await this.pool.query(
+      "select xp, rating, rated_games from petri.progress where account_id = $1", [accountId]
+    );
+    const r = rows[0];
+    return r ? { xp: Number(r.xp), rating: Number(r.rating), ratedGames: r.rated_games } : emptyProgress();
+  }
+
+  // One round's results in one statement. Every column moves by increment, so
+  // this never overwrites a write it did not see. Each account at most once:
+  // Postgres refuses to update the same row twice in one upsert.
+  async recordProgress(results) {
+    if (!results.length) return new Map();
+    const { rows } = await this.pool.query(
+      `insert into petri.progress as p (account_id, xp, rating, rated_games)
+       select a, x, $5 + d, g
+         from unnest($1::uuid[], $2::bigint[], $3::float8[], $4::int[]) as t(a, x, d, g)
+       on conflict (account_id) do update
+         set xp          = p.xp + excluded.xp,
+             rating      = p.rating + (excluded.rating - $5),
+             rated_games = p.rated_games + excluded.rated_games,
+             updated_at  = now()
+       returning account_id, xp, rating, rated_games`,
+      [
+        results.map(r => r.accountId),
+        results.map(r => Math.max(0, Math.round(r.xp || 0))),
+        results.map(r => Number(r.ratingChange) || 0),
+        results.map(r => (r.rated ? 1 : 0)),
+        START_RATING
+      ]
+    );
+    return new Map(rows.map(r => [r.account_id, {
+      xp: Number(r.xp), rating: Number(r.rating), ratedGames: r.rated_games
+    }]));
   }
 
   // ── matches and stats ─────────────────────────────────────────────────────

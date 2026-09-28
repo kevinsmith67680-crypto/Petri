@@ -502,7 +502,29 @@ create or replace view petri.board_orbs as
    where s.orbs_absorbed > 0
    order by s.orbs_absorbed desc limit 100;
 
+-- ---------------------------------------------------------------------------
+-- Progress: experience and skill rating. See shared/progress.js.
+--
+-- XP only goes up, and only a live round finished in the paid places earns
+-- it. The rating goes up and down with every live round against the other
+-- people in it, and is what matchmaking seats players by. Neither is money.
+--
+-- A row appears the first time an account finishes a live round; until then
+-- the account reads as 0 XP at the starting rating. Both move by increment,
+-- never by overwrite, so two writers cannot lose each other's update.
+-- See migration 008.
+-- ---------------------------------------------------------------------------
+
+create table if not exists petri.progress (
+  account_id   uuid primary key references petri.accounts(id) on delete cascade,
+  xp           bigint not null default 0 check (xp >= 0),
+  rating       double precision not null default 1000,
+  rated_games  int not null default 0 check (rated_games >= 0),
+  updated_at   timestamptz not null default now()
+);
+
 alter table petri.matches      enable row level security;
 alter table petri.player_stats enable row level security;
+alter table petri.progress     enable row level security;
 
 revoke all on all tables in schema petri from anon, authenticated;
