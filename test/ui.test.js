@@ -56,6 +56,12 @@ globalThis.document = {
   activeElement: null
 };
 globalThis.window = { matchMedia: () => ({ matches: false }) };
+// Swapped out below to test a page with storage blocked.
+const store = new Map();
+globalThis.localStorage = {
+  getItem: k => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => { store.set(k, String(v)); }
+};
 
 const { createUI } = await import("../client/ui.js");
 const { THEMES } = await import("../client/render.js");
@@ -72,9 +78,11 @@ const settings = { theme: "light", map: true, board: true, grid: true, names: tr
 // What the lobby card reports: colours picked, and names sent to be saved.
 const picked = [];
 let renameImpl = async () => {};
+const levelCalls = [];
 const ui = createUI({
   settings, onStart() {}, onThemeChange() {}, onRamp() {},
   onColour: ci => picked.push(ci),
+  onBotLevel: level => levelCalls.push(level),
   auth: { rename: name => renameImpl(name) },
   shareUrl: "https://engulfs.io/?mode=online"
 });
@@ -462,6 +470,61 @@ check("closing the share sheet is not an error", !threw);
 
 ui.renderLastGame(null);
 check("signing out takes it away", $("lastGame").hidden === true && $("lastEmpty").hidden === false);
+
+console.log("\n-- bot difficulty --");
+
+// A block of its own, so its names cannot collide with the sections above.
+{
+  const levelChecked = id => $(id).getAttribute("aria-checked") === "true";
+
+  check("normal is the default", ui.getBotLevel() === "normal", ui.getBotLevel());
+  check("and is the one marked", levelChecked("lvlNormal") && !levelChecked("lvlEasy") && !levelChecked("lvlHard"));
+  check("the note says what normal bots do", /engulf/.test($("levelNote").textContent),
+    $("levelNote").textContent);
+
+  $("lvlHard").click();
+  check("hard can be picked", ui.getBotLevel() === "hard");
+  check("and only it is marked", levelChecked("lvlHard") && !levelChecked("lvlNormal") && !levelChecked("lvlEasy"));
+  check("the choice reaches the game", levelCalls.at(-1) === "hard", levelCalls.join());
+  check("and is remembered for next time", store.get("engulfs.botLevel") === "hard");
+  check("the note follows the choice", /virus/.test($("levelNote").textContent),
+    $("levelNote").textContent);
+  $("lvlHard").click();
+  check("picking the same level again does not restart anything", levelCalls.length === 1,
+    levelCalls.join());
+
+  $("lvlEasy").click();
+  check("easy says it never attacks with splits or viruses",
+    /never split/.test($("levelNote").textContent), $("levelNote").textContent);
+  $("lvlHard").click();
+
+  // Only practice bots are the player's. A paid tier is a room of people, and
+  // test-mode bots there are set on the server.
+  ui.renderAuth({ id: "a", username: "ada", displayName: "Ada" });
+  ui.setWagerAvailable(true);
+  ui.setAccount({ balance: 5 * UNIT, pot: 0, staked: false, demo: true });
+  $("stake1").click();
+  check("a paid tier hides the picker", ui.getStake() === STAKE_1_USDC && $("botLevels").hidden === true);
+  $("stakeFree").click();
+  check("practice brings it back", $("botLevels").hidden === false);
+
+  const again = () => createUI({ settings, onStart() {}, onThemeChange() {}, onRamp() {}, auth: {} });
+  check("a new page opens on the remembered level", again().getBotLevel() === "hard");
+  store.set("engulfs.botLevel", "brutal");
+  check("a stored value that is not a level is ignored", again().getBotLevel() === "normal");
+
+  // Private browsing, or storage blocked outright: the picker still works, it
+  // just forgets.
+  globalThis.localStorage = {
+    getItem() { throw new Error("blocked"); },
+    setItem() { throw new Error("blocked"); }
+  };
+  const blocked = again();
+  check("blocked storage opens on the default", blocked.getBotLevel() === "normal");
+  let threw = false;
+  try { $("lvlEasy").click(); } catch { threw = true; }
+  check("and a pick still takes without throwing", !threw && blocked.getBotLevel() === "easy");
+}
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

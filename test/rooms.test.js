@@ -57,6 +57,9 @@ process.env.COUNTDOWN_SECONDS = "1";
 // straight into the connection handler, so they do not pass verifyClient
 // and are unaffected.
 process.env.ALLOWED_ORIGINS = "https://engulfs.io,https://www.engulfs.io";
+// Not the default, so the checks below can tell the setting was read rather
+// than fallen back on.
+process.env.BOT_DIFFICULTY = "hard";
 
 await import("../server/index.js");
 await new Promise(r => setTimeout(r, 400));
@@ -113,6 +116,8 @@ const high = await room("highstakes");
 check("Standard targets 100 bots", std.botTarget === 100, String(std.botTarget));
 check("High stakes targets 50 bots", high.botTarget === 50, String(high.botTarget));
 check("Standard starts at 1 ready in test mode", std.startsAt === 1);
+check("every room plays at BOT_DIFFICULTY",
+  std.botLevel === "hard" && high.botLevel === "hard", `${std.botLevel}, ${high.botLevel}`);
 
 console.log("\n-- empty rooms stay empty --");
 
@@ -123,6 +128,13 @@ console.log("\n-- bots arrive with the first player --");
 
 const ada = await join("ada", 1_000_000);
 check("the 1.00 join was accepted", !ada.closed, JSON.stringify(ada.closed || {}));
+{
+  // The client labels the test-mode banner from this, so a tester knows which
+  // bots they are facing: the server's, not their own practice pick.
+  const welcome = ada.out.filter(m => m !== "<binary>").map(JSON.parse)
+    .find(m => m.type === "welcome");
+  check("the welcome names the bot level", welcome?.botLevel === "hard", String(welcome?.botLevel));
+}
 
 let s = await room("standard");
 let h = await room("highstakes");

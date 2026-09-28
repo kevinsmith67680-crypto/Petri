@@ -789,6 +789,33 @@
   .stake small{ display:block; font-size:15.6px; color:var(--muted); margin-top:3.8px; }
   .stake:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 
+  /* Bot difficulty, under the practice tier. One bordered strip split three
+     ways rather than three more .stake rows: it qualifies Practice, it is not
+     a fourth thing to play. */
+  .levels{ margin-top:22.5px; display:grid; gap:11.2px; }
+  .levels[hidden]{ display:none; }
+  .levels > i{ font-style:normal; font-size:16.9px; color:var(--muted); }
+  .seg{
+    display:grid; grid-template-columns:repeat(3, 1fr);
+    border:1px solid var(--line-2); border-radius:6.2px; overflow:hidden;
+  }
+  .seg button{
+    margin:0; padding:13.8px 0;
+    font-family:inherit; font-size:16.9px; font-weight:600;
+    color:var(--muted); background:transparent;
+    border:none; border-radius:0; cursor:pointer;
+    transition:color .14s ease, background .14s ease;
+  }
+  .seg button + button{ border-left:1px solid var(--line-2); }
+  .seg button:hover{ color:var(--text); }
+  .seg button[aria-checked="true"]{
+    color:var(--text);
+    background:color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow:inset 0 -2px 0 var(--accent);
+  }
+  .seg button:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+  .level-note{ font-size:15.6px; line-height:1.5; color:var(--muted); }
+
   /* pot readout + cash out, shown only during a wagered run */
   .pot{
     position:fixed; top:26px; left:50%; transform:translateX(-50%);
@@ -847,6 +874,8 @@
     .wallet{ margin-top:17.5px; padding:13.8px 16.2px; }
     .stakes{ margin-top:17.5px; }
     .stake{ padding:11.2px 15px; }
+    .levels{ margin-top:17.5px; }
+    .seg button{ padding:11.2px 0; }
     .keys{ margin-top:17.5px; }
     .card button{ margin-top:18px; }
     .badge{ margin-bottom:12.5px; }
@@ -1140,6 +1169,19 @@
             <em>2.00<i class="lock">Sign in</i></em>
           </button>
           <p class="stake-note" id="stakeNote" hidden></p>
+        </div>
+
+        <!-- Practice bots run in this tab, so how hard they are is the
+             player's call. Hidden on a paid tier: those rooms are other
+             people. The note is filled in from client/ui.js. -->
+        <div class="levels" id="botLevels">
+          <i id="lblLevels">Bots</i>
+          <div class="seg" role="radiogroup" aria-labelledby="lblLevels">
+            <button id="lvlEasy" type="button" role="radio" aria-checked="false">Easy</button>
+            <button id="lvlNormal" type="button" role="radio" aria-checked="true">Normal</button>
+            <button id="lvlHard" type="button" role="radio" aria-checked="false">Hard</button>
+          </div>
+          <p class="level-note" id="levelNote"></p>
         </div>
 
         <button id="btnStart" type="button">Start</button>

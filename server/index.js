@@ -21,6 +21,7 @@
 // Config via environment:
 //   PORT              default 8080
 //   BOTS              default 14
+//   BOT_DIFFICULTY    easy | normal | hard, default normal (test mode only)
 //   ALLOWED_ORIGINS   comma-separated; unset means allow any (dev only)
 //   MAX_CONN_PER_IP   default 3
 //   TRUST_PROXY       set to 1 behind Render / Fly / a reverse proxy
@@ -36,7 +37,8 @@ import { WebSocketServer } from "ws";
 
 import {
   createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnRing,
-  setAim, queueAction, stepWorld, totalMass, TICK_HZ, STAIN_COUNT
+  setAim, queueAction, stepWorld, totalMass, TICK_HZ, STAIN_COUNT,
+  isBotLevel, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
@@ -94,6 +96,24 @@ const PORT = Number(process.env.PORT) || 8080;
 // 100 for Standard, 50 for High stakes — so a solo test sees the board the
 // mode is actually designed around. Set BOTS to override both.
 const BOTS_OVERRIDE = process.env.BOTS !== undefined ? Number(process.env.BOTS) : null;
+
+// How hard those bots play: whether they split to engulf and shoot viruses.
+// See BOT_LEVELS in shared/sim.js. One setting for every room, because a room
+// is shared: no single player gets to choose what everyone else faces.
+// Players pick their own only in practice, which runs in their own tab.
+//
+// A typo falls back to the default rather than refusing to start. It is a
+// test-mode knob, and taking a server down over one is the wrong trade.
+const BOT_LEVEL = (() => {
+  const want = process.env.BOT_DIFFICULTY;
+  if (want === undefined || want === "") return DEFAULT_BOT_LEVEL;
+  if (isBotLevel(want)) return want;
+  console.warn(
+    `BOT_DIFFICULTY=${want} is not one of ${BOT_LEVEL_IDS.join(", ")}; ` +
+    `using ${DEFAULT_BOT_LEVEL}.`
+  );
+  return DEFAULT_BOT_LEVEL;
+})();
 
 // Server tick rate. 20Hz is the safe default; 30Hz roughly halves the
 // world-update latency at 1.5x the CPU and bandwidth. Worth raising once
@@ -354,6 +374,7 @@ const server = http.createServer(async (req, res) => {
         round: r.round.number,
         arena: r.world.size,
         botTarget: r.bots,
+        botLevel: r.world.botLevel,
         // Everything in the world: humans plus however many bots are
         // currently standing in for the rest of the lobby.
         inWorld: r.world.players.size,
@@ -523,7 +544,8 @@ function createRoom(mode) {
   const n = (roomsOpened.get(mode.id) || 0) + 1;
   roomsOpened.set(mode.id, n);
   // Two rooms opened in the same millisecond must not share an orb layout.
-  const world = createWorld((Date.now() + ++roomSerial) & 0xffffffff, mode.world);
+  const world = createWorld((Date.now() + ++roomSerial) & 0xffffffff,
+    { ...mode.world, botLevel: BOT_LEVEL });
   const lobbyMax = LOBBY_MAX_OVERRIDE ?? mode.lobbyMax;
   const room = {
     // Numbers are never reused, so a log line naming standard-2 cannot mean
@@ -1630,6 +1652,8 @@ wss.on("connection", (ws, req) => {
           lobbyMin: room.lobbyMin,
           lobbyMax: room.lobbyMax,
           test: TEST_MODE,
+          // Only meaningful in test mode, the one time a live room has bots.
+          botLevel: room.world.botLevel,
           demo: !ramp.isReal,
           stake,
           signedIn: true,
@@ -1906,6 +1930,6 @@ server.listen(PORT, () => {
   }
   console.log(`  google  : ${GOOGLE_CLIENT_ID ? "enabled" : "off (set GOOGLE_CLIENT_ID)"}`);
   if (TEST_MODE) {
-    console.log("  TEST MODE: demo credits only, solo start, bot-filled arena");
+    console.log(`  TEST MODE: demo credits only, solo start, bot-filled arena (${BOT_LEVEL} bots)`);
   }
 });

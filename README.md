@@ -67,6 +67,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 |---|---|---|
 | `PORT` | 8080 | Listen port |
 | `BOTS` | 0; in test mode each room fills to its own lobby size | Overrides both rooms. Bots exist only while a human is in the room |
+| `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard` for the test-mode rooms' bots — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
@@ -733,6 +734,29 @@ One process is one thread, so every room in it shares a single core. A full 100-
 
 `test/factory.test.js` pins all of the above with two-seat rooms and a three-room cap.
 
+### Bot difficulty
+
+Bots come in three levels, set per world in `BOT_LEVELS` (`shared/sim.js`). Every level flees what can eat it and grazes orbs the same way. The levels differ only in how bots kill:
+
+| | Easy | Normal | Hard |
+|---|---|---|---|
+| Chase prey within | 430 | 500 | 580 |
+| Aims ahead of a moving target | no | no | 0.2s |
+| **Engulf** — split onto smaller prey | never | point-blank only, 8s between splits | from ~85% of full split reach, 2.5s between |
+| **Viruses** — feed one so the child bursts a bigger cell | never | only one it is already lined up behind | walks up to 520 units to line one up, and leads the target by 0.5s |
+
+**Easy is exactly how bots played before levels existed.** A seeded run at `easy` matches the old code tick for tick, and the test suite checks that a minute of easy bots never splits or throws mass.
+
+**A split is only taken when half the bot still eats the prey and lands on it.** The reach is computed from the same numbers `splitCell` and `cellCombat` use: where the launched half starts, how far it coasts, and how deep it has to cover the prey. A bot never splits while anything within its safety radius could eat one of the halves.
+
+**A virus shot is set up from behind the virus.** The child flies along the line the throw came in on, so the bot stands on the far side of the virus on the line through its target and throws down that line. The heading of the throw decides where the virus goes, not the bot's exact spot. A target has to be bigger than mass 127 (a virus has to be able to burst it), and the bot needs enough mass to pay for the throws. A bot big enough to pop on the virus itself only takes a shot it is already behind. While a bot is throwing it holds its ground longer against a larger cell closing in, because the virus is between them and anything big enough to eat the bot pops on it first.
+
+**Who picks the level.** In practice the player does, in the menu under the Practice tier. Practice bots run in their own tab, so the choice is theirs. It is remembered in `localStorage` and applies to the running arena immediately. The picker is hidden on a paid tier. Live rooms are shared, so their bots, which only exist in test mode, take `BOT_DIFFICULTY` on the server. The level is reported in `/health` and the welcome message, and the test-mode banner names it.
+
+Measured with 100 bots in the Standard arena over three minutes, averaged over three seeds: 1.80ms of simulation a tick at easy, 2.41ms at normal and 2.67ms at hard. Most of the difference comes from the extra cells that splits and bursts put on the board.
+
+Against a scripted player grazing at mass 200, in a 4,000-unit arena with 20 bots, over 8 seeds × 4 minutes: easy bots shot 0 viruses at it, normal 7 and hard 13. Hard bots lined up a virus shot at it 61 times, against 9 for normal.
+
 ### Lobby and arena size
 
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
@@ -926,6 +950,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 |---|---|---|
 | `LOBBY_MIN` | 100 ready | **1 ready** |
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
+| `BOT_DIFFICULTY` | — (no bots) | `normal`; set `easy` or `hard` to change how they attack |
 | `ROUND_SECONDS` | 600 | **120** |
 | `INTERMISSION_SECONDS` | 15 | **8** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
