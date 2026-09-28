@@ -132,6 +132,9 @@ const ui = createUI({
     try { localStorage.setItem(COLOUR_KEY, String(ci)); } catch { /* session only */ }
     conn?.setColour?.(ci);
   },
+  // Practice keeps one arena across runs, so a new level is applied to it in
+  // place. A socket has no such method: live rooms' bots are the server's.
+  onBotLevel: level => conn?.setBotLevel?.(level),
   auth: {
     // Every one of these guards `api`, which is null in guest mode. Without
     // the check the click throws "null is not an object" into the console and
@@ -242,7 +245,9 @@ function connect(stake = PRACTICE) {
     if (location.protocol === "https:" && url.startsWith("ws://")) {
       ui.setMode("Blocked: an https page cannot open a ws:// socket. Use wss://");
       ui.setWagerAvailable(false, "Wagering needs a wss:// connection to the server.");
-      return createLocalConnection({ name: NAME, ci: colourPick, world: MODES[0].world });
+      return createLocalConnection({
+        name: NAME, ci: colourPick, world: MODES[0].world, botLevel: ui.getBotLevel()
+      });
     }
     const socket = createSocketConnection({
       ci: colourPick,
@@ -266,7 +271,7 @@ function connect(stake = PRACTICE) {
     socket.on("account", onAccount);
     on("round", onRound);
     on("welcome", w => {
-      ui.setTestMode(w.test);
+      ui.setTestMode(w.test, w.botLevel);
       // A new connection's readiness is the server's to say: unready, unless
       // it resumed a live run.
       ready = !!w.ready;
@@ -356,7 +361,8 @@ function connect(stake = PRACTICE) {
   const local = createLocalConnection({
     name: api?.account?.displayName || NAME,
     ci: colourPick,
-    world: MODES[0].world
+    world: MODES[0].world,
+    botLevel: ui.getBotLevel()
   });
   local.on("event", onEvent);
   // Not signed in is not the same as no server. In online mode the server is

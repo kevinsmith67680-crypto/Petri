@@ -13,7 +13,8 @@ import {
   radiusOf, MAX_CELLS, VIRUS_MASS, VIRUS_EAT_RATIO,
   advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN,
   EAT_RATIO, spawnRing, resetArena, SPAWN_GAP, START_MASS,
-  VIRUS_FEED_HITS, VIRUS_MAX_RATIO
+  VIRUS_FEED_HITS, VIRUS_MAX_RATIO, buildPelletGrid,
+  BOT_LEVELS, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL, setBotLevel
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -408,6 +409,132 @@ console.log("\n-- ejected mass behaves like a projectile --");
   stepWorld(w, 1 / TICK_HZ);
   check("eating one above the seeded count does not respawn it",
     w.viruses.length === before - 1, `${before} -> ${w.viruses.length}`);
+}
+
+// ── bot difficulty ──────────────────────────────────────────────────────────
+
+console.log("\n-- bot difficulty --");
+
+{
+  check("three levels, easiest first",
+    JSON.stringify(BOT_LEVEL_IDS) === JSON.stringify(["easy", "normal", "hard"]));
+  check("a world starts at the default level", createWorld(1).botLevel === DEFAULT_BOT_LEVEL);
+  check("an unknown level falls back to the default",
+    createWorld(1, { botLevel: "brutal" }).botLevel === DEFAULT_BOT_LEVEL);
+  check("an inherited property is not a level",
+    createWorld(1, { botLevel: "toString" }).botLevel === DEFAULT_BOT_LEVEL);
+  const w = createWorld(1, { botLevel: "hard" });
+  check("a world takes the level it is given", w.botLevel === "hard");
+  check("the level can be changed on a running world", setBotLevel(w, "easy") && w.botLevel === "easy");
+  check("an unknown one is refused and changes nothing", !setBotLevel(w, "brutal") && w.botLevel === "easy");
+  check("easy has no attacks", !BOT_LEVELS.easy.split && !BOT_LEVELS.easy.virus);
+  check("the levels cannot be edited at runtime", Object.isFrozen(BOT_LEVELS.hard.split));
+}
+
+// One bot, a few scripted players who stand still, and nothing else, so what
+// the bot does is down to its level and not to whatever wandered past.
+function botArena(level, { bot: [botMass, botAt], players, virusAt, pelletAt }) {
+  const w = createWorld(3, {
+    size: 3000, pellets: pelletAt ? 1 : 0, viruses: virusAt ? 1 : 0, botLevel: level
+  });
+  if (virusAt) Object.assign(w.viruses[0], virusAt);
+  if (pelletAt) { Object.assign(w.pellets[0], pelletAt); buildPelletGrid(w); }
+  for (const [id, mass, at] of players) {
+    Object.assign(addPlayer(w, { id, name: id }).cells[0], at, { mass });
+  }
+  fillBots(w, 1);
+  const bot = [...w.players.values()].find(p => p.bot);
+  Object.assign(bot.cells[0], botAt, { mass: botMass });
+  return { w, bot };
+}
+
+// What the bot did to "human" in the time given.
+function watchBot({ w, bot }, seconds) {
+  const seen = { split: false, planned: false, popped: false, eaten: false };
+  for (let t = 0; t < seconds; t += 1 / TICK_HZ) {
+    const before = bot.cells.length;
+    for (const e of stepWorld(w, 1 / TICK_HZ)) {
+      if (e.t === "pop" && e.id === "human") seen.popped = true;
+      if (e.t === "eat" && e.victim === "human") seen.eaten = true;
+    }
+    if (bot.cells.length > before) seen.split = true;
+    if (bot.plan) seen.planned = true;
+  }
+  return seen;
+}
+
+{
+  // Prey of mass 20, 230 units off a bot of mass 100: half the bot eats it
+  // comfortably, and a split from where the bot stands would land on it.
+  const prey = { bot: [100, { x: 1000, y: 1500 }], players: [["human", 20, { x: 1230, y: 1500 }]] };
+  const first = level => watchBot(botArena(level, prey), 1 / TICK_HZ);
+
+  check("easy never splits to engulf", !watchBot(botArena("easy", prey), 1).split);
+  check("normal holds its split until the shot is close", !first("normal").split);
+  check("but takes it once it has closed in", watchBot(botArena("normal", prey), 0.5).split);
+  check("hard splits from where it stands", first("hard").split);
+  check("and has eaten by the time normal has only split",
+    watchBot(botArena("hard", prey), 0.5).eaten && !watchBot(botArena("normal", prey), 0.5).eaten);
+
+  // A mass-80 cell nearby cannot eat the whole bot, so it is no reason to
+  // run, but it would eat either half. Splitting there is suicide.
+  const guarded = { ...prey, players: [...prey.players, ["guard", 80, { x: 1000, y: 1850 }]] };
+  for (const level of ["normal", "hard"]) {
+    check(`${level} does not split with something nearby that eats half of it`,
+      !watchBot(botArena(level, guarded), 1).split);
+  }
+}
+
+{
+  // A virus between the bot and a mass-250 player, who is too big for the
+  // bot to eat but big enough to burst. The bot is already behind the virus.
+  const lined = {
+    bot: [100, { x: 1000, y: 1500 }],
+    players: [["human", 250, { x: 1400, y: 1500 }]],
+    virusAt: { x: 1150, y: 1500 }
+  };
+  check("easy never shoots a virus", !watchBot(botArena("easy", lined), 3).popped);
+  check("normal shoots one it is lined up behind", watchBot(botArena("normal", lined), 3).popped);
+  check("so does hard", watchBot(botArena("hard", lined), 3).popped);
+
+  // The same shot from 160 units short of the spot, with the only orb
+  // leading away from it. Hard walks over; normal will not go out of its way.
+  const walk = { ...lined, bot: [100, { x: 850, y: 1500 }], pelletAt: { x: 300, y: 1500 } };
+  const hard = watchBot(botArena("hard", walk), 3);
+  check("hard walks over to line up a virus, and bursts the player with it", hard.popped);
+  check("normal does not walk to one", !watchBot(botArena("normal", walk), 1.5).planned);
+
+  // A bot must be able to pay for the shot: three throws at 16 each, and a
+  // throw needs 32 in the cell.
+  check("a bot too small to fill the virus does not try",
+    !watchBot(botArena("hard", { ...lined, bot: [60, { x: 1000, y: 1500 }] }), 3).planned);
+}
+
+{
+  // Easy is the behaviour from before levels existed: a full arena of them
+  // must never split or throw mass.
+  const w = createWorld(21, { botLevel: "easy" });
+  fillBots(w, 60);
+  let attacked = false;
+  for (let i = 0; i < TICK_HZ * 60 && !attacked; i++) {
+    // Only bots alive before the tick: a respawn also goes from none to one.
+    const cells = new Map([...w.players.values()].filter(p => p.alive).map(p => [p, p.cells.length]));
+    const events = stepWorld(w, 1 / TICK_HZ);
+    const popped = new Set(events.filter(e => e.t === "pop").map(e => e.id));
+    for (const [p, n] of cells) if (p.alive && p.cells.length > n && !popped.has(p.id)) attacked = true;
+    if (w.pellets.some(p => p.owner !== undefined)) attacked = true;
+  }
+  check("a minute of easy bots: no splits, no throws", !attacked);
+
+  // Harder bots still have to be reproducible, or a bug report cannot be
+  // replayed from its seed.
+  const replay = () => {
+    const r = createWorld(22, { botLevel: "hard" });
+    fillBots(r, 40);
+    for (let i = 0; i < TICK_HZ * 30; i++) stepWorld(r, 1 / TICK_HZ);
+    return [...r.players.values()].map(p => Math.round(totalMass(p) * 1000)).join();
+  };
+  check("hard bots replay identically from the same seed", replay() === replay());
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

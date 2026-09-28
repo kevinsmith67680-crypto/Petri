@@ -10,12 +10,13 @@ import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
 import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
+import { isBotLevel, DEFAULT_BOT_LEVEL } from "../shared/sim.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 export function createUI({
-  settings, onStart, onThemeChange, onRamp, onSharp, onColour, auth, shareUrl = ""
+  settings, onStart, onThemeChange, onRamp, onSharp, onColour, onBotLevel, auth, shareUrl = ""
 }) {
   const el = {
     orbs: $("orbCount"),
@@ -51,7 +52,9 @@ export function createUI({
     lobbyCount: $("lobbyCount"),
     statValue: $("statValue"),
     specBar: $("specBar"),
-    specName: $("specName")
+    specName: $("specName"),
+    levels: $("botLevels"),
+    levelNote: $("levelNote")
   };
 
   // The client holds no authority over money. This is a read-only echo of the
@@ -504,8 +507,13 @@ export function createUI({
   // A banner rather than a quiet note: test mode changes the economics and
   // the lobby rules, and mistaking it for production is the failure worth
   // preventing.
-  function setTestMode(on) {
+  function setTestMode(on, botLevel) {
     $("testFlag").hidden = !on;
+    // The server's level, not this player's practice pick: say which, so a
+    // tester is not surprised by bots that split when practice ones did not.
+    if (on && botLevel) {
+      $("testFlag").textContent = `Test mode \u2014 demo credits, bot-filled arena, ${botLevel} bots`;
+    }
     document.body.classList.toggle("is-test", !!on);
     // Test mode exists to find problems, so the numbers are on by default.
     if (on && !settings.perf) {
@@ -614,6 +622,7 @@ export function createUI({
     // it anyway and the player would only find out at Start.
     if (stakeBlockedBy(units)) return;
     stake = units;
+    el.levels.hidden = units !== PRACTICE;
     if (!el.stakeNote.classList.contains("quiet")) showStakeNote(null);
     for (const [value, get] of stakeButtons) {
       get().setAttribute("aria-checked", String(units === value));
@@ -637,6 +646,47 @@ export function createUI({
       else setStake(units);
     });
   }
+
+  // ── bot difficulty ────────────────────────────────────────────────────────
+  //
+  // Practice only. The live rooms are other people, and in test mode their
+  // bots are the server's to set (BOT_DIFFICULTY), never one player's.
+
+  const LEVEL_KEY = "engulfs.botLevel";
+  const levelButtons = [
+    ["easy", $("lvlEasy")],
+    ["normal", $("lvlNormal")],
+    ["hard", $("lvlHard")]
+  ];
+  // What the choice changes, in the terms a player meets it: how they get
+  // eaten.
+  const LEVEL_NOTE = {
+    easy: "They chase what they can catch. They never split at you or shoot viruses.",
+    normal: "They split to engulf you at close range, and shoot a virus they happen to be lined up behind.",
+    hard: "They split from further out and aim where you are going. Pass mass 127 and they line viruses up to burst you."
+  };
+
+  let botLevel = DEFAULT_BOT_LEVEL;
+  try {
+    const saved = localStorage.getItem(LEVEL_KEY);
+    if (isBotLevel(saved)) botLevel = saved;
+  } catch { /* storage blocked; the default stands */ }
+
+  function paintLevel() {
+    for (const [id, btn] of levelButtons) btn.setAttribute("aria-checked", String(id === botLevel));
+    el.levelNote.textContent = LEVEL_NOTE[botLevel];
+  }
+
+  function setBotLevel(level) {
+    if (!isBotLevel(level) || level === botLevel) return;
+    botLevel = level;
+    paintLevel();
+    try { localStorage.setItem(LEVEL_KEY, level); } catch { /* not remembered */ }
+    onBotLevel?.(level);
+  }
+
+  for (const [id, btn] of levelButtons) btn.addEventListener("click", () => setBotLevel(id));
+  paintLevel();
 
   el.ramp.addEventListener("click", () => onRamp?.("deposit"));
 
@@ -964,6 +1014,7 @@ export function createUI({
     setReady: v => { iAmReady = v; },
     setColour, renderLastGame,
     getStake: () => stake,
+    getBotLevel: () => botLevel,
     isSignedIn: () => signedIn,
     // The Google button lives outside this form but can still CREATE an
     // account, so the caller has to be able to hand the declared date over

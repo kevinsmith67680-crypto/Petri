@@ -111,6 +111,51 @@ export const BOT_NAMES = [
   "Chlorella", "Tardigrade", "Nostoc", "Spirogyra"
 ];
 
+// ── bot difficulty ──────────────────────────────────────────────────────────
+//
+// What a bot is allowed to attack with. Every level flees what can eat it and
+// grazes orbs the same way; the levels differ only in how they kill.
+//
+//   chase   how close prey has to be before a bot goes after it
+//   lead    seconds ahead of a moving target a bot aims, 0 for straight at it
+//   split   engulfing: splitting to launch half the cell onto smaller prey
+//   virus   feeding a virus so the one it spits out bursts a larger cell
+//
+// Easy is how bots played before levels existed: they chase and never split
+// or shoot. A level is per world, so everyone in one arena faces the same
+// bots.
+export const BOT_LEVELS = Object.freeze({
+  easy: Object.freeze({ chase: 430, lead: 0, split: null, virus: null }),
+  normal: Object.freeze({
+    chase: 500,
+    lead: 0,
+    // Only point-blank, near-certain kills, with a long wait between them.
+    split: Object.freeze({ reach: 0.6, margin: 1.15, cooldown: 8, safe: 620 }),
+    // Only a virus it is already standing behind: it will not walk to one.
+    virus: Object.freeze({ travel: 140, minMass: 90, cooldown: 12, lead: 0, nerve: 150 })
+  }),
+  hard: Object.freeze({
+    chase: 580,
+    lead: 0.2,
+    split: Object.freeze({ reach: 0.85, margin: 1.03, cooldown: 2.5, safe: 420 }),
+    // Walks across to line a virus up, and holds its ground behind it while a
+    // larger cell closes in: anything big enough to eat it pops on the way.
+    virus: Object.freeze({ travel: 520, minMass: 70, cooldown: 4, lead: 0.5, nerve: 90 })
+  })
+});
+export const BOT_LEVEL_IDS = Object.keys(BOT_LEVELS);
+export const DEFAULT_BOT_LEVEL = "normal";
+export const isBotLevel = id => Object.hasOwn(BOT_LEVELS, id);
+
+// Change the bots of a running world. Takes effect on the next tick; a plan a
+// bot is part way through is dropped rather than finished at the old level.
+export function setBotLevel(world, id) {
+  if (!isBotLevel(id)) return false;
+  world.botLevel = id;
+  for (const p of world.players.values()) if (p.bot) p.plan = null;
+  return true;
+}
+
 export const radiusOf = m => Math.sqrt(m) * 4;
 
 // Plain orbs are drawn at a fixed size; ejected mass is a real blob whose
@@ -249,6 +294,7 @@ export function createWorld(seed = 1, opts = {}) {
     size,
     pelletCount: opts.pellets ?? PELLETS,
     virusCount: opts.viruses ?? VIRUSES,
+    botLevel: isBotLevel(opts.botLevel) ? opts.botLevel : DEFAULT_BOT_LEVEL,
     rng: mulberry32(seed),
     tick: 0,
     time: 0,          // seconds since world creation; all timers use this
@@ -347,7 +393,14 @@ export function addPlayer(world, { id, name, bot = false, ci = null }) {
     orbs: 0,
     eaten: 0,
     peak: START_MASS,
-    jitter: world.rng() * Math.PI * 2
+    jitter: world.rng() * Math.PI * 2,
+    // Bot attack state. Unused by humans.
+    plan: null,              // a virus shot being lined up, see planVirusShot
+    nextSplit: 0,
+    nextVirus: 0,
+    // Staggered so a room full of bots does not all search for a virus shot
+    // on the same tick.
+    nextLook: world.time + (world.nextNid % 10) * 0.05
   };
   world.players.set(id, player);
   spawnPlayer(world, player);
@@ -373,6 +426,7 @@ function placePlayer(world, player, x, y, mass) {
   player.input.x = 0;
   player.input.y = 0;
   player.actions.length = 0;
+  player.plan = null;
 }
 
 // Target distance between neighbouring spawns. A lobby too big to seat at this
@@ -701,6 +755,7 @@ function eatViruses(world, ent) {
       const v = world.viruses[i];
       if (Math.hypot(v.x - c.x, v.y - c.y) < r) {
         c.mass += v.mass * 0.4;
+        v.dead = true;         // a bot may be holding it as a shot to line up
         world.viruses.splice(i, 1);
         // Topped back up only to the count the arena seeds. Replacing
         // unconditionally would make every fed split permanent, so a long
@@ -745,17 +800,182 @@ function cellCombat(world) {
 
 const SCAN = 620, SCAN2 = SCAN * SCAN;
 
+// The smallest cell a virus bursts.
+const POP_MASS = VIRUS_MASS * VIRUS_EAT_RATIO;
+
+// How far a fed virus's child coasts before it stops, ~450 units: its launch
+// speed integrated under VIRUS_FRICTION, the same way advanceVirus moves it.
+const VIRUS_TRAVEL = VIRUS_SPLIT_SPEED / -VIRUS_LN;
+
+// Clearance between a bot's membrane and the virus it is throwing at. A throw
+// travels ~237 units, so this lands every blob while it is still moving.
+const VIRUS_SHOT_GAP = 55;
+
+// Where a cell will be in t seconds if it holds its course: steering speed,
+// plus whatever is left of a split or burst launch integrated the way
+// advanceCell does it.
+function ahead(c, t) {
+  if (!t) return c;
+  const sp = c.sp || 0;
+  const coast = c.vx || c.vy ? (1 - Math.pow(CELL_DECAY, t)) / -CELL_LN : 0;
+  return {
+    x: c.x + (c.hx || 0) * sp * t + (c.vx || 0) * coast,
+    y: c.y + (c.hy || 0) * sp * t + (c.vy || 0) * coast
+  };
+}
+
+// How far from its centre a cell can engulf prey by splitting: where the
+// launched half starts, how far it coasts, and how deep its body has to cover
+// the prey. The same numbers splitCell and cellCombat use.
+function splitReach(mass, preyMass) {
+  const half = mass / 2;
+  return radiusOf(half) * 1.4 + splitLaunchSpeed(half) / -CELL_LN
+    - radiusOf(preyMass) * 0.55;
+}
+
+// The shot that bursts `target` with virus v. The child flies along the line
+// from the virus to the target, and that line is set by the heading of the
+// throw that fills the virus — so the bot stands behind the virus on it.
+function virusShot(v, target, myMass) {
+  const dx = target.x - v.x, dy = target.y - v.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d, uy = dy / d;
+  const back = radiusOf(v.mass) + radiusOf(myMass) + VIRUS_SHOT_GAP;
+  return { ux, uy, d, x: v.x - ux * back, y: v.y - uy * back };
+}
+
+// A child that has to coast most of its range to arrive has slowed to a crawl
+// and is easy to step round, so only a target well inside it counts.
+const inVirusRange = (d, targetMass) =>
+  d > radiusOf(targetMass) && d - radiusOf(targetMass) < VIRUS_TRAVEL * 0.8;
+
+// Engulfing: split when half of this cell still eats the prey and lands on
+// it. Returns the aim, or null to leave it.
+function engulf(world, bot, lvl, c0, prey) {
+  const p = ahead(prey, lvl.lead);
+  const dx = p.x - c0.x, dy = p.y - c0.y;
+  const reach = splitReach(c0.mass, prey.mass) * lvl.split.reach;
+  if (dx * dx + dy * dy > reach * reach) return null;
+  bot.actions.push("split");
+  bot.nextSplit = world.time + lvl.split.cooldown;
+  return { x: p.x, y: p.y };
+}
+
+// Choose a virus to shoot at `target`. A bot big enough to pop has to be
+// behind it already, since getting round to the far side means walking into
+// the virus. A smaller one crosses it untouched.
+function planVirusShot(world, bot, lvl, me, myMass, target, owner) {
+  const aim = ahead(target, lvl.virus.lead);
+  const pops = myMass > POP_MASS;
+  let best = null, bestD = lvl.virus.travel;
+  for (const v of world.viruses) {
+    const shot = virusShot(v, aim, myMass);
+    if (!inVirusRange(shot.d, target.mass)) continue;
+    if (pops && (me.x - v.x) * shot.ux + (me.y - v.y) * shot.uy > 0) continue;
+    const d = Math.hypot(shot.x - me.x, shot.y - me.y);
+    if (d < bestD) { bestD = d; best = v; }
+  }
+  if (!best) return false;
+  bot.plan = {
+    v: best, owner: owner.id,
+    until: world.time + 1 + bestD / 200,   // time to walk there, and settle
+    firing: false, need: 0, shots: 0, nextShot: 0
+  };
+  return true;
+}
+
+function dropPlan(world, bot, wait) {
+  bot.plan = null;
+  bot.nextVirus = world.time + wait;
+  return null;
+}
+
+// One tick of a virus shot: walk to the spot behind the virus, then throw
+// until it is full. Returns where to steer, with `fire` set on an aim that
+// must reach the throw untouched; null once the plan is over.
+function stepVirusPlan(world, bot, lvl, me, myMass) {
+  const plan = bot.plan;
+  const v = plan.v;
+  const owner = world.players.get(plan.owner);
+  if (v.dead || !owner || !owner.alive || bot.cells.length !== 1) return dropPlan(world, bot, 1);
+
+  // The target may have split since the plan was made. Aim at whichever of
+  // its cells the virus would still burst, nearest the virus.
+  let t = null, td = Infinity;
+  for (const c of owner.cells) {
+    if (c.mass <= POP_MASS) continue;
+    const d = (c.x - v.x) ** 2 + (c.y - v.y) ** 2;
+    if (d < td) { td = d; t = c; }
+  }
+  if (!t) return dropPlan(world, bot, 1);
+
+  const shot = virusShot(v, ahead(t, lvl.virus.lead), myMass);
+  // Out of range of this virus is not out of range of every virus. Look
+  // again on the next tick rather than waiting out the usual pause.
+  if (!inVirusRange(shot.d, t.mass)) {
+    bot.nextLook = world.time;
+    return dropPlan(world, bot, 0);
+  }
+
+  // Looser once firing, so a target drifting a little does not stop the
+  // throws half way: a throw still lands anywhere within the virus's radius
+  // of the line.
+  const gx = shot.x - me.x, gy = shot.y - me.y;
+  const slack = plan.firing ? 50 : 30;
+  if (gx * gx + gy * gy > slack * slack) {
+    if (world.time > plan.until) return dropPlan(world, bot, 1);
+    return { x: shot.x, y: shot.y, fire: false };
+  }
+
+  if (!plan.firing) {
+    plan.firing = true;
+    plan.need = VIRUS_FEED_HITS - v.fed;
+  }
+  const c0 = bot.cells[0];
+  if (c0.mass < EJECT_MASS * 2) return dropPlan(world, bot, lvl.virus.cooldown);
+  if (world.time >= plan.nextShot) {
+    bot.actions.push("eject");
+    plan.shots++;
+    plan.nextShot = world.time + 0.1;
+    if (plan.shots >= plan.need) dropPlan(world, bot, lvl.virus.cooldown);
+  }
+  // Throw straight down the line the child will fly. The heading of the throw
+  // decides where the virus goes, not the bot's exact spot, and an aim inside
+  // the cell barely moves it.
+  const k = radiusOf(myMass) * 0.25;
+  return { x: me.x + shot.ux * k, y: me.y + shot.uy * k, fire: true };
+}
+
 function driveBot(world, bot, dt) {
   const c0 = bot.cells[0];
   if (!c0) return { x: world.size / 2, y: world.size / 2 };
+  const lvl = BOT_LEVELS[world.botLevel] || BOT_LEVELS[DEFAULT_BOT_LEVEL];
   // Almost every bot is one cell; centroid() allocates and this runs a
   // hundred times a tick.
   const me = bot.cells.length === 1 ? c0 : centroid(bot);
   const myMass = bot.cells.length === 1 ? c0.mass : totalMass(bot);
 
+  // What the level can attack with right now. Both need a whole cell: a bot
+  // already in pieces is mid-attack or recovering from one.
+  const whole = bot.cells.length === 1;
+  const split = lvl.split && whole && c0.mass >= 36 && world.time >= bot.nextSplit
+    ? lvl.split : null;
+  const look = lvl.virus && whole && !bot.plan && c0.mass >= lvl.virus.minMass &&
+    world.time >= bot.nextVirus && world.time >= bot.nextLook;
+  if (look) bot.nextLook = world.time + 0.5;
+
   let threat = null, threatD2 = Infinity, prey = null, preyD2 = Infinity;
+  // Prey that half of this cell still eats, for a split.
+  let bite = null, biteD2 = Infinity;
+  // Anything that could eat half of this cell, if it split.
+  let exposed = false;
+  // The nearest cell a virus would burst, for a virus shot.
+  let big = null, bigOwner = null, bigD2 = Infinity;
   const canBeEatenBy = c0.mass * EAT_RATIO;
   const canEat = c0.mass / (EAT_RATIO * 1.1);
+  const canBite = split ? c0.mass / 2 / (EAT_RATIO * split.margin) : 0;
+  const eatsHalf = c0.mass / 2 * EAT_RATIO;
+  const safe2 = split ? split.safe * split.safe : 0;
   for (const o of world.players.values()) {
     if (o === bot || !o.alive) continue;
     for (const c of o.cells) {
@@ -767,17 +987,33 @@ function driveBot(world, bot, dt) {
       if (d2 > SCAN2) continue;
       if (c.mass > canBeEatenBy) { if (d2 < threatD2) { threat = c; threatD2 = d2; } }
       else if (c.mass < canEat) { if (d2 < preyD2) { prey = c; preyD2 = d2; } }
+      if (c.mass < canBite && d2 < biteD2) { bite = c; biteD2 = d2; }
+      if (d2 < safe2 && c.mass >= eatsHalf) exposed = true;
+      if (look && c.mass > POP_MASS && c.mass >= canEat && d2 < bigD2) {
+        big = c; bigOwner = o; bigD2 = d2;
+      }
     }
   }
   const threatD = threat ? Math.sqrt(threatD2) : Infinity;
   const preyD = prey ? Math.sqrt(preyD2) : Infinity;
 
-  let tx, ty;
-  if (threat && threatD < radiusOf(threat.mass) + 260) {
+  // A bot throwing at a virus holds its ground longer. The virus stands
+  // between it and the target, and anything big enough to eat it pops first.
+  const nerve = bot.plan && bot.plan.firing ? lvl.virus.nerve : 260;
+
+  let tx, ty, go;
+  if (threat && threatD < radiusOf(threat.mass) + nerve) {
     tx = me.x - (threat.x - me.x) * 3;
     ty = me.y - (threat.y - me.y) * 3;
-  } else if (prey && preyD < 430) {
-    tx = prey.x; ty = prey.y;
+  } else if (split && bite && !exposed && (go = engulf(world, bot, lvl, c0, bite))) {
+    return go;
+  } else if ((bot.plan || (look && big && planVirusShot(world, bot, lvl, me, myMass, big, bigOwner))) &&
+             (go = stepVirusPlan(world, bot, lvl, me, myMass))) {
+    if (go.fire) return go;
+    tx = go.x; ty = go.y;
+  } else if (prey && preyD < lvl.chase) {
+    const p = ahead(prey, lvl.lead);
+    tx = p.x; ty = p.y;
   } else {
     // Nearest orb via the spatial grid, not a scan of the whole arena. With
     // 100 bots and 4,100 orbs the scan was 410,000 distance checks a tick —

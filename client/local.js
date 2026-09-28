@@ -13,14 +13,16 @@
 // ---------------------------------------------------------------------------
 
 import {
-  createWorld, addPlayer, fillBots, setAim, queueAction,
+  createWorld, addPlayer, fillBots, setAim, queueAction, setBotLevel,
   stepWorld, totalMass, centroid, leaderboard, rankOf
 } from "../shared/sim.js";
 import { PHASE_NONE } from "../shared/protocol.js";
 import { PELLET_MASS } from "../shared/sim.js";
 
-export function createLocalConnection({ name = "You", ci = null, bots = 14, seed, world: opts } = {}) {
-  const world = createWorld(seed ?? (Math.random() * 1e9) | 0, opts);
+export function createLocalConnection({
+  name = "You", ci = null, bots = 14, seed, world: opts, botLevel
+} = {}) {
+  const world = createWorld(seed ?? (Math.random() * 1e9) | 0, { ...opts, botLevel });
   // -1 is "the player colour" to the renderer, used when nothing was picked.
   const me = addPlayer(world, { id: "me", name, ci: ci ?? -1 });
   fillBots(world, bots);
@@ -36,6 +38,9 @@ export function createLocalConnection({ name = "You", ci = null, bots = 14, seed
 
     sendAim(dx, dy) { setAim(world, "me", dx, dy); },
     sendAction(action) { queueAction(world, "me", action); },
+    // Practice only. The bots here are this tab's own, so the player may pick
+    // how hard they are, and change it between runs without a new arena.
+    setBotLevel(level) { return setBotLevel(world, level); },
 
     // Driven by the render loop; the network version ignores dt entirely.
     update(dt) {
