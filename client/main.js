@@ -133,7 +133,9 @@ const ui = createUI({
     conn?.setColour?.(ci);
   },
   // Practice keeps one arena across runs, so a new level is applied to it in
-  // place. A socket has no such method: live rooms' bots are the server's.
+  // place. A socket has no such method: a staked room's level was fixed when
+  // it opened, and a new pick takes effect at the next Start, in a room at
+  // that level.
   onBotLevel: level => conn?.setBotLevel?.(level),
   auth: {
     // Every one of these guards `api`, which is null in guest mode. Without
@@ -249,6 +251,9 @@ function connect(stake = PRACTICE) {
         name: NAME, ci: colourPick, world: MODES[0].world, botLevel: ui.getBotLevel()
       });
     }
+    // Read once, at Start. Every reconnect asks for the room this run began
+    // at, not whatever the menu has been changed to since.
+    const bots = ui.getBotLevel();
     const socket = createSocketConnection({
       ci: colourPick,
       // A fresh ticket for every attempt. The matchmaker answers with the
@@ -256,7 +261,7 @@ function connect(stake = PRACTICE) {
       // own server is the one.
       getTicket: async () => {
         const got = await requestTicket({
-          endpoint: matchUrl(), token: api?.token || null, stake, region: params.get("region")
+          endpoint: matchUrl(), token: api?.token || null, stake, region: params.get("region"), bots
         });
         return { url: got.url || url, ticket: got.ticket };
       }
@@ -820,7 +825,12 @@ function renderGoogleButton() {
 if (api) {
   api.restore().then(payload => applyAuth(payload)).catch(() => applyAuth(null));
   api.config()
-    .then(cfg => setupGoogle(cfg.googleClientId))
+    .then(cfg => {
+      // Staked rooms only have bots in test mode, so only then is there a
+      // level to choose for them.
+      ui.setLiveBots(!!cfg.liveBots);
+      setupGoogle(cfg.googleClientId);
+    })
     .catch(() => { /* server unreachable; the password form still works */ });
 } else {
   // No server, no accounts: hide the form rather than leaving a button that

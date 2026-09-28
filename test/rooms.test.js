@@ -85,11 +85,11 @@ const room = async id => (await health()).rooms.find(r => r.mode === id);
 const settle = (ms = 200) => new Promise(r => setTimeout(r, ms));
 
 // Joining takes a ticket from the matchmaker first, exactly as the client does.
-async function matched(token, stake, extra = {}) {
+async function matched(token, stake, extra = {}, bots = null) {
   const res = await fetch(`http://localhost:${PORT}/api/match`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ stake })
+    body: JSON.stringify(bots ? { stake, bots } : { stake })
   });
   const got = await res.json();
   return { type: "join", ticket: got.ticket, protocol: PROTOCOL_VERSION, ...extra };
@@ -97,14 +97,14 @@ async function matched(token, stake, extra = {}) {
 
 const { PROTOCOL_VERSION, PHASE_COUNTDOWN, decodeSnapshot } = await import("../shared/protocol.js");
 
-async function join(username, stake, protocol = PROTOCOL_VERSION) {
+async function join(username, stake, protocol = PROTOCOL_VERSION, bots = null) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password: "password123", displayName: username, dateOfBirth: "1990-01-01" })
   })).json().then(d => d.token);
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
-  await ws.deliver(await matched(token, stake, { protocol }));
+  await ws.deliver(await matched(token, stake, { protocol }, bots));
   await settle();
   return ws;
 }
@@ -155,6 +155,52 @@ s = await room("standard");
 // is not quite empty for a few seconds.
 check("Standard sheds its bots", s.inWorld <= 1, `${s.inWorld} left`);
 check("High stakes keeps its own", (await room("highstakes")).inWorld === 51);
+
+console.log("\n-- a staked room at the bot level you picked --");
+
+// Test mode puts bots in staked rooms, so a player picks their level there
+// too. The pick chooses the room, never changes one: you share it only with
+// players who picked the same.
+{
+  const cfg = await (await fetch(`http://localhost:${PORT}/api/config`)).json();
+  check("the page is told staked rooms have bots", cfg.liveBots === true, JSON.stringify(cfg));
+
+  const welcomeOf = ws => ws.out.filter(m => m !== "<binary>").map(JSON.parse)
+    .find(m => m.type === "welcome");
+  const standing = (await room("standard")).id;
+
+  const eve = await join("eve", 1_000_000, PROTOCOL_VERSION, "easy");
+  const eveIn = welcomeOf(eve);
+  check("asking for easy seats you in an easy room", eveIn?.botLevel === "easy", String(eveIn?.botLevel));
+  check("opened for it, rather than changing the standing hard room",
+    eveIn?.room && eveIn.room !== standing, `${eveIn?.room} vs ${standing}`);
+  const easyRoom = (await health()).rooms.find(r => r.id === eveIn?.room);
+  check("and it is filled with bots like any other", easyRoom?.inWorld === 101 && easyRoom.botLevel === "easy",
+    `${easyRoom?.inWorld} ${easyRoom?.botLevel}`);
+
+  const fay = await join("fay", 1_000_000, PROTOCOL_VERSION, "easy");
+  check("a second easy player shares it", welcomeOf(fay)?.room === eveIn?.room, welcomeOf(fay)?.room);
+
+  const gus = await join("gus", 1_000_000, PROTOCOL_VERSION, "hard");
+  const gusIn = welcomeOf(gus);
+  check("a hard player goes to the hard room", gusIn?.room === standing && gusIn.botLevel === "hard",
+    `${gusIn?.room} ${gusIn?.botLevel}`);
+
+  for (const ws of [eve, fay, gus]) {
+    await ws.deliver({ type: "leave" });
+    await ws.drop();
+  }
+  let closed = false;
+  for (let t = 0; t < 3000 && !closed; t += 50) {
+    await settle(50);
+    closed = !(await health()).rooms.some(r => r.id === eveIn?.room);
+  }
+  check("an easy room nobody is in closes", closed);
+  const left = (await health()).rooms.filter(r => r.mode === "standard");
+  check("and the mode keeps its room at the server's own level",
+    left.length === 1 && left[0].id === standing && left[0].botLevel === "hard",
+    left.map(r => `${r.id}:${r.botLevel}`).join());
+}
 
 console.log("\n-- the join frame fits the payload limit --");
 

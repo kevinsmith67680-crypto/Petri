@@ -6,6 +6,11 @@
 // short-lived signed ticket that the server will accept in place of anything
 // the client says about itself.
 //
+// Where a server fills its rooms with bots (test mode), the player's bot
+// difficulty is part of the room too, like the stake: everyone in a room
+// asked for the same bots, so nobody's pick is imposed on anyone else. A
+// server with no bots reports no level, and the request's is ignored there.
+//
 // Stateless. Everything it knows it asks for on each request: the session
 // and the player's current seat from the database, the rooms from the game
 // servers themselves. Any number of matchmakers can run side by side, and one
@@ -16,11 +21,14 @@
 // server that is its own and only server (see server/index.js):
 //
 //   { id, region, url,
-//     status():      { canOpen, rooms: [{ id, mode, taken, cap, between }] }
+//     status():      { canOpen, rooms: [{ id, mode, taken, cap, between, bots }] }
 //     reserve(req):  { ok: true, room, rsv, expiresAt } | { ok: false, code } }
+//
+// `bots` on a room is its bot level, or null where the room has no bots.
 // ---------------------------------------------------------------------------
 
 import { MODES } from "../../shared/modes.js";
+import { isBotLevel } from "../../shared/sim.js";
 import { signTicket } from "../ticket.js";
 
 export class MatchError extends Error {
@@ -66,7 +74,7 @@ export function createMatchmaker({
   // between rounds beats one mid-round, and a fuller room beats an emptier
   // one — so a region fills its rooms rather than spreading a quiet evening
   // across half-empty lobbies on every server it has.
-  async function rank(candidates, mode) {
+  async function rank(candidates, mode, bots) {
     const answers = await Promise.all(candidates.map(async server => {
       try {
         return { server, status: await withTimeout(server.status(), statusTimeoutMs) };
@@ -82,6 +90,8 @@ export function createMatchmaker({
       let best = null;
       for (const r of a.status.rooms || []) {
         if (r.mode !== mode.id || r.taken >= r.cap) continue;
+        // A room without bots has no level to disagree with.
+        if (bots && r.bots && r.bots !== bots) continue;
         if (!best ||
             (r.between !== best.between ? r.between : r.taken > best.taken)) best = r;
       }
@@ -97,13 +107,13 @@ export function createMatchmaker({
 
   // Ask each candidate in turn until one holds a seat. Rankings are a moment
   // old by the time they are acted on, so a refusal just moves to the next.
-  async function reserveOn(options, { account, mode }) {
+  async function reserveOn(options, { account, mode, bots }) {
     let answered = 0;
     for (const { server, room } of options) {
       let res;
       try {
         res = await withTimeout(
-          server.reserve({ account: account.id, stake: mode.stake, room }),
+          server.reserve({ account: account.id, stake: mode.stake, room, bots }),
           reserveTimeoutMs
         );
       } catch (err) {
@@ -127,9 +137,11 @@ export function createMatchmaker({
     return { answered };
   }
 
-  async function match({ token, stake, region }) {
+  async function match({ token, stake, region, bots }) {
     const mode = MODES.find(m => m.stake === Number(stake));
     if (!mode) throw new MatchError("stake", 400, "No game is played at that stake.");
+    // Not a level is no preference, not an error: an older client sends none.
+    const level = isBotLevel(bots) ? bots : null;
 
     // "No such session" and "could not check" are different answers. Folding
     // the second into the first tells a signed-in player to sign in whenever
@@ -158,7 +170,7 @@ export function createMatchmaker({
           "You are still in a game on another server. Try again in a few seconds.",
           { retryMs: 5000 });
       }
-      const got = await reserveOn([{ server: home, room: null }], { account, mode });
+      const got = await reserveOn([{ server: home, room: null }], { account, mode, bots: level });
       if (got.ticket) return got;
       throw new MatchError("unavailable", 503,
         "The server holding your game is not answering. Try again in a few seconds.",
@@ -166,8 +178,8 @@ export function createMatchmaker({
     }
 
     const where = regions.includes(region) ? region : defaultRegion;
-    const { scored, reachable } = await rank(servers.filter(s => s.region === where), mode);
-    const got = await reserveOn(scored, { account, mode });
+    const { scored, reachable } = await rank(servers.filter(s => s.region === where), mode, level);
+    const got = await reserveOn(scored, { account, mode, bots: level });
     if (got.ticket) return got;
 
     if (!reachable) {
