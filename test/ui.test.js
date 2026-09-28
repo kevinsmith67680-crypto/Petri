@@ -504,9 +504,28 @@ console.log("\n-- bot difficulty --");
   ui.setWagerAvailable(true);
   ui.setAccount({ balance: 5 * UNIT, pot: 0, staked: false, demo: true });
   $("stake1").click();
-  check("a paid tier hides the picker", ui.getStake() === STAKE_1_USDC && $("botLevels").hidden === true);
+  check("a paid tier hides the picker when its rooms have no bots",
+    ui.getStake() === STAKE_1_USDC && $("botLevels").hidden === true);
   $("stakeFree").click();
   check("practice brings it back", $("botLevels").hidden === false);
+
+  // Test mode: staked rooms have bots, and the pick chooses which room.
+  ui.setLiveBots(true);
+  check("practice says nothing about who you are seated with",
+    !/seated/.test($("levelNote").textContent), $("levelNote").textContent);
+  $("stake2").click();
+  check("with bots in staked rooms, a paid tier shows the picker",
+    ui.getStake() === STAKE_2_USDC && $("botLevels").hidden === false);
+  check("and says who you will share the room with",
+    /seated with players who picked the same/.test($("levelNote").textContent), $("levelNote").textContent);
+  check("the level picked is still the one in play", ui.getBotLevel() === "hard" && levelChecked("lvlHard"));
+  $("lvlNormal").click();
+  check("and can be changed on a paid tier", ui.getBotLevel() === "normal" && levelChecked("lvlNormal"));
+  check("keeping the seating line", /seated with/.test($("levelNote").textContent));
+  $("lvlHard").click();
+  ui.setLiveBots(false);
+  check("rooms without bots hide it again", $("botLevels").hidden === true);
+  $("stakeFree").click();
 
   const again = () => createUI({ settings, onStart() {}, onThemeChange() {}, onRamp() {}, auth: {} });
   check("a new page opens on the remembered level", again().getBotLevel() === "hard");

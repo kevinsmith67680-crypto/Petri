@@ -98,9 +98,11 @@ const PORT = Number(process.env.PORT) || 8080;
 const BOTS_OVERRIDE = process.env.BOTS !== undefined ? Number(process.env.BOTS) : null;
 
 // How hard those bots play: whether they split to engulf and shoot viruses.
-// See BOT_LEVELS in shared/sim.js. One setting for every room, because a room
-// is shared: no single player gets to choose what everyone else faces.
-// Players pick their own only in practice, which runs in their own tab.
+// See BOT_LEVELS in shared/sim.js. This is the level of the rooms the server
+// opens at startup, and of any room opened for a player who names none.
+// Players who do name one are seated only with others who named the same,
+// in a room opened at that level if need be (see seatFor), so nobody's pick
+// is imposed on anyone else.
 //
 // A typo falls back to the default rather than refusing to start. It is a
 // test-mode knob, and taking a server down over one is the wrong trade.
@@ -334,7 +336,8 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname.startsWith("/api/")) {
     await handleApi(req, res, {
-      accounts, backend, ramp, url, ip: ipOf(req), googleClientId: GOOGLE_CLIENT_ID
+      accounts, backend, ramp, url, ip: ipOf(req), googleClientId: GOOGLE_CLIENT_ID,
+      liveBots: TEST_MODE
     });
     return;
   }
@@ -536,16 +539,23 @@ const connectionsByIp = new Map();
 // an empty room closes as long as its mode has another open. The stake
 // still chooses the mode; which room of that mode is the server's decision,
 // so a client cannot pick its table.
+//
+// In test mode, where rooms have bots, the bot level is part of the choice
+// too: a player is only seated in a room at the level they asked for. It
+// picks which room, never what a room already is, so a level cannot be
+// changed under anyone. Without bots the level means nothing, and ignoring it
+// keeps real players from being split across lobbies over a setting that
+// changes nothing.
 
 let roomSerial = 0;
 const roomsOpened = new Map();   // mode id -> rooms ever opened, for naming
 
-function createRoom(mode) {
+function createRoom(mode, botLevel = BOT_LEVEL) {
   const n = (roomsOpened.get(mode.id) || 0) + 1;
   roomsOpened.set(mode.id, n);
   // Two rooms opened in the same millisecond must not share an orb layout.
   const world = createWorld((Date.now() + ++roomSerial) & 0xffffffff,
-    { ...mode.world, botLevel: BOT_LEVEL });
+    { ...mode.world, botLevel });
   const lobbyMax = LOBBY_MAX_OVERRIDE ?? mode.lobbyMax;
   const room = {
     // Numbers are never reused, so a log line naming standard-2 cannot mean
@@ -575,8 +585,8 @@ function createRoom(mode) {
 
 const rooms = new Map();
 
-function openRoom(mode) {
-  const room = createRoom(mode);
+function openRoom(mode, botLevel) {
+  const room = createRoom(mode, botLevel);
   rooms.set(room.id, room);
   return room;
 }
@@ -603,18 +613,23 @@ const betterSeat = (a, b) =>
 // whether one more world fits.
 const hasHeadroom = () => tickCost.avgMs < (1000 / HZ) * OPEN_ROOM_BELOW;
 
+// The level a player asked for, where it decides anything: only in test mode,
+// the one time a live room has bots. null is no preference.
+const askedLevel = bots => (TEST_MODE && isBotLevel(bots) ? bots : null);
+const levelFits = (room, level) => !level || room.world.botLevel === level;
+
 // Where a new arrival for this mode sits. A new room is opened only when every
 // existing one is full: filling rooms before opening more keeps a quiet server
 // from splitting its players across lobbies that never reach their minimum.
-function seatFor(mode) {
+function seatFor(mode, level = null) {
   let best = null;
   for (const room of rooms.values()) {
-    if (room.mode !== mode || !hasSeat(room)) continue;
+    if (room.mode !== mode || !hasSeat(room) || !levelFits(room, level)) continue;
     if (!best || betterSeat(room, best)) best = room;
   }
   if (best) return best;
   if (rooms.size >= MAX_ROOMS || !hasHeadroom()) return null;
-  const room = openRoom(mode);
+  const room = openRoom(mode, level ?? BOT_LEVEL);
   console.log(`[${room.id}] opened, ${rooms.size} of ${MAX_ROOMS} room(s) in use`);
   return room;
 }
@@ -623,11 +638,17 @@ function seatFor(mode) {
 // A lingering body still holds escrow the sweep has yet to refund, a start in
 // flight is still re-staking, and a reservation is a player on their way, so
 // any of them keeps the room open.
+//
+// The room a mode keeps is one at the server's own bot level. A room opened
+// at somebody's requested level is the first to go, so the standing room does
+// not quietly become whatever level was last asked for.
 function retireIdleRooms() {
   for (const room of rooms.values()) {
     if (room.clients.size || room.arriving || room.reserved.size ||
         room.lingering.length || room.starting) continue;
-    const sibling = [...rooms.values()].some(r => r !== room && r.mode === room.mode);
+    const standing = room.world.botLevel === BOT_LEVEL;
+    const sibling = [...rooms.values()].some(r => r !== room && r.mode === room.mode &&
+      (!standing || r.world.botLevel === BOT_LEVEL));
     if (!sibling) continue;
     rooms.delete(room.id);
     console.log(`[${room.id}] closed, ${rooms.size} of ${MAX_ROOMS} room(s) in use`);
@@ -656,19 +677,21 @@ function dropReservations(account) {
 // in the room it suggests if that still has one, else wherever this server
 // would seat them. A player whose body is still standing mid-round goes back
 // to that room whatever was suggested, and past a full cap: it is their own
-// seat they are returning to, not a new one.
-function reserveSeat({ account, stake, room: hint }) {
+// seat they are returning to, not a new one — and at its own bot level,
+// whatever they ask for now.
+function reserveSeat({ account, stake, room: hint, bots }) {
   if (shuttingDown) return { ok: false, code: "closing" };
   const mode = modeForStake(Number(stake));
   if (!mode || typeof account !== "string") return { ok: false, code: "bad" };
   dropReservations(account);
+  const level = askedLevel(bots);
 
   let room = resumableRoom(account, mode);
   if (!room) {
     const suggested = typeof hint === "string" ? rooms.get(hint) : null;
-    room = suggested && suggested.mode === mode && hasSeat(suggested)
+    room = suggested && suggested.mode === mode && hasSeat(suggested) && levelFits(suggested, level)
       ? suggested
-      : seatFor(mode);
+      : seatFor(mode, level);
   }
   if (!room) return { ok: false, code: "full" };
 
@@ -685,7 +708,9 @@ function localStatus() {
     region: REGION,
     canOpen: !shuttingDown && rooms.size < MAX_ROOMS && hasHeadroom(),
     rooms: shuttingDown ? [] : [...rooms.values()].map(r => ({
-      id: r.id, mode: r.mode.id, taken: seatsTaken(r), cap: r.lobbyMax, between: betweenRounds(r)
+      id: r.id, mode: r.mode.id, taken: seatsTaken(r), cap: r.lobbyMax, between: betweenRounds(r),
+      // A level only where there are bots for it to describe.
+      bots: TEST_MODE ? r.world.botLevel : null
     }))
   };
 }
@@ -1652,7 +1677,8 @@ wss.on("connection", (ws, req) => {
           lobbyMin: room.lobbyMin,
           lobbyMax: room.lobbyMax,
           test: TEST_MODE,
-          // Only meaningful in test mode, the one time a live room has bots.
+          // Only meaningful in test mode, the one time a live room has bots:
+          // the level this room was opened at, which the player asked for.
           botLevel: room.world.botLevel,
           demo: !ramp.isReal,
           stake,

@@ -267,5 +267,47 @@ console.log("\n-- a player already playing goes back where they are --");
   seats = {};
 }
 
+console.log("\n-- bot difficulty picks the room, where there are bots --");
+
+{
+  seats = {};
+  // A server in test mode reports each room's bot level. A room is only for
+  // players who asked for its level, even when it is the fuller one.
+  const withBots = (id, taken, bots) => ({ ...room(id, "standard", taken), bots });
+  const test = fakeServer("eu-1", "eu", [withBots("standard-1", 60, "hard"), withBots("standard-2", 5, "easy")]);
+  let got = await mm([test]).match({ token: "good", stake: 1_000_000, bots: "easy" });
+  check("easy is seated in the easy room, not the fuller hard one", got.room === "standard-2", got.room);
+  check("and the reservation carries the level", test.reserveCalls.at(-1).bots === "easy");
+
+  got = await mm([test]).match({ token: "good", stake: 1_000_000, bots: "hard" });
+  check("hard in the hard room", got.room === "standard-1", got.room);
+
+  got = await mm([test]).match({ token: "good", stake: 1_000_000, bots: "normal" });
+  check("no room at the level: the server is asked to open one",
+    got.room === "eu-1-new" && test.reserveCalls.at(-1).room === null &&
+    test.reserveCalls.at(-1).bots === "normal", got.room);
+
+  // No preference, or nonsense, is not a filter: an older client sends none.
+  got = await mm([test]).match({ token: "good", stake: 1_000_000 });
+  check("no level asked for: any room, fullest first", got.room === "standard-1", got.room);
+  got = await mm([test]).match({ token: "good", stake: 1_000_000, bots: "brutal" });
+  check("an unknown level is no preference, not a refusal", got.room === "standard-1", got.room);
+  check("and is not passed on", test.reserveCalls.at(-1).bots === null);
+
+  // Without bots there is nothing for a level to describe. Splitting real
+  // players across lobbies over it would only stop rounds filling.
+  const live = fakeServer("eu-2", "eu", [withBots("standard-1", 40, null)]);
+  got = await mm([live]).match({ token: "good", stake: 1_000_000, bots: "hard" });
+  check("a room with no bots takes any level", got.room === "standard-1", got.room);
+
+  // Already seated: the server that holds them decides, level or no level.
+  seats = { "acct-ada": { holder: "eu-1#1" } };
+  got = await mm([test]).match({ token: "good", stake: 1_000_000, bots: "easy" });
+  check("a player already seated still goes home, with the level passed along",
+    got.server === "eu-1" && test.reserveCalls.at(-1).room === null &&
+    test.reserveCalls.at(-1).bots === "easy");
+  seats = {};
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -65,7 +65,7 @@ const bearer = req => {
 
 // Returns true if it handled the request.
 export async function handleApi(req, res, ctx) {
-  const { accounts, backend, ramp, url, ip, googleClientId } = ctx;
+  const { accounts, backend, ramp, url, ip, googleClientId, liveBots = false } = ctx;
   if (!url.pathname.startsWith("/api/")) return false;
 
   const route = url.pathname.slice(5);
@@ -92,7 +92,10 @@ export async function handleApi(req, res, ctx) {
     if (route === "config" && req.method === "GET") {
       return send(res, 200, {
         googleClientId: googleClientId || null,
-        demo: !ramp.isReal
+        demo: !ramp.isReal,
+        // Whether staked rooms have bots (test mode), and so whether a bot
+        // level can be asked for when matching into one.
+        liveBots: !!liveBots
       }), true;
     }
 

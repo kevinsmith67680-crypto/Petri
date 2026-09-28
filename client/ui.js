@@ -622,7 +622,7 @@ export function createUI({
     // it anyway and the player would only find out at Start.
     if (stakeBlockedBy(units)) return;
     stake = units;
-    el.levels.hidden = units !== PRACTICE;
+    paintLevel();
     if (!el.stakeNote.classList.contains("quiet")) showStakeNote(null);
     for (const [value, get] of stakeButtons) {
       get().setAttribute("aria-checked", String(units === value));
@@ -649,8 +649,10 @@ export function createUI({
 
   // ── bot difficulty ────────────────────────────────────────────────────────
   //
-  // Practice only. The live rooms are other people, and in test mode their
-  // bots are the server's to set (BOT_DIFFICULTY), never one player's.
+  // Practice bots are this tab's own. A staked room is shared, so there the
+  // pick chooses which room: the matchmaker seats the player only with others
+  // who picked the same level. That only means anything where staked rooms
+  // have bots at all (test mode), which the server says in /api/config.
 
   const LEVEL_KEY = "engulfs.botLevel";
   const levelButtons = [
@@ -666,15 +668,29 @@ export function createUI({
     hard: "They split from further out and aim where you are going. Pass mass 127 and they line viruses up to burst you."
   };
 
+  // Said once a staked room is joined at a level, so the choice is not a
+  // surprise to someone expecting the practice arena's rules.
+  const LEVEL_SEATING = "In a staked game you are seated with players who picked the same.";
+
   let botLevel = DEFAULT_BOT_LEVEL;
+  let liveBots = false;
   try {
     const saved = localStorage.getItem(LEVEL_KEY);
     if (isBotLevel(saved)) botLevel = saved;
   } catch { /* storage blocked; the default stands */ }
 
   function paintLevel() {
+    const practice = stake === PRACTICE;
+    // Hidden, not locked, where there is nothing to choose: a staked room
+    // with no bots in it.
+    el.levels.hidden = !practice && !liveBots;
     for (const [id, btn] of levelButtons) btn.setAttribute("aria-checked", String(id === botLevel));
-    el.levelNote.textContent = LEVEL_NOTE[botLevel];
+    el.levelNote.textContent = practice ? LEVEL_NOTE[botLevel] : `${LEVEL_NOTE[botLevel]} ${LEVEL_SEATING}`;
+  }
+
+  function setLiveBots(on) {
+    liveBots = !!on;
+    paintLevel();
   }
 
   function setBotLevel(level) {
@@ -1015,6 +1031,7 @@ export function createUI({
     setColour, renderLastGame,
     getStake: () => stake,
     getBotLevel: () => botLevel,
+    setLiveBots,
     isSignedIn: () => signedIn,
     // The Google button lives outside this form but can still CREATE an
     // account, so the caller has to be able to hand the declared date over

@@ -67,7 +67,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 |---|---|---|
 | `PORT` | 8080 | Listen port |
 | `BOTS` | 0; in test mode each room fills to its own lobby size | Overrides both rooms. Bots exist only while a human is in the room |
-| `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard` for the test-mode rooms' bots — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
+| `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard`: the level of the test-mode rooms a server opens by default. Players who pick another are seated in rooms at their own level — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
@@ -612,7 +612,7 @@ A server that cannot hold its tick feels identical to bad netcode from the playe
 A player never picks a server or a room. The client asks the matchmaker for a seat; the matchmaker picks a game server and a room, has that server **reserve** the seat, and answers with where to connect and a short-lived **signed ticket**. The socket presents the ticket and nothing else.
 
 ```
-client ──POST /match (Bearer session, stake, region)──▶ matchmaker
+client ──POST /match (Bearer session, stake, region, bots)──▶ matchmaker
                                                          │ session + seat: Postgres
                                                          │ rooms: GET  /internal/status   (each server in the region)
                                                          │ seat:  POST /internal/reserve  (the best one)
@@ -623,7 +623,7 @@ client ──WebSocket url, join { ticket }──▶ game server: checks the sig
 
 **The ticket** (`server/ticket.js`) is `base64url(claims).HMAC-SHA256`, signed with `MATCH_SECRET`: the server id and room (the room's address), a single-use reservation id, the account, its display name, the stake and region, and an expiry 30 seconds out. The join costs no database lookup and a client cannot choose its own server, room, stake or name. A ticket is spent by the first join that presents it; an expired, forged, replayed or misdirected one is refused with close code 4003, and the client goes back to the matchmaker. Tickets and internal requests are MACed over different purpose prefixes, so one can never be passed off as the other.
 
-**Grouping.** The stake picks the mode; the region picks the servers (an unknown or missing region gets `DEFAULT_REGION`). Across a region the matchmaker applies the rule each server applies to its own rooms: an existing room with a free seat beats opening a new one, between rounds beats mid-round, fuller beats emptier — so a quiet region fills rooms instead of scattering players across half-empty lobbies. A server that does not answer within 1.5 seconds is skipped; one that refuses a reservation (its picture was a moment stale) passes the player to the next.
+**Grouping.** The stake picks the mode; the region picks the servers (an unknown or missing region gets `DEFAULT_REGION`). Where a server has bots in its rooms (test mode), the bot level picks among that mode's rooms too — see [Bot difficulty](#bot-difficulty). Across a region the matchmaker applies the rule each server applies to its own rooms: an existing room with a free seat beats opening a new one, between rounds beats mid-round, fuller beats emptier — so a quiet region fills rooms instead of scattering players across half-empty lobbies. A server that does not answer within 1.5 seconds is skipped; one that refuses a reservation (its picture was a moment stale) passes the player to the next.
 
 **Reservations** count as taken seats until the ticket is presented or lapses, so a burst of matches cannot overfill a room, and a room with reservations outstanding is not closed. One per account per server: asking again replaces the last.
 
@@ -751,7 +751,13 @@ Bots come in three levels, set per world in `BOT_LEVELS` (`shared/sim.js`). Ever
 
 **A virus shot is set up from behind the virus.** The child flies along the line the throw came in on, so the bot stands on the far side of the virus on the line through its target and throws down that line. The heading of the throw decides where the virus goes, not the bot's exact spot. A target has to be bigger than mass 127 (a virus has to be able to burst it), and the bot needs enough mass to pay for the throws. A bot big enough to pop on the virus itself only takes a shot it is already behind. While a bot is throwing it holds its ground longer against a larger cell closing in, because the virus is between them and anything big enough to eat the bot pops on it first.
 
-**Who picks the level.** In practice the player does, in the menu under the Practice tier. Practice bots run in their own tab, so the choice is theirs. It is remembered in `localStorage` and applies to the running arena immediately. The picker is hidden on a paid tier. Live rooms are shared, so their bots, which only exist in test mode, take `BOT_DIFFICULTY` on the server. The level is reported in `/health` and the welcome message, and the test-mode banner names it.
+**Who picks the level.** The player, in the menu under the stake tiers. It is remembered in `localStorage`.
+
+- **Practice:** the bots run in the player's own tab, so the level applies to the running arena immediately.
+- **Staked games** (`?mode=online`, signed in): a room is shared, so a player's pick cannot change the room. Instead it **chooses the room**, like the stake does. The client sends `bots` with its `/match` request; the matchmaker ranks only rooms at that level, and a server with no room at that level opens one (`seatFor` in `server/index.js`). Everyone in a staked room picked the same level. A new pick takes effect at the next Start, and a reconnect asks for the level the run started at. A player whose body is still standing mid-round goes back to it, whatever level they now ask for.
+- **Only where there are bots.** Staked rooms only have bots in test mode. Without it the server reports no level for its rooms and ignores the one asked for, so real players are never split across lobbies over a setting that changes nothing. `GET /api/config` says which (`liveBots`), and the menu hides the picker on staked tiers when it is false.
+
+`BOT_DIFFICULTY` is the level of the rooms a server opens at startup, and of a room opened for a client that names no level. A mode always keeps one room at that level: when rooms go idle, one opened at a requested level closes first. The level of each room is in `/health` and `/internal/status`, and the welcome message tells the client, whose test-mode banner names it.
 
 Measured with 100 bots in the Standard arena over three minutes, averaged over three seeds: 1.80ms of simulation a tick at easy, 2.41ms at normal and 2.67ms at hard. Most of the difference comes from the extra cells that splits and bursts put on the board.
 
@@ -950,7 +956,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 |---|---|---|
 | `LOBBY_MIN` | 100 ready | **1 ready** |
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
-| `BOT_DIFFICULTY` | — (no bots) | `normal`; set `easy` or `hard` to change how they attack |
+| `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
 | `ROUND_SECONDS` | 600 | **120** |
 | `INTERMISSION_SECONDS` | 15 | **8** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |

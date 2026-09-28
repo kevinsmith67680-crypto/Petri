@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The matchmaker as its own service.   node server/matchmaker/index.js
 //
-//   POST /match     Authorization: Bearer <session>   { stake, region? }
+//   POST /match     Authorization: Bearer <session>   { stake, region?, bots? }
 //                   -> { ticket, url, server, region, room, mode, expiresAt }
 //   GET  /regions   the regions it can place players in
 //   GET  /health    whether each game server is answering

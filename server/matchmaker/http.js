@@ -48,7 +48,8 @@ export async function answerMatch(req, send, matchmaker, { allowed = () => true,
     return send(200, await matchmaker.match({
       token: header.startsWith("Bearer ") ? header.slice(7) : null,
       stake: body?.stake,
-      region: typeof body?.region === "string" ? body.region : null
+      region: typeof body?.region === "string" ? body.region : null,
+      bots: typeof body?.bots === "string" ? body.bots : null
     }));
   } catch (err) {
     if (err instanceof MatchError) {

@@ -18,7 +18,9 @@ export class MatchRefused extends Error {
   }
 }
 
-export async function requestTicket({ endpoint, token, stake, region = null, timeoutMs = 6000 }) {
+export async function requestTicket({
+  endpoint, token, stake, region = null, bots = null, timeoutMs = 6000
+}) {
   let res;
   try {
     res = await fetch(endpoint, {
@@ -27,7 +29,9 @@ export async function requestTicket({ endpoint, token, stake, region = null, tim
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {})
       },
-      body: JSON.stringify(region ? { stake, region } : { stake }),
+      // bots: the difficulty asked for. The matchmaker seats the player only
+      // with others who asked for the same, where the server has bots at all.
+      body: JSON.stringify({ stake, ...(region ? { region } : {}), ...(bots ? { bots } : {}) }),
       cache: "no-store",
       signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout
         ? AbortSignal.timeout(timeoutMs) : undefined
