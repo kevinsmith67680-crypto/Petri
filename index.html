@@ -615,6 +615,18 @@
   .progress em{ font-style:normal; font-weight:600; }
   .xpbar{ height:6px; border-radius:3px; background:var(--key); border:1px solid var(--line); overflow:hidden; }
   .xpbar span{ display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease; }
+
+  /* The same figures on the lobby card, sized to its blocks rather than to
+     the account panel: a heading that carries the level, a heavier bar. */
+  .lvl-head{ display:flex; align-items:baseline; justify-content:space-between; gap:15px; }
+  .lvl-head h2{ margin-bottom:0; }
+  .lvl-head i{ font-style:normal; font-size:16.2px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #lobbyProgress .xpbar{ height:8px; border-radius:4px; margin:11.2px 0 15px; }
+  #lobbyProgress[hidden]{ display:none; }
+  .lobby-gain{ margin-top:12.5px; font-size:15.6px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .lobby-gain[hidden]{ display:none; }
+  .lobby-gain .up{ color:var(--accent); }
+  .lobby-gain .down{ color:var(--muted); }
   .career{ margin-top:17.5px; display:none; grid-template-columns:1fr 1fr; gap:10px 22.5px; font-size:16.9px; }
   .career.on{ display:grid; }
   .career div{ display:flex; justify-content:space-between; gap:12.5px; }
@@ -1325,6 +1337,21 @@
             <button id="btnLobbyMenu" type="button">Return to menu</button>
           </div>
           <p class="lobby-hint" id="lobbyHint">The match begins as soon as enough players are ready.</p>
+        </div>
+
+        <!-- XP and rank while waiting: the figures from the menu's account
+             panel, what a win is worth, and what the last round earned.
+             Filled in from client/ui.js (renderProgress, showProgressGain). -->
+        <div class="block" id="lobbyProgress" hidden>
+          <div class="lvl-head"><h2 id="lobbyLvl">Level 1</h2><i id="lobbyXp">0 / 100 XP</i></div>
+          <div class="xpbar" role="progressbar" id="lobbyXpBar" aria-label="Progress to the next level"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="lobbyXpFill"></span></div>
+          <div class="facts">
+            <div><span>To the next level</span><em id="lobbyXpNext">100 XP</em></div>
+            <div><span>A top-5 finish earns</span><em id="lobbyXpWin">25–100 XP</em></div>
+            <div><span>Rank</span><em id="lobbyRank">Silver<small>1000</small></em></div>
+          </div>
+          <p class="lobby-gain" id="lobbyGain" hidden></p>
         </div>
 
         <!-- The player's own cell, edited while they wait. The preview is

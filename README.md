@@ -671,7 +671,7 @@ Neither is money. Neither moves a balance, and neither is affected by the stake.
 
 The scoring is a pure function, `scoreRound` in `server/awards.js`, and `test/progress.test.js` pins its edge cases: the respawn, the walk-out, the same account twice. The server writes one round's results in one statement, `recordProgress`, which moves every column by increment. Two writers can never lose each other's update, and a result is written for players who have already left.
 
-**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
+**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. The lobby card shows the same tracker under the ready button, with the XP left to the next level, what a top-5 finish earns, and what the last round was worth. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
 
 ### Skill matchmaking
 

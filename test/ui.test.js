@@ -559,13 +559,37 @@ console.log("\n-- level and rank --");
     $("rankName").textContent === "Gold" && $("rankRating").textContent === "1184");
   check("a new rating is said to be provisional",
     $("rankNote").hidden === false && /7 more rated rounds/.test($("rankNote").textContent), $("rankNote").textContent);
+
+  // The same figures on the lobby card, where the ready button is.
+  check("the lobby card shows the tracker too", $("lobbyProgress").hidden === false);
+  check("with the same level and XP",
+    $("lobbyLvl").textContent === "Level 3" && $("lobbyXp").textContent === "150 / 300 XP",
+    `${$("lobbyLvl").textContent} ${$("lobbyXp").textContent}`);
+  check("and the same bar", $("lobbyXpFill").style.width === "50%" &&
+    $("lobbyXpBar").getAttribute("aria-valuenow") === "50");
+  check("it says how much is left to the next level", $("lobbyXpNext").textContent === "150 XP",
+    $("lobbyXpNext").textContent);
+  check("what a win is worth, from the table the server awards from",
+    $("lobbyXpWin").textContent === "25–100 XP", $("lobbyXpWin").textContent);
+  check("and the rank with its rating", $("lobbyRank").innerHTML === "Gold<small>1184</small>",
+    $("lobbyRank").innerHTML);
+
   ui.renderProgress({ xp: 0, rating: 1000, ratedGames: 10 });
   check("a settled one is not", $("rankNote").hidden === true);
+  check("a new account's lobby card needs the full 100 XP for level 2",
+    $("lobbyXpNext").textContent === "100 XP" && $("lobbyXpFill").style.width === "0%");
   check("a new account starts at level 1, Silver",
     $("lvlNum").textContent === "Level 1" && $("rankName").textContent === "Silver");
 
+  ui.showProgressGain({ gained: 70, ratingChange: -8.4, rated: true, xp: 70 });
+  check("the lobby card repeats what the last round was worth",
+    $("lobbyGain").hidden === false && /^Last round: /.test($("lobbyGain").innerHTML) &&
+    /\+70 XP/.test($("lobbyGain").innerHTML) && /Rating -8/.test($("lobbyGain").innerHTML),
+    $("lobbyGain").innerHTML);
+
   ui.renderAuth(null);
   check("signing out hides it", $("progressBox").hidden === true);
+  check("from the lobby card as well", $("lobbyProgress").hidden === true && $("lobbyGain").hidden === true);
 
   // The round-over card.
   ui.showRoundEnd({ number: 1, standings: [], nextIn: 5, myName: "Ada" });
@@ -581,7 +605,8 @@ console.log("\n-- level and rank --");
   check("a loss shows only the rating falling", /Rating -11/.test($("roundGain").innerHTML) &&
     !/XP/.test($("roundGain").innerHTML), $("roundGain").innerHTML);
   ui.showProgressGain({ gained: 0, ratingChange: 0, rated: false, xp: 150 });
-  check("nothing earned and nothing rated shows nothing", $("roundGain").hidden === true);
+  check("nothing earned and nothing rated shows nothing",
+    $("roundGain").hidden === true && $("lobbyGain").hidden === true);
   ui.showProgressGain({ gained: 70, rated: true, ratingChange: 5, xp: 170 });
   ui.showRoundEnd({ number: 2, standings: [], nextIn: 5, myName: "Ada" });
   check("the next round's card does not show the last round's gain", $("roundGain").hidden === true);
