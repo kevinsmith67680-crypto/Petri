@@ -12,7 +12,7 @@
 import crypto from "node:crypto";
 import { Ledger } from "../ledger.js";
 import { DEFAULT_RAKE_BPS } from "../../shared/wager.js";
-import { emptyStats } from "./pg.js";
+import { emptyStats, emptyProgress } from "./pg.js";
 
 // Keep in step with the `won` generated column in server/db/schema.sql.
 // Changing it here alone will silently desync the two backends; the contract
@@ -164,6 +164,30 @@ export class MemoryRepo {
   async refund(accountId) { return this.ledger.refund(accountId); }
   async potOf(accountId) { return this.ledger.potOf(accountId); }
   async balanceOf(accountId) { return this.ledger.balanceOf(accountId); }
+
+  // ── progress ──────────────────────────────────────────────────────────────
+  // Same shape and the same increments as PgRepo; test/backend.test.js runs
+  // one set of assertions against both.
+
+  async getProgress(accountId) {
+    const p = this.store.data.progress?.[accountId];
+    return p ? { ...p } : emptyProgress();
+  }
+
+  async recordProgress(results) {
+    const all = (this.store.data.progress ||= {});
+    const out = new Map();
+    for (const r of results) {
+      const p = all[r.accountId] || emptyProgress();
+      p.xp += Math.max(0, Math.round(r.xp || 0));
+      p.rating += Number(r.ratingChange) || 0;
+      p.ratedGames += r.rated ? 1 : 0;
+      all[r.accountId] = p;
+      out.set(r.accountId, { ...p });
+    }
+    this.store.dirty = true;
+    return out;
+  }
 
   // ── matches and stats ─────────────────────────────────────────────────────
   // The streak rules here must match petri.record_match exactly. They are

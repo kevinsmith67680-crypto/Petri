@@ -380,6 +380,12 @@
   .standings div.you span:first-child{ color:var(--accent); }
   .standings em{ font-style:normal; color:var(--muted); }
   .next{ margin-top:18px; font-size:13px; color:var(--muted); }
+  /* What the round was worth: XP and the rating change, filled in when the
+     server has written them, a moment after the standings arrive. */
+  .gain{ margin-top:14px; font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .gain[hidden]{ display:none; }
+  .gain .up{ color:var(--accent); }
+  .gain .down{ color:var(--muted); }
   /* The countdown leads the standings card instead of trailing the button, so
      it is read before the scores rather than after them. Scoped to the id
      because .next is shared with the lobby hint, which is still a footnote. */
@@ -598,6 +604,17 @@
   .rename input{ flex:1; }
 
 
+  /* Level and rank, under the name. The bar is the only drawn element in the
+     account panel, so it stays thin and uses the accent it shares with the
+     selected stake. */
+  .progress{ margin-top:17.5px; display:grid; gap:9px; font-size:16.9px; }
+  .progress[hidden]{ display:none; }
+  .progress .row3{ display:flex; align-items:baseline; justify-content:space-between; gap:12.5px; }
+  .progress b{ font-weight:600; font-variant-numeric:tabular-nums; }
+  .progress i{ font-style:normal; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .progress em{ font-style:normal; font-weight:600; }
+  .xpbar{ height:6px; border-radius:3px; background:var(--key); border:1px solid var(--line); overflow:hidden; }
+  .xpbar span{ display:block; height:100%; width:0; background:var(--accent); transition:width .4s ease; }
   .career{ margin-top:17.5px; display:none; grid-template-columns:1fr 1fr; gap:10px 22.5px; font-size:16.9px; }
   .career.on{ display:grid; }
   .career div{ display:flex; justify-content:space-between; gap:12.5px; }
@@ -1127,6 +1144,16 @@
             </div>
           </div>
 
+          <!-- Filled in from client/ui.js: XP and levels from winning live
+               rounds, and the rating matchmaking seats you by. -->
+          <div class="progress" id="progressBox" hidden>
+            <div class="row3"><b id="lvlNum">Level 1</b><i id="lvlXp">0 / 100 XP</i></div>
+            <div class="xpbar" role="progressbar" id="xpBar" aria-label="Progress to the next level"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="xpFill"></span></div>
+            <div class="row3"><i>Rank</i><span><em id="rankName">Silver</em> <i id="rankRating">1000</i></span></div>
+            <i id="rankNote" hidden></i>
+          </div>
+
           <div class="career" id="careerBox">
             <div><i>Matches</i><em id="stMatches">0</em></div>
             <div><i>Time played</i><em id="stTime">0m</em></div>
@@ -1343,6 +1370,7 @@
     <h2 id="roundTitle">Round over</h2>
     <p class="next" id="nextRound">Next round starting…</p>
     <p id="roundBlurb">Ten minutes are up. The top five are paid; everyone else loses their stake.</p>
+    <p class="gain" id="roundGain" hidden aria-live="polite"></p>
     <div class="standings" id="standingsList"></div>
     <!-- Opting in here, while the standings are still up, means the next
          round starts the moment the clock runs out instead of dropping

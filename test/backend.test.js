@@ -17,6 +17,7 @@ import { MemoryStore } from "../server/store.js";
 import { MemoryRepo } from "../server/db/memory.js";
 import { Accounts } from "../server/accounts.js";
 import { UNIT, STAKE_1_USDC } from "../shared/wager.js";
+import { START_RATING } from "../shared/progress.js";
 
 let failures = 0;
 function check(label, cond, detail = "") {
@@ -208,6 +209,34 @@ async function runContract(name, backend) {
   const emptyPlayer = await backend.getStats(ada.id);
   check("a player with no matches gets zeroed stats",
     emptyPlayer.matches === 0 && emptyPlayer.bestPosition === null);
+
+  // ── progress: XP and rating ──
+  const fresh = await backend.getProgress(ada.id);
+  check("a player who has never finished a round has no XP, at the starting rating",
+    fresh.xp === 0 && fresh.rating === START_RATING && fresh.ratedGames === 0, JSON.stringify(fresh));
+
+  let after = await backend.recordProgress([
+    { accountId: ada.id, xp: 100, ratingChange: 12.5, rated: true },
+    { accountId: bob.id, xp: 0, ratingChange: -12.5, rated: true }
+  ]);
+  check("a round's results come back per account",
+    after.get(ada.id)?.xp === 100 && after.get(bob.id)?.rating === START_RATING - 12.5,
+    JSON.stringify([...after]));
+  after = await backend.recordProgress([
+    { accountId: ada.id, xp: 70, ratingChange: -2.25, rated: true },
+    { accountId: bob.id, xp: 25, ratingChange: 0, rated: false }
+  ]);
+  const adaNow = await backend.getProgress(ada.id);
+  check("XP adds up across rounds", adaNow.xp === 170, String(adaNow.xp));
+  check("the rating moves by the change, not to it", Math.abs(adaNow.rating - (START_RATING + 10.25)) < 1e-9,
+    String(adaNow.rating));
+  check("rated rounds are counted", adaNow.ratedGames === 2, String(adaNow.ratedGames));
+  const bobNow = await backend.getProgress(bob.id);
+  check("an unrated round adds XP without counting as rated",
+    bobNow.xp === 25 && bobNow.ratedGames === 1, JSON.stringify(bobNow));
+  check("nothing to record is not an error", (await backend.recordProgress([])).size === 0);
+  after = await backend.recordProgress([{ accountId: ada.id, xp: -50, ratingChange: 0, rated: false }]);
+  check("XP never goes down", after.get(ada.id)?.xp === 170, String(after.get(ada.id)?.xp));
 
   // ── rename ──
   const newName = `Ada ${uniq()}`;

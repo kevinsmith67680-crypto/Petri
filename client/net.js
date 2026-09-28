@@ -114,7 +114,7 @@ export function createSocketConnection({
   const backoffMs = n => BACKOFF[n] ?? 5000;
 
   const listeners = {
-    event: [], welcome: [], close: [], error: [], account: [], round: [],
+    event: [], welcome: [], close: [], error: [], account: [], round: [], progress: [],
     connecting: [], connected: [], reconnecting: [], reconnected: []
   };
 
@@ -404,6 +404,8 @@ export function createSocketConnection({
       } else if (msg.type === "round_end" || msg.type === "round_start" ||
                  msg.type === "lobby") {
         emit("round", msg);
+      } else if (msg.type === "progress") {
+        emit("progress", msg);
       }
       return;
     }

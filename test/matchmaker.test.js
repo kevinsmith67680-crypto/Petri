@@ -309,5 +309,72 @@ console.log("\n-- bot difficulty picks the room, where there are bots --");
   seats = {};
 }
 
+console.log("\n-- skill: similar ratings share a room --");
+
+{
+  seats = {};
+  // Ada is rated 1400, Bob 900. Rooms describe themselves by the mean rating
+  // of the people in them and how far from it they will seat someone.
+  const ratings = { "acct-ada": 1400, "acct-bob": 900 };
+  const skilled = (servers, opts = {}) => mm(servers, { findSkill: async id => ratings[id] ?? null, ...opts });
+  const rated = (id, taken, rating, window = 200, between = true) =>
+    ({ ...room(id, "standard", taken, between), skill: { rating, window } });
+
+  // The fuller room is the weaker one; skill beats fill.
+  const eu = fakeServer("eu-1", "eu", [rated("standard-1", 90, 950), rated("standard-2", 10, 1380)]);
+  let got = await skilled([eu]).match({ token: "good", stake: 1_000_000 });
+  check("a strong player goes to the room of strong players, though it is emptier",
+    got.room === "standard-2", got.room);
+  check("and the reservation carries their rating", eu.reserveCalls.at(-1).rating === 1400);
+  got = await skilled([eu]).match({ token: "bob", stake: 1_000_000 });
+  check("a weaker one to the room that suits them", got.room === "standard-1", got.room);
+
+  // Several rooms fit: the usual order decides among them.
+  const two = fakeServer("eu-1", "eu", [rated("standard-1", 10, 1350), rated("standard-3", 40, 1450)]);
+  got = await skilled([two]).match({ token: "good", stake: 1_000_000 });
+  check("among rooms that fit, the fuller one", got.room === "standard-3", got.room);
+
+  // Nothing fits: open a room for them rather than drop them among beginners.
+  const weak = fakeServer("eu-1", "eu", [rated("standard-1", 30, 900)], { canOpen: true });
+  got = await skilled([weak]).match({ token: "good", stake: 1_000_000 });
+  check("with no room near their rating, a new one is opened",
+    got.room === "eu-1-new" && weak.reserveCalls.at(-1).room === null, got.room);
+
+  // Nothing fits and nothing can open: the nearest room, never a refusal.
+  const shut = fakeServer("eu-1", "eu",
+    [rated("standard-1", 30, 900), rated("standard-2", 30, 1100)], { canOpen: false });
+  got = await skilled([shut]).match({ token: "good", stake: 1_000_000 });
+  check("with no room to open, the nearest rating wins the seat", got.room === "standard-2", got.room);
+
+  // A lobby that has waited has a wider window, reported by its server.
+  const wide = fakeServer("eu-1", "eu", [rated("standard-1", 30, 900, 800)], { canOpen: true });
+  got = await skilled([wide]).match({ token: "good", stake: 1_000_000 });
+  check("a room whose window has widened takes them in", got.room === "standard-1", got.room);
+
+  // An empty room fits anyone.
+  const empty = fakeServer("eu-1", "eu", [{ ...room("standard-1", "standard", 0), skill: { rating: null, window: null } }]);
+  got = await skilled([empty]).match({ token: "good", stake: 1_000_000 });
+  check("an empty room fits anyone", got.room === "standard-1", got.room);
+
+  // Across servers: a fitting room anywhere in the region beats opening one.
+  const a = fakeServer("eu-a", "eu", [rated("standard-1", 60, 900)], { canOpen: true });
+  const b = fakeServer("eu-b", "eu", [rated("standard-7", 5, 1420)]);
+  got = await skilled([a, b]).match({ token: "good", stake: 1_000_000 });
+  check("a room that fits on another server beats opening one here",
+    got.server === "eu-b" && got.room === "standard-7", `${got.server} ${got.room}`);
+
+  // No rating, or a failed lookup: seated by fill, as before ratings existed.
+  got = await mm([eu]).match({ token: "good", stake: 1_000_000 });
+  check("without a rating, the fuller room as before", got.room === "standard-1", got.room);
+  got = await skilled([eu], { findSkill: async () => { throw new Error("db down"); } })
+    .match({ token: "good", stake: 1_000_000 });
+  check("a failed rating lookup costs the skill match, not the seat", got.room === "standard-1", got.room);
+
+  // A server that does not report skill (older code) is treated as fitting.
+  const old = fakeServer("eu-1", "eu", [room("standard-1", "standard", 40)]);
+  got = await skilled([old]).match({ token: "good", stake: 1_000_000 });
+  check("a room with no skill report fits", got.room === "standard-1", got.room);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

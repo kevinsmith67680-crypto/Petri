@@ -97,6 +97,7 @@ function refreshStats() {
   api.stats()
     .then(r => {
       ui.renderCareer(r.stats);
+      ui.renderProgress(r.progress || null);
       ui.renderLastGame(r.matches?.[0] || null);
     })
     .catch(() => {});
@@ -284,6 +285,13 @@ function connect(stake = PRACTICE) {
       ui.setNextReady(ready);
       // With no pick of their own, show the player the colour they were given.
       if (colourPick === null) ui.setColour(w.ci);
+      if (w.progress) ui.renderProgress(w.progress);
+    });
+    // Written at the whistle, a moment after the standings: XP for a paid
+    // place, and the rating change against everyone who played the round.
+    on("progress", msg => {
+      ui.renderProgress(msg);
+      ui.showProgressGain(msg);
     });
     on("reconnecting", ({ attempt, of }) => {
       // The game keeps its last frame on screen while this runs; it is a

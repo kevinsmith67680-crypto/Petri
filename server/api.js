@@ -152,11 +152,17 @@ export async function handleApi(req, res, ctx) {
 
     if (route === "stats" && req.method === "GET") {
       const account = await withAccount();
-      const [stats, matches] = await Promise.all([
+      const [stats, matches, progress] = await Promise.all([
         backend.getStats(account.id),
-        backend.getMatches(account.id, 10)
+        backend.getMatches(account.id, 10),
+        // Not allowed to take the career figures down with it: a database
+        // without migration 008 still answers the rest of this.
+        backend.getProgress(account.id).catch(err => {
+          console.error("progress lookup:", err.message);
+          return null;
+        })
       ]);
-      return send(res, 200, { stats, matches }), true;
+      return send(res, 200, { stats, matches, progress }), true;
     }
 
     // Public: no session needed, and it exposes display names only.

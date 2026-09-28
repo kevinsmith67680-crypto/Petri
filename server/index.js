@@ -47,9 +47,12 @@ import {
 import { PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
+import { START_RATING, fitsSkill } from "../shared/progress.js";
+import { scoreRound } from "./awards.js";
 import { createRamp, InsufficientFunds } from "./ledger.js";
 import { createStore } from "./store.js";
 import { MemoryRepo } from "./db/memory.js";
+import { emptyProgress } from "./db/pg.js";
 import { Accounts } from "./accounts.js";
 import { handleApi } from "./api.js";
 import { verifyTicket, verifyRequest, TicketError, assertSecret } from "./ticket.js";
@@ -160,6 +163,15 @@ const MAX_ROOMS = Math.max(MODES.length, envInt("MAX_ROOMS", 4));
 // its budget. Another world would slow every round in the process, including
 // the ones people are already playing, so the arrival is turned away instead.
 const OPEN_ROOM_BELOW = 0.6;
+
+// Skill matchmaking. A room with people in it accepts ratings within
+// SKILL_WINDOW of their mean, and the window grows by SKILL_WIDEN for every
+// second its lobby has waited — so a busy server keeps rooms tight, and a
+// quiet one, whose lobbies wait a long time to fill, soon takes anybody. A
+// live round's window does not grow: nobody joining mid-round plays in it.
+// See fitsSkill in shared/progress.js and seatFor below.
+const SKILL_WINDOW = Math.max(0, envInt("SKILL_WINDOW", 200));
+const SKILL_WIDEN = Math.max(0, envInt("SKILL_WIDEN", 10));
 
 // Only the top finishers are paid. There is no voluntary cash-out, so the
 // only way to realise a pot is to still be alive AND placed when the whistle
@@ -378,6 +390,12 @@ const server = http.createServer(async (req, res) => {
         arena: r.world.size,
         botTarget: r.bots,
         botLevel: r.world.botLevel,
+        // The mean rating of the people in the room and how far from it the
+        // room will seat someone right now. Both null in an empty room.
+        skill: (({ rating, window }) => ({
+          rating: rating == null ? null : Math.round(rating),
+          window: window == null ? null : Math.round(window)
+        }))(roomSkill(r)),
         // Everything in the world: humans plus however many bots are
         // currently standing in for the rest of the lobby.
         inWorld: r.world.players.size,
@@ -506,6 +524,7 @@ const matchmaker = MATCHMAKER === "embedded" ? createMatchmaker({
   secret: MATCH_SECRET,
   resolveSession: token => accounts.resolveSession(token),
   findSeat: accountId => backend.findSeat(accountId),
+  findSkill: async accountId => (await backend.getProgress(accountId)).rating,
   ticketTtlMs: TICKET_MS
 }) : null;
 
@@ -569,6 +588,10 @@ function createRoom(mode, botLevel = BOT_LEVEL) {
     lastEater: new Map(),        // victim id -> killer id, for settlement
     lingering: [],               // players whose socket dropped
     round: { number: 0, phase: PHASE_LOBBY, endsAt: Infinity },
+    // When this room last began taking players for a round, for its skill
+    // window: at opening, and again every time a round ends.
+    waitingSince: Date.now(),
+    entrants: null,              // body -> result, for the round being played
     // Test mode fills the room to the size the mode is built for, so a solo
     // test is representative rather than an empty field.
     bots: TEST_MODE ? Math.min(BOTS_OVERRIDE ?? mode.lobbyMin, lobbyMax - 1) : 0,
@@ -613,22 +636,56 @@ const betterSeat = (a, b) =>
 // whether one more world fits.
 const hasHeadroom = () => tickCost.avgMs < (1000 / HZ) * OPEN_ROOM_BELOW;
 
+// A rating from a reservation request, or null for none. Signed by the
+// matchmaker, but a number is still checked to be one.
+const skillOf = rating => (Number.isFinite(rating) ? rating : null);
+
 // The level a player asked for, where it decides anything: only in test mode,
 // the one time a live room has bots. null is no preference.
 const askedLevel = bots => (TEST_MODE && isBotLevel(bots) ? bots : null);
 const levelFits = (room, level) => !level || room.world.botLevel === level;
 
-// Where a new arrival for this mode sits. A new room is opened only when every
-// existing one is full: filling rooms before opening more keeps a quiet server
-// from splitting its players across lobbies that never reach their minimum.
-function seatFor(mode, level = null) {
-  let best = null;
+// How a room describes itself to skill matchmaking: the mean rating of the
+// people in it, counting seats promised to reservations, and how far from
+// that mean it will take someone. A room with nobody in it has no rating and
+// takes anyone.
+function roomSkill(room, now = Date.now()) {
+  let sum = 0, n = 0;
+  for (const meta of room.clients.values()) {
+    if (meta.progress) { sum += meta.progress.rating; n++; }
+  }
+  for (const held of room.reserved.values()) {
+    if (held.rating != null) { sum += held.rating; n++; }
+  }
+  if (!n) return { rating: null, window: null };
+  const waited = room.round.phase === PHASE_LIVE ? 0 : Math.max(0, now - room.waitingSince) / 1000;
+  return { rating: sum / n, window: SKILL_WINDOW + SKILL_WIDEN * waited };
+}
+
+// Where a new arrival for this mode sits:
+//
+//   1. the best room whose skill window they fit (betterSeat: between rounds,
+//      then fuller — filling rooms before opening more keeps a quiet server
+//      from splitting players across lobbies that never reach their minimum);
+//   2. otherwise a new room, which takes its rating from them;
+//   3. otherwise, with no room to open, the room nearest their rating. Skill
+//      decides where someone sits, never whether they get a seat.
+//
+// A player with no rating fits everywhere, which is plain fill-first seating.
+function seatFor(mode, level = null, rating = null) {
+  let best = null, nearest = null, nearestGap = Infinity;
   for (const room of rooms.values()) {
     if (room.mode !== mode || !hasSeat(room) || !levelFits(room, level)) continue;
-    if (!best || betterSeat(room, best)) best = room;
+    const skill = roomSkill(room);
+    if (fitsSkill(skill, rating)) {
+      if (!best || betterSeat(room, best)) best = room;
+    } else if (Math.abs(rating - skill.rating) < nearestGap) {
+      nearest = room;
+      nearestGap = Math.abs(rating - skill.rating);
+    }
   }
   if (best) return best;
-  if (rooms.size >= MAX_ROOMS || !hasHeadroom()) return null;
+  if (rooms.size >= MAX_ROOMS || !hasHeadroom()) return nearest;
   const room = openRoom(mode, level ?? BOT_LEVEL);
   console.log(`[${room.id}] opened, ${rooms.size} of ${MAX_ROOMS} room(s) in use`);
   return room;
@@ -679,7 +736,7 @@ function dropReservations(account) {
 // to that room whatever was suggested, and past a full cap: it is their own
 // seat they are returning to, not a new one — and at its own bot level,
 // whatever they ask for now.
-function reserveSeat({ account, stake, room: hint, bots }) {
+function reserveSeat({ account, stake, room: hint, bots, rating }) {
   if (shuttingDown) return { ok: false, code: "closing" };
   const mode = modeForStake(Number(stake));
   if (!mode || typeof account !== "string") return { ok: false, code: "bad" };
@@ -691,13 +748,17 @@ function reserveSeat({ account, stake, room: hint, bots }) {
     const suggested = typeof hint === "string" ? rooms.get(hint) : null;
     room = suggested && suggested.mode === mode && hasSeat(suggested) && levelFits(suggested, level)
       ? suggested
-      : seatFor(mode, level);
+      : seatFor(mode, level, skillOf(rating));
   }
   if (!room) return { ok: false, code: "full" };
 
   const now = Date.now();
   const rsv = crypto.randomBytes(9).toString("base64url");
-  room.reserved.set(rsv, { account, until: now + TICKET_MS + RESERVATION_GRACE_MS });
+  // The rating travels with the reservation, so the room's mean counts a
+  // player on their way in, not only the ones already seated.
+  room.reserved.set(rsv, {
+    account, until: now + TICKET_MS + RESERVATION_GRACE_MS, rating: skillOf(rating)
+  });
   return { ok: true, room: room.id, rsv, expiresAt: now + TICKET_MS };
 }
 
@@ -710,7 +771,8 @@ function localStatus() {
     rooms: shuttingDown ? [] : [...rooms.values()].map(r => ({
       id: r.id, mode: r.mode.id, taken: seatsTaken(r), cap: r.lobbyMax, between: betweenRounds(r),
       // A level only where there are bots for it to describe.
-      bots: TEST_MODE ? r.world.botLevel : null
+      bots: TEST_MODE ? r.world.botLevel : null,
+      skill: roomSkill(r)
     }))
   };
 }
@@ -740,6 +802,7 @@ function dropConnection(room, ws, meta, reason) {
   meta.replaced = true;
   meta.stake = PRACTICE;
   room.clients.delete(ws);
+  markOut(room, meta.id);
   removePlayer(room.world, meta.id);
   room.lastEater.delete(meta.id);
   try { ws.close(4001, reason); } catch { /* already gone */ }
@@ -892,6 +955,7 @@ function resumeLingering(claim, room, newId) {
     // Eaten while away, a tier change, or the round moved on. Clear the old
     // body out now rather than leaving it for a sweep that no longer owns it.
     if (player) {
+      markOut(oldRoom, oldId);
       removePlayer(oldRoom.world, oldId);
       oldRoom.lastEater.delete(oldId);
       syncBots(oldRoom);
@@ -1117,8 +1181,11 @@ const accountOfPlayer = (room, id) => {
 // Money moves only in response to simulation events, never in response to
 // anything a client asserts.
 async function settle(room, events) {
+  // Both before anything is awaited: the body a death names may be gone from
+  // the world by the time a later await returns.
   for (const e of events) {
     if (e.t === "eat") room.lastEater.set(e.victim, e.id);
+    else if (e.t === "death") markOut(room, e.id);
   }
 
   for (const e of events) {
@@ -1199,6 +1266,11 @@ async function endRound(room) {
   const { world, round, mode } = room;
   round.phase = PHASE_INTERMISSION;
   round.endsAt = world.time + INTERMISSION_SECONDS;
+  // Taken now, before anything is awaited, so the round being scored is this
+  // one whatever happens during settlement.
+  const entrants = room.entrants;
+  room.entrants = null;
+  room.waitingSince = Date.now();
 
   const survivors = aliveTargets(room).sort((a, b) => totalMass(b) - totalMass(a));
 
@@ -1248,6 +1320,75 @@ async function endRound(room) {
     }, { outcome: "survived", killerId: null, stake, payout });
 
     await pushAccount(ws, meta);
+  }
+
+  await awardProgress(room, survivors, entrants);
+}
+
+// ── progress: XP and rating ─────────────────────────────────────────────────
+//
+// The rules are in shared/progress.js. Who takes part is decided here: the
+// humans dealt in at the whistle, with the life they were dealt in with. A
+// mid-round respawn is a new, unstaked life — it can play on, but it cannot
+// win XP or move a rating, and dying in it changes nothing.
+//
+// Entrants are keyed by the body rather than its id, because a reconnect
+// moves the same body to a new id (resumeLingering).
+
+function dealEntrants(room) {
+  room.entrants = new Map();
+  room.eliminated = 0;
+  for (const meta of room.clients.values()) {
+    const body = meta.ready && meta.accountId ? room.world.players.get(meta.id) : null;
+    if (!body || !body.alive) continue;
+    room.entrants.set(body, {
+      accountId: meta.accountId,
+      rating: meta.progress?.rating ?? START_RATING,
+      games: meta.progress?.ratedGames ?? 0,
+      out: 0              // order of elimination; 0 while still in the round
+    });
+  }
+}
+
+// An entrant is out of the round: eaten, or their body gone because they left.
+// The first time only.
+function markOut(room, playerId) {
+  const body = room.world.players.get(playerId);
+  const entry = body && room.entrants?.get(body);
+  if (entry && !entry.out) entry.out = ++room.eliminated;
+}
+
+async function awardProgress(room, survivors, entrants) {
+  if (!entrants?.size) return;
+  const { results, field } = scoreRound(entrants, survivors, room.paidPositions);
+  if (!results.length) return;
+
+  let saved;
+  try {
+    saved = await backend.recordProgress(results);
+  } catch (err) {
+    console.error("progress:", err.message);
+    return;
+  }
+
+  // Tell whoever is still here. Anyone who left is updated all the same; they
+  // see it next time they sign in.
+  for (const [ws, meta] of room.clients) {
+    const r = results.find(x => x.accountId === meta.accountId);
+    const now = r && saved.get(meta.accountId);
+    if (!now) continue;
+    meta.progress = now;
+    if (ws.readyState !== ws.OPEN) continue;
+    ws.send(JSON.stringify({
+      type: "progress",
+      round: room.round.number,
+      gained: r.xp,
+      ratingChange: r.ratingChange,
+      rated: r.rated,
+      place: r.place,
+      of: field,
+      ...now
+    }));
   }
 }
 
@@ -1367,6 +1508,7 @@ async function startRound(room) {
   }
   const bots = [...world.players.values()].filter(p => p.bot);
   spawnRing(world, startingOrder(humans, bots));
+  dealEntrants(room);
 
   room.lastEater.clear();
   broadcast(room, {
@@ -1477,6 +1619,7 @@ wss.on("connection", (ws, req) => {
           // Out of the room before anything is awaited, so a count that
           // finishes meanwhile cannot deal them into the round.
           room.clients.delete(ws);
+          markOut(room, id);
           if (player) removePlayer(room.world, id);
           syncBots(room);
           pushLobby(room);
@@ -1615,6 +1758,16 @@ wss.on("connection", (ws, req) => {
           }
         }
 
+        // XP and rating: what the welcome shows, what matchmaking and the
+        // round-end award start from. A failed read does not turn the player
+        // away. They play at the starting figures, and anything they earn is
+        // still added to what they really have, since progress only ever
+        // moves by increment.
+        meta.progress = await backend.getProgress(meta.accountId).catch(err => {
+          console.error("progress lookup:", err.message);
+          return emptyProgress();
+        });
+
         try {
           if (!resumed) await backend.lockStake(meta.accountId, stake);
         } catch (err) {
@@ -1680,6 +1833,7 @@ wss.on("connection", (ws, req) => {
           // Only meaningful in test mode, the one time a live room has bots:
           // the level this room was opened at, which the player asked for.
           botLevel: room.world.botLevel,
+          progress: meta.progress,
           demo: !ramp.isReal,
           stake,
           signedIn: true,
@@ -1812,6 +1966,9 @@ function tickRoom(room, dt) {
           .then(() => releaseSeatIfIdle(accountId))
           .catch(err => console.error("refund:", err.message));
       }
+      // Walking away does not escape a rating loss: they are out of the
+      // round at the moment their body left it.
+      markOut(room, goneId);
       removePlayer(world, goneId);
       room.lastEater.delete(goneId);
       room.lingering.splice(i, 1);

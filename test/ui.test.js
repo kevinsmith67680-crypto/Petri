@@ -545,5 +545,47 @@ console.log("\n-- bot difficulty --");
   check("and a pick still takes without throwing", !threw && blocked.getBotLevel() === "easy");
 }
 
+console.log("\n-- level and rank --");
+
+{
+  ui.renderAuth({ id: "a", username: "ada", displayName: "Ada" });
+  ui.renderProgress({ xp: 450, rating: 1183.6, ratedGames: 3 });
+  check("the level is shown", $("progressBox").hidden === false && $("lvlNum").textContent === "Level 3",
+    $("lvlNum").textContent);
+  check("with XP into it and to go", $("lvlXp").textContent === "150 / 300 XP", $("lvlXp").textContent);
+  check("the bar is filled to match", $("xpFill").style.width === "50%" &&
+    $("xpBar").getAttribute("aria-valuenow") === "50", $("xpFill").style.width);
+  check("the rank is named, with the rating rounded",
+    $("rankName").textContent === "Gold" && $("rankRating").textContent === "1184");
+  check("a new rating is said to be provisional",
+    $("rankNote").hidden === false && /7 more rated rounds/.test($("rankNote").textContent), $("rankNote").textContent);
+  ui.renderProgress({ xp: 0, rating: 1000, ratedGames: 10 });
+  check("a settled one is not", $("rankNote").hidden === true);
+  check("a new account starts at level 1, Silver",
+    $("lvlNum").textContent === "Level 1" && $("rankName").textContent === "Silver");
+
+  ui.renderAuth(null);
+  check("signing out hides it", $("progressBox").hidden === true);
+
+  // The round-over card.
+  ui.showRoundEnd({ number: 1, standings: [], nextIn: 5, myName: "Ada" });
+  check("the card opens without a gain line: it arrives after the standings", $("roundGain").hidden === true);
+  ui.showProgressGain({ gained: 100, ratingChange: 23.6, rated: true, xp: 100 });
+  check("a win shows its XP, the level it reached, and the rating change",
+    $("roundGain").hidden === false && /\+100 XP/.test($("roundGain").innerHTML) &&
+    /Level 2!/.test($("roundGain").innerHTML) && /Rating \+24/.test($("roundGain").innerHTML),
+    $("roundGain").innerHTML);
+  ui.showProgressGain({ gained: 25, ratingChange: 3, rated: true, xp: 150 });
+  check("no level-up is claimed when there was none", !/Level/.test($("roundGain").innerHTML), $("roundGain").innerHTML);
+  ui.showProgressGain({ gained: 0, ratingChange: -11.2, rated: true, xp: 150 });
+  check("a loss shows only the rating falling", /Rating -11/.test($("roundGain").innerHTML) &&
+    !/XP/.test($("roundGain").innerHTML), $("roundGain").innerHTML);
+  ui.showProgressGain({ gained: 0, ratingChange: 0, rated: false, xp: 150 });
+  check("nothing earned and nothing rated shows nothing", $("roundGain").hidden === true);
+  ui.showProgressGain({ gained: 70, rated: true, ratingChange: 5, xp: 170 });
+  ui.showRoundEnd({ number: 2, standings: [], nextIn: 5, myName: "Ada" });
+  check("the next round's card does not show the last round's gain", $("roundGain").hidden === true);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
