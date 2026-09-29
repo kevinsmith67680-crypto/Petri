@@ -878,7 +878,7 @@ When the timer expires everyone still alive is ranked by mass, their run is reco
 
 ### The player's manual
 
-`docs/engulfs-field-manual.pdf` is an 18-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, how the board is laid out, viruses as both hazard and weapon, what is actually at stake in a wagered round, the eight skills a round is won with, and a technique chapter covering positioning, split accuracy, mass management, map awareness, risk, prediction, virus play and team tactics.
+`docs/engulfs-field-manual.pdf` is a 21-page manual for players: how a round runs, what each control does, the three mechanics everything else follows from, how the board is laid out, viruses as both hazard and weapon, what is actually at stake in a wagered round, levels, rank and skill matchmaking, playing against bots at each difficulty (with how close each level can split onto you), the eight skills a round is won with, and a technique chapter covering positioning, split accuracy, mass management, map awareness, risk, prediction, virus play and team tactics.
 
 The board chapter is measured rather than described: the build seeds a real arena, computes the spawn ring and the nearest-neighbour spacing of its orbs and viruses, and draws that same arena to scale. The map in the manual is a map of a world the server could deal.
 
@@ -889,7 +889,7 @@ pip install reportlab
 python3 scripts/manual.py
 ```
 
-**Every number in it is read out of `shared/` at build time**, by running the real modules rather than copying values across. Change `EAT_RATIO` or a mode's lobby size and the manual is correct the next time it is built — which is the only way a document full of tuning constants stays true. Re-run it after touching anything in `shared/sim.js`, `shared/modes.js` or `shared/wager.js`.
+**Every number in it is read out of `shared/` at build time**, by running the real modules rather than copying values across. Change `EAT_RATIO` or a mode's lobby size and the manual is correct the next time it is built — which is the only way a document full of tuning constants stays true. Re-run it after touching anything in `shared/sim.js`, `shared/modes.js`, `shared/wager.js` or `shared/progress.js`, or the `SKILL_WINDOW` / `SKILL_WIDEN` defaults in `server/index.js`.
 
 ### Feeding a virus
 
