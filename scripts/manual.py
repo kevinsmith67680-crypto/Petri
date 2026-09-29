@@ -168,6 +168,50 @@ def read_constants():
       if (viewRadius(fake(mid)) > out.viewFloor) hi = mid; else lo = mid;
     }
     out.viewGrowsAbove = hi;
+
+    // Bot difficulty, as the simulation defines it, and how close each level
+    // can be when it splits onto you. The reach is rebuilt the way sim.js's
+    // splitReach and doubleSplitReach build it, against a cell at the most
+    // that split could swallow: at any smaller size the reach is longer.
+    out.BOT_LEVELS = S.BOT_LEVELS;
+    out.DEFAULT_BOT_LEVEL = S.DEFAULT_BOT_LEVEL;
+    const decay = Math.pow(0.935, 60);
+    out.botReach = [];
+    for (const m of [60, 100, 200, 400, 800]) {
+      const half = m / 2, q = m / 4, r = S.radiusOf, row = { mass: m };
+      for (const id of ['normal', 'hard']) {
+        const sp = S.BOT_LEVELS[id].split;
+        const preyMax = half / (S.EAT_RATIO * sp.margin);
+        row[id] = { preyMax,
+          reach: (r(half) * 1.4 + S.splitLaunchSpeed(half) / LN - r(preyMax) * 0.55) * sp.reach };
+        if (sp.double) {
+          const preyMax4 = q / (S.EAT_RATIO * sp.margin);
+          const flight = S.splitLaunchSpeed(half) * (1 - Math.pow(decay, sp.double)) / LN;
+          row[id].preyMax4 = preyMax4;
+          row[id].double = (r(half) * 0.4 + flight + r(q) * 1.4 + S.splitLaunchSpeed(q) / LN
+                            - r(preyMax4) * 0.55) * sp.reach;
+        }
+      }
+      out.botReach.push(row);
+    }
+
+    // Experience, levels and rating, from shared/progress.js. K is private
+    // there, so it is measured: between two equal players the winner gains
+    // exactly half of it.
+    const PR = await import('./shared/progress.js');
+    const duel = (games, a, b) => PR.ratingChanges([
+      { id: 'a', rating: a, games, place: 1 }, { id: 'b', rating: b, games, place: 2 }]).get('a');
+    out.progress = {
+      xpForPlace: PR.XP_FOR_PLACE,
+      levels: [2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30].map(l => [l, PR.xpForLevel(l)]),
+      start: PR.START_RATING,
+      provisional: PR.PROVISIONAL_GAMES,
+      ranks: PR.RANKS.map(r => [r.name, Number.isFinite(r.from) ? r.from : null]),
+      kNew: 2 * duel(0, 1000, 1000),
+      kSettled: 2 * duel(PR.PROVISIONAL_GAMES, 1000, 1000),
+      upset: duel(PR.PROVISIONAL_GAMES, 1000, 1400),
+      routine: duel(PR.PROVISIONAL_GAMES, 1000, 600),
+    };
     console.log(JSON.stringify(out));
     """
     raw = subprocess.run(
@@ -185,6 +229,8 @@ def read_timings():
         ("countdown", r'envInt\("COUNTDOWN_SECONDS", (\d+)\)'),
         ("intermission", r'envInt\("INTERMISSION_SECONDS", TEST_MODE \? \d+ : (\d+)\)'),
         ("linger", r'envInt\("LINGER_SEC", (\d+)\)'),
+        ("skillWindow", r'envInt\("SKILL_WINDOW", (\d+)\)'),
+        ("skillWiden", r'envInt\("SKILL_WIDEN", (\d+)\)'),
     ):
         m = re.search(pattern, src)
         out[key] = int(m.group(1)) if m else None
@@ -213,6 +259,15 @@ def money(units):
 
 def mmss(sec):
     return f"{sec // 60}:{sec % 60:02d}"
+
+
+def ordinal(n):
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+# The level curve is described in words below, so hold the numbers to it.
+assert all(x == 50 * l * (l - 1) for l, x in K["progress"]["levels"]), \
+    "the level curve changed: update the Levels section of the manual"
 
 
 # ── styles ──────────────────────────────────────────────────────────────────
@@ -557,6 +612,34 @@ def dia_split_reach():
     return d
 
 
+def dia_levels():
+    """Total XP to reach each level, 2 to 10."""
+    levels = [(l, x) for l, x in K["progress"]["levels"] if l <= 10]
+    w, h = CONTENT_W * 0.46, 138
+    d = Drawing(w, h)
+    x0, y0, pw, ph = 8, 26, w - 16, h - 58
+    d.add(Line(x0, y0, x0 + pw, y0, strokeColor=RULE, strokeWidth=0.8))
+    top = levels[-1][1]
+    bw = pw / len(levels)
+    for i, (lvl, xp) in enumerate(levels):
+        bh = max(1.5, ph * xp / top)
+        marked = lvl in (2, 5, 10)
+        d.add(Rect(x0 + i * bw + 2.5, y0, bw - 5, bh,
+                   fillColor=ACCENT if marked else colors.HexColor("#d6cbe8"),
+                   strokeColor=None))
+        d.add(String(x0 + i * bw + bw / 2, y0 - 10, str(lvl), fontName="Helvetica",
+                     fontSize=7, fillColor=MUTED, textAnchor="middle"))
+        if marked:
+            d.add(String(x0 + i * bw + bw / 2, y0 + bh + 3, f"{xp:,}",
+                         fontName="Helvetica-Bold", fontSize=6.8, fillColor=INK,
+                         textAnchor="middle"))
+    d.add(String(x0 + pw / 2, y0 - 21, "level", fontName="Helvetica", fontSize=7.5,
+                 fillColor=MUTED, textAnchor="middle"))
+    d.add(String(x0, h - 12, "TOTAL XP TO REACH EACH LEVEL", fontName="Helvetica-Bold",
+                 fontSize=7.5, fillColor=MUTED))
+    return d
+
+
 def dia_board(mode="standard", side=None, ring=True):
     """A real seeded arena, drawn to scale: orbs, viruses and the opening ring."""
     import math
@@ -775,14 +858,16 @@ def story():
     s.append(Spacer(1, 4 * mm))
     s.append(P("How to play, the eight skills a round is<br/>won with, and the "
                "technique behind them.", S_COVER_S))
-    s.append(Spacer(1, 70 * mm))
+    s.append(Spacer(1, 62 * mm))
     s.append(datatable(
         ["", ""],
         [["Arena", f"{STD['world']['size']:,} x {STD['world']['size']:,} units, "
                    f"{STD['world']['pellets']:,} orbs, {STD['world']['viruses']} viruses"],
          ["Round", f"{STD['roundSeconds'] // 60} minutes, top {STD['paidPositions']} are paid"],
          ["Field", f"{STD['lobbyMin']} players in Standard, {HIGH['lobbyMin']} in High stakes"],
-         ["Stake", f"{money(STD['stake'])} or {money(HIGH['stake'])} USDC, or play free in Practice"]],
+         ["Stake", f"{money(STD['stake'])} or {money(HIGH['stake'])} USDC, or play free in Practice"],
+         ["Progress", "XP and levels for winning; a rating that seats you with players like you"],
+         ["Bots", "Easy, Normal or Hard, your choice in Practice"]],
         [26 * mm, None]))
     s.append(Spacer(1, 10 * mm))
     s.append(P("Every figure in this manual is read straight from the simulation "
@@ -908,7 +993,9 @@ def story():
                "manual behaves identically there, so it is the right place to learn "
                "the timing of a split and the feel of feeding a virus - and, because "
                "nothing is predicted over a network, the right place to learn what a "
-               "clean read looks like.", S_BODY))
+               "clean read looks like. Choose how hard the bots play - Easy, Normal "
+               "or Hard - under the Practice tier; see <i>Playing against bots</i>.",
+               S_BODY))
 
     s.append(PageBreak())
 
@@ -1207,6 +1294,202 @@ def story():
         f"<b>A large pot makes you a target.</b> Late in a round the player who has "
         "eaten three staked rivals is carrying four stakes, and everybody can see "
         "how big they are.",
+    ]))
+
+    s.append(PageBreak())
+
+    # ---- levels, rank and matchmaking --------------------------------------
+    pr = K["progress"]
+    xp = pr["xpForPlace"]
+    lv = dict(pr["levels"])
+    paid = STD["paidPositions"]
+    s.append(Mark("Levels and rank"))
+    s.append(P("Levels, rank and matchmaking", S_H1))
+    s.append(P("Live rounds leave you with two numbers that last from one game to "
+               "the next. <b>XP</b> counts what you have won and only ever goes up. "
+               "Your <b>rating</b> measures how well you play, and goes up and down. "
+               "Neither is money, and Practice against bots earns neither.", S_LEAD))
+
+    s.append(two_col(
+        [P("Experience: winning, counted", S_H2),
+         P("You earn XP for one thing: <b>being alive at the whistle in the paid "
+           "places</b> - the same line the payout draws, with places counted among "
+           "everyone still standing, exactly as the payout counts them.", S_BODY),
+         datatable(["Finish", "XP"],
+                   [[ordinal(i + 1), f"+{x}"] for i, x in enumerate(xp)],
+                   [34 * mm, None], align_right=(1,)),
+         P(f"Eaten, or alive outside the top {paid}: no XP.", S_CAPTION)],
+        [Spacer(1, 8), dia_levels(),
+         P("Each level asks for 100 XP more than the one before. The marked "
+           "bars are levels 2, 5 and 10.", S_CAPTION)],
+        ratio=0.52))
+
+    s.append(P("Levels", S_H2))
+    s.append(P("Your level is your total XP on a curve: reaching level <i>L</i> takes "
+               "50 &times; <i>L</i> &times; (<i>L</i> - 1) XP. One first place takes you "
+               f"to level 2, about {lv[5] // xp[0]} first places to level 5, and about "
+               f"{lv[10] // xp[0]} to level 10. There is no top level. A level changes "
+               "nothing about how the game plays: it is a record of what you have won.",
+               S_BODY))
+    s.append(datatable(
+        ["Level"] + [str(l) for l, _ in pr["levels"]],
+        [["Total XP"] + [f"{x:,}" for _, x in pr["levels"]]],
+        [20 * mm] + [(CONTENT_W - 20 * mm) / len(pr["levels"])] * len(pr["levels"]),
+        align_right=tuple(range(1, len(pr["levels"]) + 1))))
+
+    ranks = pr["ranks"]
+    rank_rows = []
+    for i, (name, lo) in enumerate(ranks):
+        hi = ranks[i + 1][1] if i + 1 < len(ranks) else None
+        span = (f"below {hi:,}" if lo is None else
+                f"{lo:,} and up" if hi is None else f"{lo:,} - {hi - 1:,}")
+        rank_rows.append([name, span])
+    s.append(P("Your rating", S_H2))
+    s.append(P(f"Everyone starts at {pr['start']:,}. After every live round you were "
+               "dealt into, your rating is settled against each other person in that "
+               "round: finish above someone and you beat them, finish below and they "
+               "beat you. What each result is worth depends on the gap between your "
+               "two ratings, so finishing above a stronger player moves you much "
+               "further than finishing above a weaker one.", S_BODY))
+    s.append(two_col(
+        [datatable(["Rank", "Rating"], rank_rows, [26 * mm, None]),
+         P(f"A new account starts in {next(n for n, lo in reversed(ranks) if lo is None or pr['start'] >= lo)}.",
+           S_CAPTION)],
+        [bullets([
+            f"<b>One round moves you by at most {pr['kSettled']:.0f}</b>, however many "
+            f"played. For your first {pr['provisional']} rated rounds the most is "
+            f"{pr['kNew']:.0f}, so a new rating finds its level quickly - the menu "
+            "marks it <i>provisional</i> until then.",
+            f"Beat a player rated 400 above you, one on one, and you gain "
+            f"<b>{pr['upset']:.0f}</b>. Beat one rated 400 below you and you gain "
+            f"<b>{pr['routine']:.0f}</b>.",
+            "The finishing order is survivors by their place at the whistle, then "
+            "everyone eaten, the last one out ranked highest. Only people are rated: "
+            "bots in the room do not move your rating.",
+        ], S_NOTE)],
+        ratio=0.36))
+
+    s.append(PageBreak())
+    s.append(P("Matchmaking", S_H2))
+    W, WID = T["skillWindow"], T["skillWiden"]
+    s.append(P("You choose a stake, never a room: the matchmaker seats you. Each room "
+               "is described by the average rating of the players in it, and takes "
+               f"players within a window of that average - <b>&plusmn;{W}</b> to start "
+               f"with, widening by <b>{WID}</b> for every second its lobby has been "
+               "waiting for a round.", S_BODY))
+    s.append(two_col(
+        [datatable(["Lobby has waited", "Takes ratings within"],
+                   [["just opened" if t == 0 else (f"{t} seconds" if t < 60 else f"{t // 60} minute{'s' if t >= 120 else ''}"),
+                     f"&plusmn;{W + WID * t:,}"] for t in (0, 15, 30, 60, 120)],
+                   [34 * mm, None], align_right=(1,))],
+        [P("Where you are seated", S_H3),
+         bullets([
+             "<b>A room you fit.</b> Between rounds before mid-round, then the "
+             "fuller one, so lobbies fill rather than scatter.",
+             "<b>Otherwise a new room</b>, which takes its rating from you.",
+             "<b>Otherwise the room nearest your rating.</b> Your rating decides "
+             "where you sit, never whether you get a seat.",
+         ], S_NOTE)],
+        ratio=0.4))
+    s.append(Spacer(1, 6))
+    s.append(P("The window is why a quiet evening still plays. A busy server fills "
+               "lobbies fast and keeps them tight, so players are sorted by skill. A "
+               "lobby that is waiting a long time for enough players soon takes almost "
+               "anybody - after a minute, anyone within 800 of its average - rather than "
+               "splitting a small crowd into rooms that never start.", S_BODY))
+
+    s.append(P("What it means for how you play", S_H2))
+    s.append(bullets([
+        "<b>Only the life you were dealt in with counts.</b> Eaten and respawned, "
+        "you can play on, but the new life cannot win XP or lift your rating.",
+        "<b>Leaving does not dodge a loss.</b> Walk away mid-round and you are out "
+        "the moment your cell leaves the arena, ranked with the eaten.",
+        f"<b>Surviving is worth rating even outside the top {paid}.</b> Everyone "
+        "alive at the whistle finishes above everyone who was eaten.",
+        "<b>Where to see it.</b> The menu and the lobby card show your level, the XP "
+        "to your next one, and your rank. The standings card says what the round "
+        "was worth: <i>+100 XP &middot; Level 2! &middot; Rating +24</i>.",
+    ]))
+    s.append(Spacer(1, 6))
+    s.append(callout(
+        "Bots in staked rooms",
+        "Live rounds on the real server are players only. Test servers fill staked "
+        "rooms with bots; there, the difficulty you pick also chooses your room, and "
+        "you are seated only with players who picked the same."))
+
+    s.append(PageBreak())
+
+    # ---- bots ---------------------------------------------------------------
+    B = K["BOT_LEVELS"]
+    E, N, H = B["easy"], B["normal"], B["hard"]
+    s.append(Mark("Bots"))
+    s.append(P("Playing against bots", S_H1))
+    s.append(P("Practice pits you against bots in your own browser. Pick <b>Easy</b>, "
+               "<b>Normal</b> or <b>Hard</b> under the Practice tier in the menu - "
+               f"{K['DEFAULT_BOT_LEVEL'].capitalize()} is the default. It is remembered, "
+               "takes effect at once even mid-run, and Practice earns no XP or rating.",
+               S_LEAD))
+
+    def pct(x):
+        return f"{x * 100:.0f}%"
+    s.append(datatable(
+        ["", "Easy", "Normal", "Hard"],
+        [["Goes after smaller cells within", f"{E['chase']} units", f"{N['chase']} units",
+          f"{H['chase']} units - all it can see"],
+         ["Hunts cells it cannot see", "no", "no",
+          f"up to {H['hunt']:,} away, when nobody else is near it"],
+         ["Eats orbs", "the nearest", "the nearest",
+          "best value for distance, thrown mass first"],
+         ["Leads a moving target", "no", "no", f"aims {H['lead']}s ahead"],
+         ["Splits onto smaller cells", "never",
+          f"close range only, every {N['split']['cooldown']:g}s",
+          f"from {pct(H['split']['reach'])} of full reach, every {H['split']['cooldown']:g}s, "
+          f"even when already in up to {H['split']['cells']} pieces"],
+         ["Double split", "never", "never",
+          "yes - a quarter thrown from the half in flight"],
+         ["Shoots viruses at bigger cells", "never",
+          "only one it is already lined up behind",
+          f"spots targets up to {H['virus']['see']:,} away and walks up to "
+          f"{H['virus']['travel']} to line a virus up"],
+         ["Hides behind viruses", "never", "never",
+          f"yes, within {H['virus']['shield']} - the chaser bursts on it"]],
+        [48 * mm, 18 * mm, 40 * mm, None]))
+    s.append(P("Every level runs from anything that can eat it. No level splits while "
+               "something nearby could eat one of its halves.", S_CAPTION))
+
+    s.append(P("How close is too close", S_H2))
+    s.append(P("A bot splits onto you when half of it still eats you and the throw "
+               "lands. These are the distances, centre to centre in world units, from "
+               "which it can: the smaller you are compared with the bot, the further "
+               "they reach. For scale, a small cell sees about "
+               f"{K['viewFloor']:.0f} units in each direction.", S_BODY))
+    s.append(datatable(
+        ["Bot mass", "Normal splits if you are", "Hard splits if you are",
+         "Hard double-splits if you are"],
+        [[f"{r['mass']:,}",
+          f"under {r['normal']['preyMax']:.0f}, within {r['normal']['reach']:.0f}",
+          f"under {r['hard']['preyMax']:.0f}, within {r['hard']['reach']:.0f}",
+          f"under {r['hard']['preyMax4']:.0f}, within {r['hard']['double']:.0f}"]
+         for r in K["botReach"] if r["mass"] >= 100],
+        [22 * mm, 48 * mm, 48 * mm, None]))
+
+    s.append(P("Beating Hard bots", S_H2))
+    s.append(bullets([
+        f"<b>They hunt when they are alone.</b> A Hard bot with nobody else in sight "
+        f"comes looking for you from up to {H['hunt']:,} away. Near other cells it "
+        "fights where it is, so company is cover.",
+        "<b>Respect the double split.</b> It lands a quarter of the bot about a third "
+        "further than a single split reaches. Read the table above before you drift "
+        "near anything twice your size.",
+        f"<b>Turn late.</b> Hard bots aim {H['lead']}s ahead of where you are going. "
+        "A change of direction as they commit sends the split into empty space.",
+        f"<b>Above mass {POP_MASS:.0f}, mind the viruses.</b> Never chase a small Hard "
+        "bot through one: it runs behind a virus so that you burst on it. And a virus "
+        "near a big Hard bot that swells as blobs hit it is being aimed at you - it "
+        f"takes {K['VIRUS_FEED_HITS']} feeds, and the new virus flies along the line "
+        "the blobs came in on.",
+        "<b>Stay near something bigger than the bot.</b> Bots of every level refuse "
+        "to split where something could eat their halves.",
     ]))
 
     s.append(PageBreak())
@@ -1642,8 +1925,23 @@ def story():
     s.append(two_col(ref_a, ref_b))
     s.append(Spacer(1, 6 * mm))
     s.append(P("Practice is a third tier with no stake, no lobby and no server: it "
-               "runs against bots in your own browser. Use it for everything in the "
-               "skills chapter.", S_CAPTION))
+               "runs against bots in your own browser, at the difficulty you choose. "
+               "Use it for everything in the skills chapter.", S_CAPTION))
+    s.append(P("Progress", S_H3))
+    s.append(datatable(
+        ["", ""],
+        [["XP for a win", " / ".join(f"{ordinal(i + 1)} +{x}" for i, x in
+                                    enumerate(K['progress']['xpForPlace']))],
+         ["Level L needs", "50 x L x (L - 1) XP in total"],
+         ["Rating", f"starts at {K['progress']['start']:,}; moves at most "
+                    f"{K['progress']['kSettled']:.0f} a round "
+                    f"({K['progress']['kNew']:.0f} for the first "
+                    f"{K['progress']['provisional']})"],
+         ["Ranks", ", ".join(f"{n} {'<' + format(K['progress']['ranks'][1][1], ',') if lo is None else format(lo, ',') + '+'}"
+                             for n, lo in K['progress']['ranks'])],
+         ["Matchmaking", f"rooms take ratings within &plusmn;{T['skillWindow']}, "
+                         f"widening {T['skillWiden']} a second while the lobby waits"]],
+        [30 * mm, None]))
 
     return s
 
