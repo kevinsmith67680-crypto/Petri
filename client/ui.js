@@ -11,7 +11,7 @@ import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
 import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
 import { isBotLevel, DEFAULT_BOT_LEVEL } from "../shared/sim.js";
-import { levelOf, rankOf, PROVISIONAL_GAMES } from "../shared/progress.js";
+import { levelOf, rankOf, PROVISIONAL_GAMES, XP_FOR_PLACE } from "../shared/progress.js";
 
 const $ = id => document.getElementById(id);
 const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -409,18 +409,41 @@ export function createUI({
   // ── level and rank ──────────────────────────────────────────────────────
 
   // progress: { xp, rating, ratedGames } from the server, or null signed out.
+  // Painted in two places from the one call: the menu's account panel and
+  // the lobby card, so the two can never show different figures.
   function renderProgress(progress) {
     const box = $("progressBox");
-    if (!progress) { box.hidden = true; return; }
+    const lobby = $("lobbyProgress");
+    if (!progress) {
+      box.hidden = true;
+      lobby.hidden = true;
+      $("lobbyGain").hidden = true;
+      return;
+    }
     box.hidden = false;
+    lobby.hidden = false;
     const lv = levelOf(progress.xp);
+    const pct = Math.round((lv.into / lv.need) * 100);
+    const rank = rankOf(progress.rating);
+    const rating = String(Math.round(progress.rating));
+
     $("lvlNum").textContent = `Level ${lv.level}`;
     $("lvlXp").textContent = `${lv.into} / ${lv.need} XP`;
-    const pct = Math.round((lv.into / lv.need) * 100);
     $("xpFill").style.width = `${pct}%`;
     $("xpBar").setAttribute("aria-valuenow", String(pct));
-    $("rankName").textContent = rankOf(progress.rating);
-    $("rankRating").textContent = String(Math.round(progress.rating));
+    $("rankName").textContent = rank;
+    $("rankRating").textContent = rating;
+
+    $("lobbyLvl").textContent = `Level ${lv.level}`;
+    $("lobbyXp").textContent = `${lv.into} / ${lv.need} XP`;
+    $("lobbyXpFill").style.width = `${pct}%`;
+    $("lobbyXpBar").setAttribute("aria-valuenow", String(pct));
+    $("lobbyXpNext").textContent = `${lv.need - lv.into} XP`;
+    // Read from the table the server awards from, so a retuned table cannot
+    // leave the card quoting the old figures.
+    $("lobbyXpWin").textContent =
+      `${XP_FOR_PLACE[XP_FOR_PLACE.length - 1]}–${XP_FOR_PLACE[0]} XP`;
+    $("lobbyRank").innerHTML = `${rank}<small>${rating}</small>`;
     // A new rating moves fast and means little, and saying so is kinder than
     // letting someone read Bronze after one bad round as a verdict.
     const left = PROVISIONAL_GAMES - (progress.ratedGames || 0);
@@ -449,6 +472,11 @@ export function createUI({
     }
     line.innerHTML = parts.join(" &middot; ");
     line.hidden = parts.length === 0;
+    // The lobby that follows the round says the same, so a player who
+    // dismissed the standings still sees what the round was worth.
+    const lobbyGain = $("lobbyGain");
+    lobbyGain.innerHTML = parts.length ? `Last round: ${parts.join(" &middot; ")}` : "";
+    lobbyGain.hidden = parts.length === 0;
   }
 
   function renderCareer(stats) {
@@ -714,7 +742,7 @@ export function createUI({
   const LEVEL_NOTE = {
     easy: "They chase what they can catch. They never split at you or shoot viruses.",
     normal: "They split to engulf you at close range, and shoot a virus they happen to be lined up behind.",
-    hard: "They split from further out and aim where you are going. Pass mass 127 and they line viruses up to burst you."
+    hard: "They hunt you down, double-split from range and hide behind viruses. Pass mass 127 and they line viruses up to burst you."
   };
 
   // Said once a staked room is joined at a level, so the choice is not a

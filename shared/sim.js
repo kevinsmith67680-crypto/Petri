@@ -113,13 +113,25 @@ export const BOT_NAMES = [
 
 // ── bot difficulty ──────────────────────────────────────────────────────────
 //
-// What a bot is allowed to attack with. Every level flees what can eat it and
-// grazes orbs the same way; the levels differ only in how they kill.
+// What a bot is allowed to attack with, and how hard it plays for mass.
 //
 //   chase   how close prey has to be before a bot goes after it
 //   lead    seconds ahead of a moving target a bot aims, 0 for straight at it
 //   split   engulfing: splitting to launch half the cell onto smaller prey
 //   virus   feeding a virus so the one it spits out bursts a larger cell
+//
+// Hard only, each absent on the other levels:
+//
+//   hunt    how far a bot will go looking for prey when it can see nobody at
+//           all: in a crowded arena it fights and grazes where it is
+//   graze   picks orbs by value for distance, thrown mass included, rather
+//           than the nearest one, and heads straight for it
+//   split.cells   splits again while still in up to this many pieces
+//   split.double  seconds between the two halves of a double split, which
+//                 throws a quarter past where a single split could reach
+//   virus.see     how far off a bigger cell can be to line a virus up on it
+//   virus.shield  how far a bot will run to put a virus between it and a
+//                 chaser big enough to burst on it
 //
 // Easy is how bots played before levels existed: they chase and never split
 // or shoot. A level is per world, so everyone in one arena faces the same
@@ -135,12 +147,18 @@ export const BOT_LEVELS = Object.freeze({
     virus: Object.freeze({ travel: 140, minMass: 90, cooldown: 12, lead: 0, nerve: 150 })
   }),
   hard: Object.freeze({
-    chase: 580,
-    lead: 0.2,
-    split: Object.freeze({ reach: 0.85, margin: 1.03, cooldown: 2.5, safe: 420 }),
+    chase: 620,
+    lead: 0.3,
+    hunt: 1800,
+    graze: true,
+    split: Object.freeze({
+      reach: 0.9, margin: 1.03, cooldown: 1.5, safe: 420, cells: 4, double: 0.15
+    }),
     // Walks across to line a virus up, and holds its ground behind it while a
     // larger cell closes in: anything big enough to eat it pops on the way.
-    virus: Object.freeze({ travel: 520, minMass: 70, cooldown: 4, lead: 0.5, nerve: 90 })
+    virus: Object.freeze({
+      travel: 520, minMass: 64, cooldown: 3, lead: 0.5, nerve: 90, see: 1000, shield: 400
+    })
   })
 });
 export const BOT_LEVEL_IDS = Object.keys(BOT_LEVELS);
@@ -152,7 +170,7 @@ export const isBotLevel = id => Object.hasOwn(BOT_LEVELS, id);
 export function setBotLevel(world, id) {
   if (!isBotLevel(id)) return false;
   world.botLevel = id;
-  for (const p of world.players.values()) if (p.bot) p.plan = null;
+  for (const p of world.players.values()) if (p.bot) { p.plan = null; p.followUp = null; }
   return true;
 }
 
@@ -396,6 +414,7 @@ export function addPlayer(world, { id, name, bot = false, ci = null }) {
     jitter: world.rng() * Math.PI * 2,
     // Bot attack state. Unused by humans.
     plan: null,              // a virus shot being lined up, see planVirusShot
+    followUp: null,          // the second half of a double split, see doubleSplit
     nextSplit: 0,
     nextVirus: 0,
     // Staggered so a room full of bots does not all search for a virus shot
@@ -427,6 +446,7 @@ function placePlayer(world, player, x, y, mass) {
   player.input.y = 0;
   player.actions.length = 0;
   player.plan = null;
+  player.followUp = null;
 }
 
 // Target distance between neighbouring spawns. A lobby too big to seat at this
@@ -800,6 +820,11 @@ function cellCombat(world) {
 
 const SCAN = 620, SCAN2 = SCAN * SCAN;
 
+// A hunter only goes after prey at least this share of its own mass, and
+// counts on catching it this often when weighing a hunt against grazing.
+const HUNT_MEAL = 0.2;
+const HUNT_ODDS = 0.5;
+
 // The smallest cell a virus bursts.
 const POP_MASS = VIRUS_MASS * VIRUS_EAT_RATIO;
 
@@ -946,6 +971,83 @@ function stepVirusPlan(world, bot, lvl, me, myMass) {
   return { x: me.x + shot.ux * k, y: me.y + shot.uy * k, fire: true };
 }
 
+// How far a double split reaches: the half is thrown, coasts for `delay`,
+// then splits again and throws a quarter from where it has got to. Each throw
+// is a fresh launch — a split piece does not inherit its parent's speed — so
+// the quarter's reach is added to however far the half had flown.
+function doubleSplitReach(mass, preyMass, delay) {
+  const half = mass / 2, quarter = mass / 4;
+  const flight = splitLaunchSpeed(half) * (1 - Math.pow(CELL_DECAY, delay)) / -CELL_LN;
+  return radiusOf(half) * 0.4 + flight + radiusOf(quarter) * 1.4
+    + splitLaunchSpeed(quarter) / -CELL_LN - radiusOf(preyMass) * 0.55;
+}
+
+// The first half of a double split: prey past a single split's reach that a
+// quarter of this cell still eats. The second half is followUpSplit.
+function doubleSplit(world, bot, lvl, lead, prey, owner) {
+  const delay = lvl.split.double;
+  const p = ahead(prey, lvl.lead + delay);
+  const dx = p.x - lead.x, dy = p.y - lead.y;
+  const reach = doubleSplitReach(lead.mass, prey.mass, delay) * lvl.split.reach;
+  if (dx * dx + dy * dy > reach * reach) return null;
+  bot.actions.push("split");
+  bot.followUp = { at: world.time + delay, cell: prey, owner };
+  bot.nextSplit = world.time + lvl.split.cooldown;
+  return { x: p.x, y: p.y };
+}
+
+// Steer at the prey until the half is far enough out, then split again. Given
+// up if the prey is gone, since the second split is only worth its risk with
+// something to land on.
+function followUpSplit(world, bot, lvl) {
+  const f = bot.followUp;
+  if (!f.owner.alive || !f.owner.cells.includes(f.cell)) { bot.followUp = null; return null; }
+  const p = ahead(f.cell, lvl.lead);
+  if (world.time >= f.at) {
+    bot.actions.push("split");
+    bot.followUp = null;
+  }
+  return { x: p.x, y: p.y };
+}
+
+// Somewhere to hide from a chaser big enough to burst on a virus: just past a
+// nearby virus, on the far side from the chaser, so following means crossing
+// it. Only for a bot small enough to pass over viruses itself, and never a
+// spot that means running at the chaser to reach it.
+function shelter(world, me, threat, range) {
+  let best = null, bestD = range;
+  const tx = threat.x - me.x, ty = threat.y - me.y;
+  for (const v of world.viruses) {
+    const vx = v.x - me.x; if (vx > range || vx < -range) continue;
+    const vy = v.y - me.y; if (vy > range || vy < -range) continue;
+    const ax = v.x - threat.x, ay = v.y - threat.y;
+    const da = Math.hypot(ax, ay) || 1;
+    // A virus the chaser is already on top of is no wall.
+    if (da < radiusOf(threat.mass)) continue;
+    const back = radiusOf(v.mass) * 0.8;
+    const sx = v.x + (ax / da) * back, sy = v.y + (ay / da) * back;
+    const mx = sx - me.x, my = sy - me.y;
+    if (mx * tx + my * ty > 0) continue;
+    const d = Math.hypot(mx, my);
+    if (d < bestD) { bestD = d; best = { x: sx, y: sy }; }
+  }
+  return best;
+}
+
+// The orb most worth going for: mass for distance, so a cluster or a thrown
+// blob (worth four orbs) beats a lone orb slightly nearer. Its own throw is
+// left alone until the thrower may take it back.
+function grazeTarget(world, bot, me) {
+  let best = null, bestScore = 0;
+  forEachPelletNear(world, me.x, me.y, 500, p => {
+    if (p.dead) return;
+    if (p.owner === bot.id && world.time < p.ownerFree) return;
+    const score = p.mass / (Math.hypot(p.x - me.x, p.y - me.y) + 60);
+    if (score > bestScore) { bestScore = score; best = p; }
+  });
+  return best;
+}
+
 function driveBot(world, bot, dt) {
   const c0 = bot.cells[0];
   if (!c0) return { x: world.size / 2, y: world.size / 2 };
@@ -954,12 +1056,26 @@ function driveBot(world, bot, dt) {
   // hundred times a tick.
   const me = bot.cells.length === 1 ? c0 : centroid(bot);
   const myMass = bot.cells.length === 1 ? c0.mass : totalMass(bot);
-
-  // What the level can attack with right now. Both need a whole cell: a bot
-  // already in pieces is mid-attack or recovering from one.
   const whole = bot.cells.length === 1;
-  const split = lvl.split && whole && c0.mass >= 36 && world.time >= bot.nextSplit
-    ? lvl.split : null;
+
+  // The second half of a double split already under way comes first.
+  if (bot.followUp) {
+    const go = followUpSplit(world, bot, lvl);
+    if (go) return go;
+  }
+
+  // A bot that splits again while in pieces judges what it can engulf by its
+  // biggest piece. Otherwise by its first cell, as always.
+  let lead = c0;
+  if (!whole && lvl.split && lvl.split.cells > 1) {
+    for (const c of bot.cells) if (c.mass > lead.mass) lead = c;
+  }
+
+  // What the level can attack with right now. A virus shot needs a whole
+  // cell; a split needs no more pieces than the level allows.
+  const split = lvl.split && bot.cells.length <= (lvl.split.cells || 1) && lead.mass >= 36 &&
+    world.time >= bot.nextSplit ? lvl.split : null;
+  const double = split && split.double && whole && lead.mass >= 72 ? split : null;
   const look = lvl.virus && whole && !bot.plan && c0.mass >= lvl.virus.minMass &&
     world.time >= bot.nextVirus && world.time >= bot.nextLook;
   if (look) bot.nextLook = world.time + 0.5;
@@ -969,27 +1085,64 @@ function driveBot(world, bot, dt) {
   let bite = null, biteD2 = Infinity;
   // Anything that could eat half of this cell, if it split.
   let exposed = false;
+  // The same for a double split, which lands a quarter.
+  let bite4 = null, bite4Owner = null, bite4D2 = Infinity, exposed4 = false;
+  // Prey further off than the bot can see from where it is, for a hunter:
+  // the best meal for the distance, and only a meal worth the trip. A cell a
+  // fraction of the bot's size is faster than it and barely worth catching,
+  // and chasing one across the arena is mass not eaten on the way.
+  let hunted = null, huntedScore = 0;
+  const meal = lead.mass * HUNT_MEAL;
+  // Anyone at all in sight. A bot with company fights and grazes where it
+  // is: in a crowded arena there is always prey somewhere further off, and
+  // chasing it means never stopping to eat.
+  let company = false;
   // The nearest cell a virus would burst, for a virus shot.
   let big = null, bigOwner = null, bigD2 = Infinity;
   const canBeEatenBy = c0.mass * EAT_RATIO;
-  const canEat = c0.mass / (EAT_RATIO * 1.1);
-  const canBite = split ? c0.mass / 2 / (EAT_RATIO * split.margin) : 0;
-  const eatsHalf = c0.mass / 2 * EAT_RATIO;
+  const canEat = lead.mass / (EAT_RATIO * 1.1);
+  const canBite = split ? lead.mass / 2 / (EAT_RATIO * split.margin) : 0;
+  const canBite4 = double ? lead.mass / 4 / (EAT_RATIO * split.margin) : 0;
+  // The smallest piece a split leaves: that is what an onlooker could eat.
+  let piece = Infinity;
+  if (split) for (const c of bot.cells) piece = Math.min(piece, c.mass >= 36 ? c.mass / 2 : c.mass);
+  const eatsHalf = piece * EAT_RATIO;
+  const eatsQuarter = lead.mass / 4 * EAT_RATIO;
   const safe2 = split ? split.safe * split.safe : 0;
+  const hunt2 = lvl.hunt ? lvl.hunt * lvl.hunt : 0;
+  const see = look && lvl.virus.see ? lvl.virus.see : SCAN;
+  const see2 = see * see;
+  // As far as anything above needs to look. SCAN on every level without a
+  // hunt or a longer virus sight, which is exactly the old search.
+  const view = Math.max(SCAN, lvl.hunt || 0, look ? see : 0);
+  const view2 = view * view;
   for (const o of world.players.values()) {
     if (o === bot || !o.alive) continue;
     for (const c of o.cells) {
       // Cheap rejects first: an axis test, then squared distance. sqrt only
       // when a candidate is actually chosen.
-      const dx = c.x - me.x; if (dx > SCAN || dx < -SCAN) continue;
-      const dy = c.y - me.y; if (dy > SCAN || dy < -SCAN) continue;
+      const dx = c.x - me.x; if (dx > view || dx < -view) continue;
+      const dy = c.y - me.y; if (dy > view || dy < -view) continue;
       const d2 = dx * dx + dy * dy;
-      if (d2 > SCAN2) continue;
-      if (c.mass > canBeEatenBy) { if (d2 < threatD2) { threat = c; threatD2 = d2; } }
-      else if (c.mass < canEat) { if (d2 < preyD2) { prey = c; preyD2 = d2; } }
-      if (c.mass < canBite && d2 < biteD2) { bite = c; biteD2 = d2; }
-      if (d2 < safe2 && c.mass >= eatsHalf) exposed = true;
-      if (look && c.mass > POP_MASS && c.mass >= canEat && d2 < bigD2) {
+      if (d2 > view2) continue;
+      if (d2 <= SCAN2) {
+        company = true;
+        if (c.mass > canBeEatenBy) { if (d2 < threatD2) { threat = c; threatD2 = d2; } }
+        else if (c.mass < canEat) { if (d2 < preyD2) { prey = c; preyD2 = d2; } }
+        if (c.mass < canBite && d2 < biteD2) { bite = c; biteD2 = d2; }
+        if (d2 < safe2 && c.mass >= eatsHalf) exposed = true;
+        if (double) {
+          if (c.mass < canBite4 && d2 < bite4D2) { bite4 = c; bite4Owner = o; bite4D2 = d2; }
+          if (d2 < safe2 && c.mass >= eatsQuarter) exposed4 = true;
+        }
+      }
+      if (hunt2 && d2 > SCAN2 && d2 <= hunt2 && c.mass < canEat && c.mass >= meal) {
+        // Mass gained per unit of distance, like an orb's score in
+        // grazeTarget, discounted for the chance the prey gets away.
+        const score = (c.mass * EAT_BONUS * HUNT_ODDS) / (Math.sqrt(d2) + 200);
+        if (score > huntedScore) { hunted = c; huntedScore = score; }
+      }
+      if (look && d2 <= see2 && c.mass > POP_MASS && c.mass >= canEat && d2 < bigD2) {
         big = c; bigOwner = o; bigD2 = d2;
       }
     }
@@ -1003,9 +1156,17 @@ function driveBot(world, bot, dt) {
 
   let tx, ty, go;
   if (threat && threatD < radiusOf(threat.mass) + nerve) {
-    tx = me.x - (threat.x - me.x) * 3;
-    ty = me.y - (threat.y - me.y) * 3;
-  } else if (split && bite && !exposed && (go = engulf(world, bot, lvl, c0, bite))) {
+    // Run behind a virus if the chaser would burst on it; otherwise run.
+    const hide = lvl.virus && lvl.virus.shield && threat.mass > POP_MASS && myMass < POP_MASS
+      ? shelter(world, me, threat, lvl.virus.shield) : null;
+    if (hide) { tx = hide.x; ty = hide.y; }
+    else {
+      tx = me.x - (threat.x - me.x) * 3;
+      ty = me.y - (threat.y - me.y) * 3;
+    }
+  } else if (split && bite && !exposed && (go = engulf(world, bot, lvl, lead, bite))) {
+    return go;
+  } else if (double && bite4 && !exposed4 && (go = doubleSplit(world, bot, lvl, lead, bite4, bite4Owner))) {
     return go;
   } else if ((bot.plan || (look && big && planVirusShot(world, bot, lvl, me, myMass, big, bigOwner))) &&
              (go = stepVirusPlan(world, bot, lvl, me, myMass))) {
@@ -1015,22 +1176,34 @@ function driveBot(world, bot, dt) {
     const p = ahead(prey, lvl.lead);
     tx = p.x; ty = p.y;
   } else {
-    // Nearest orb via the spatial grid, not a scan of the whole arena. With
-    // 100 bots and 4,100 orbs the scan was 410,000 distance checks a tick —
-    // 80% of the free tier's tick budget on its own, and the reason the
-    // server fell behind. Search widens if the neighbourhood is bare.
-    let near = null, nd = Infinity;
-    for (const reach of [300, 700, 1500]) {
-      forEachPelletNear(world, me.x, me.y, reach, p => {
-        if (p.dead) return;
-        const d = (p.x - me.x) ** 2 + (p.y - me.y) ** 2;
-        if (d < nd) { nd = d; near = p; }
-      });
-      if (near) break;
+    // A hunt has to beat grazing. Crossing the arena after prey is mass not
+    // eaten on the way, which is a poor trade in a crowded arena, where
+    // there is always prey somewhere; in an empty one, prey is the only big
+    // meal there is.
+    const best = lvl.graze ? grazeTarget(world, bot, me) : null;
+    const grazeScore = best ? best.mass / (Math.hypot(best.x - me.x, best.y - me.y) + 60) : 0;
+    if (hunted && !company && huntedScore > grazeScore) {
+      const p = ahead(hunted, lvl.lead);
+      tx = p.x; ty = p.y;
+    } else if (best) { tx = best.x; ty = best.y; }
+    else {
+      // Nearest orb via the spatial grid, not a scan of the whole arena. With
+      // 100 bots and 4,100 orbs the scan was 410,000 distance checks a tick —
+      // 80% of the free tier's tick budget on its own, and the reason the
+      // server fell behind. Search widens if the neighbourhood is bare.
+      let near = null, nd = Infinity;
+      for (const reach of [300, 700, 1500]) {
+        forEachPelletNear(world, me.x, me.y, reach, p => {
+          if (p.dead) return;
+          const d = (p.x - me.x) ** 2 + (p.y - me.y) ** 2;
+          if (d < nd) { nd = d; near = p; }
+        });
+        if (near) break;
+      }
+      bot.jitter += dt * 0.7;
+      if (near) { tx = near.x + Math.cos(bot.jitter) * 40; ty = near.y + Math.sin(bot.jitter) * 40; }
+      else { tx = world.size / 2 + Math.cos(bot.jitter) * 900; ty = world.size / 2 + Math.sin(bot.jitter) * 900; }
     }
-    bot.jitter += dt * 0.7;
-    if (near) { tx = near.x + Math.cos(bot.jitter) * 40; ty = near.y + Math.sin(bot.jitter) * 40; }
-    else { tx = world.size / 2 + Math.cos(bot.jitter) * 900; ty = world.size / 2 + Math.sin(bot.jitter) * 900; }
   }
 
   if (myMass >= VIRUS_MASS * VIRUS_EAT_RATIO) {

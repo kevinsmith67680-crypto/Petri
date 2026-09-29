@@ -671,7 +671,7 @@ Neither is money. Neither moves a balance, and neither is affected by the stake.
 
 The scoring is a pure function, `scoreRound` in `server/awards.js`, and `test/progress.test.js` pins its edge cases: the respawn, the walk-out, the same account twice. The server writes one round's results in one statement, `recordProgress`, which moves every column by increment. Two writers can never lose each other's update, and a result is written for players who have already left.
 
-**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
+**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. The lobby card shows the same tracker under the ready button, with the XP left to the next level, what a top-5 finish earns, and what the last round was worth. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
 
 ### Skill matchmaking
 
@@ -780,16 +780,32 @@ One process is one thread, so every room in it shares a single core. A full 100-
 
 ### Bot difficulty
 
-Bots come in three levels, set per world in `BOT_LEVELS` (`shared/sim.js`). Every level flees what can eat it and grazes orbs the same way. The levels differ only in how bots kill:
+Bots come in three levels, set per world in `BOT_LEVELS` (`shared/sim.js`). Every level flees what can eat it. Easy and Normal graze the nearest orb. Hard plays for mass as well as for kills:
 
 | | Easy | Normal | Hard |
 |---|---|---|---|
-| Chase prey within | 430 | 500 | 580 |
-| Aims ahead of a moving target | no | no | 0.2s |
-| **Engulf** — split onto smaller prey | never | point-blank only, 8s between splits | from ~85% of full split reach, 2.5s between |
-| **Viruses** — feed one so the child bursts a bigger cell | never | only one it is already lined up behind | walks up to 520 units to line one up, and leads the target by 0.5s |
+| Chase prey within | 430 | 500 | 620, all it can see |
+| **Hunts** prey it cannot see | no | no | up to 1800 away, when nobody else is in sight and the meal beats grazing |
+| **Grazes** | nearest orb | nearest orb | best mass for the distance, thrown mass first |
+| Aims ahead of a moving target | no | no | 0.3s |
+| **Engulf**: split onto smaller prey | never | point-blank only, 8s between splits | from ~90% of full split reach, 1.5s between, also while already in up to 4 pieces |
+| **Double split**: a quarter thrown past single-split reach | never | never | yes |
+| **Viruses**: feed one so the child bursts a bigger cell | never | only one it is already lined up behind | spots targets up to 1000 away, walks up to 520 to line one up, leads the target by 0.5s |
+| **Hides behind a virus** from a chaser big enough to burst on it | never | never | yes, within 400 |
 
-**Easy is exactly how bots played before levels existed.** A seeded run at `easy` matches the old code tick for tick, and the test suite checks that a minute of easy bots never splits or throws mass.
+**Hard, measured.** Old Hard against this one, over 8 seeds with a scripted player grazing orbs:
+
+| | Practice (14 bots, 4 min) | Test mode (100 bots, 3 min) |
+|---|---|---|
+| Bots eating each other | 615 → **4,116** | 15,842 → **23,752** |
+| Split attacks | 90 → **636** | 2,246 → **3,812** |
+| Viruses shot | 26 → **116** | 734 → **1,127** |
+| Mean bot mass after 1 min | 100 → **595** | 277 → **347** |
+| Times the player was eaten | 11 → **18** | 76 → 71 |
+
+The cost is about 0.7ms more per tick with 100 bots (2.6ms → 3.4ms). Two ideas were measured and dropped. Hunting whenever prey is out of sight made bots in a crowded arena cross the map after cells faster than them instead of eating, which halved their mass. Judging threats by the smallest piece kept bots fleeing instead of feeding. Hunting now happens only with nobody else in sight, which is exactly the sparse practice arena.
+
+**Easy is exactly how bots played before levels existed.** Normal is unchanged by the Hard work: both still replay tick for tick against the code before it. A seeded run at `easy` matches the old code tick for tick, and the test suite checks that a minute of easy bots never splits or throws mass.
 
 **A split is only taken when half the bot still eats the prey and lands on it.** The reach is computed from the same numbers `splitCell` and `cellCombat` use: where the launched half starts, how far it coasts, and how deep it has to cover the prey. A bot never splits while anything within its safety radius could eat one of the halves.
 
