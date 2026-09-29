@@ -511,6 +511,104 @@ function watchBot({ w, bot }, seconds) {
 }
 
 {
+  // Hard plays for mass and for kills harder than the other levels. Each
+  // tactic on its own, in an arena that holds nothing else.
+
+  // A double split: prey 330 off is past a single split's reach from a
+  // mass-100 bot, but a quarter thrown from the half in flight gets there.
+  const far = { bot: [100, { x: 1000, y: 1500 }], players: [["human", 20, { x: 1330, y: 1500 }]] };
+  const pieces = level => {
+    const a = botArena(level, far);
+    let most = 1, ate = false;
+    for (let i = 0; i < 8; i++) {
+      for (const e of stepWorld(a.w, 1 / TICK_HZ)) if (e.t === "eat" && e.victim === "human") ate = true;
+      most = Math.max(most, a.bot.cells.length);
+    }
+    return { most, ate };
+  };
+  const hardFar = pieces("hard");
+  check("hard double-splits onto prey past a single split's reach",
+    hardFar.most === 4 && hardFar.ate, JSON.stringify(hardFar));
+  check("normal does not reach that far", pieces("normal").most === 1);
+
+  // Hiding behind a virus: a mass-300 chaser bears down on a mass-60 bot, with
+  // a virus off to the side. The bot slips past the virus, and the chaser,
+  // too big to cross it, bursts.
+  const chased = level => {
+    const a = botArena(level, {
+      bot: [60, { x: 1500, y: 1500 }], players: [["human", 300, { x: 1280, y: 1500 }]],
+      virusAt: { x: 1600, y: 1600 }
+    });
+    let popped = false;
+    for (let i = 0; i < TICK_HZ * 4; i++) {
+      const h = centroid(a.w.players.get("human"));
+      const b = a.bot.alive ? centroid(a.bot) : h;
+      setAim(a.w, "human", b.x - h.x, b.y - h.y);
+      for (const e of stepWorld(a.w, 1 / TICK_HZ)) if (e.t === "pop" && e.id === "human") popped = true;
+    }
+    return { popped, alive: a.bot.alive };
+  };
+  const hid = chased("hard");
+  check("hard runs behind a virus, and the chaser bursts on it", hid.popped && hid.alive, JSON.stringify(hid));
+  check("normal just runs", !chased("normal").popped);
+
+  // Hunting: prey 1200 off, beyond sight. Alone, hard goes after it; with
+  // anyone else in sight, it stays and plays where it is.
+  const gap = a => {
+    const h = a.w.players.get("human").cells[0], b = centroid(a.bot);
+    return Math.hypot(h.x - b.x, h.y - b.y);
+  };
+  const hunt = (level, company) => {
+    const players = [["human", 40, { x: 1500, y: 2700 }]];
+    if (company) players.push(["peer", 100, { x: 1100, y: 1500 }]);
+    const a = botArena(level, { bot: [100, { x: 1500, y: 1500 }], players });
+    for (let i = 0; i < 50; i++) stepWorld(a.w, 1 / TICK_HZ);
+    return gap(a);
+  };
+  check("alone, hard hunts prey it cannot see", hunt("hard", false) < 500, hunt("hard", false).toFixed(0));
+  check("normal does not go looking", hunt("normal", false) > 1000, hunt("normal", false).toFixed(0));
+  check("with company in sight, hard does not leave to hunt", hunt("hard", true) > 1000,
+    hunt("hard", true).toFixed(0));
+
+  // Grazing by value: thrown mass (13) 300 off on one side, a plain orb (3.4)
+  // 150 off on the other. Hard goes for the bigger meal first.
+  const w = createWorld(3, { size: 3000, pellets: 0, viruses: 0, botLevel: "hard" });
+  w.pellets.push({ id: 9001, x: 1800, y: 1500, mass: EJECT_KEEP, vx: 0, vy: 0, ci: 0 });
+  w.pellets.push({ id: 9002, x: 1350, y: 1500, mass: 3.375, vx: 0, vy: 0, ci: 0 });
+  buildPelletGrid(w);
+  fillBots(w, 1);
+  const grazer = [...w.players.values()].find(p => p.bot);
+  Object.assign(grazer.cells[0], { x: 1500, y: 1500, mass: 60 });
+  let first = null;
+  for (let i = 0; i < TICK_HZ * 3 && !first; i++) {
+    stepWorld(w, 1 / TICK_HZ);
+    if (!w.pellets.some(p => p.id === 9001)) first = "thrown mass";
+    else if (!w.pellets.some(p => p.id === 9002)) first = "orb";
+  }
+  check("hard grazes by value: thrown mass before a nearer orb", first === "thrown mass", String(first));
+}
+
+{
+  // All of it together, in the practice arena as a player gets it: 14 bots
+  // on the full-size board for ninety seconds. Hard bots have to grow, and
+  // eat each other, far more than normal ones do.
+  const arena = level => {
+    const w = createWorld(31, { botLevel: level });
+    fillBots(w, 14);
+    let eats = 0;
+    for (let i = 0; i < TICK_HZ * 90; i++) {
+      for (const e of stepWorld(w, 1 / TICK_HZ)) if (e.t === "eat") eats++;
+    }
+    const mass = [...w.players.values()].reduce((s, p) => s + (p.alive ? totalMass(p) : 0), 0);
+    return { eats, mass: Math.round(mass) };
+  };
+  const hard = arena("hard"), normal = arena("normal");
+  check("hard bots grow at least three times as big as normal ones",
+    hard.mass >= normal.mass * 3, `${hard.mass} vs ${normal.mass}`);
+  check("and eat each other far more", hard.eats >= normal.eats * 5 + 20, `${hard.eats} vs ${normal.eats}`);
+}
+
+{
   // Easy is the behaviour from before levels existed: a full arena of them
   // must never split or throw mass.
   const w = createWorld(21, { botLevel: "easy" });

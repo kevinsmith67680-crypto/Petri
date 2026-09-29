@@ -742,7 +742,7 @@ export function createUI({
   const LEVEL_NOTE = {
     easy: "They chase what they can catch. They never split at you or shoot viruses.",
     normal: "They split to engulf you at close range, and shoot a virus they happen to be lined up behind.",
-    hard: "They split from further out and aim where you are going. Pass mass 127 and they line viruses up to burst you."
+    hard: "They hunt you down, double-split from range and hide behind viruses. Pass mass 127 and they line viruses up to burst you."
   };
 
   // Said once a staked room is joined at a level, so the choice is not a
