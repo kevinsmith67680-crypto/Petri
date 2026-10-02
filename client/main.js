@@ -277,7 +277,7 @@ function connect(stake = PRACTICE) {
     socket.on("account", onAccount);
     on("round", onRound);
     on("welcome", w => {
-      ui.setTestMode(w.test, w.botLevel);
+      ui.setTestMode(w.test);
       // A new connection's readiness is the server's to say: unready, unless
       // it resumed a live run.
       ready = !!w.ready;

@@ -102,22 +102,6 @@
   .board li span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .board li.you{ color:var(--text); font-weight:600; }
 
-  .testflag{
-    position:fixed; top:0; left:0; right:0; z-index:30;
-    padding:5px 12px; text-align:center;
-    font-size:11px; font-weight:600; letter-spacing:.04em;
-    background:#f0e3b8; color:#4a3b0d;
-    border-bottom:1px solid #d8c47e;
-  }
-  html[data-theme="dark"] .testflag{ background:#3a3216; color:#f0dfa4; border-color:#5c4f22; }
-  .testflag[hidden]{ display:none; }
-  /* Nudge the top-anchored HUD clear of the banner. */
-  body.is-test .readout{ top:44px; }
-  body.is-test .board{ top:46px; }
-  body.is-test .clock{ top:44px; }
-  body.is-test .pot{ top:92px; }
-  body.is-test .veil{ padding-top:52px; }
-
   .diag{
     position:fixed; right:24px; bottom:24px; z-index:6;
     background:var(--panel); border:1px solid var(--line); border-radius:6px;
@@ -1005,7 +989,6 @@
   <canvas class="minimap" id="minimap" aria-hidden="true"></canvas>
 </div>
 
-<div class="testflag" id="testFlag" hidden>Test mode &mdash; demo credits, bot-filled arena</div>
 
 <div class="diag" id="diagBox" hidden></div>
 
