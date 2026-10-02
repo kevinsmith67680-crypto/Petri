@@ -581,17 +581,7 @@ export function createUI({
     box.innerHTML = html;
   }
 
-  // A banner rather than a quiet note: test mode changes the economics and
-  // the lobby rules, and mistaking it for production is the failure worth
-  // preventing.
-  function setTestMode(on, botLevel) {
-    $("testFlag").hidden = !on;
-    // The server's level, not this player's practice pick: say which, so a
-    // tester is not surprised by bots that split when practice ones did not.
-    if (on && botLevel) {
-      $("testFlag").textContent = `Test mode \u2014 demo credits, bot-filled arena, ${botLevel} bots`;
-    }
-    document.body.classList.toggle("is-test", !!on);
+  function setTestMode(on) {
     // Test mode exists to find problems, so the numbers are on by default.
     if (on && !settings.perf) {
       settings.perf = true;

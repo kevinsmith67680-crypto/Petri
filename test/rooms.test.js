@@ -129,8 +129,8 @@ console.log("\n-- bots arrive with the first player --");
 const ada = await join("ada", 1_000_000);
 check("the 1.00 join was accepted", !ada.closed, JSON.stringify(ada.closed || {}));
 {
-  // The client labels the test-mode banner from this, so a tester knows which
-  // bots they are facing: the server's, not their own practice pick.
+  // The welcome says which bots this room has: the server's level, not the
+  // player's own practice pick.
   const welcome = ada.out.filter(m => m !== "<binary>").map(JSON.parse)
     .find(m => m.type === "welcome");
   check("the welcome names the bot level", welcome?.botLevel === "hard", String(welcome?.botLevel));

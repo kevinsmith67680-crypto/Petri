@@ -817,7 +817,7 @@ The cost is about 0.7ms more per tick with 100 bots (2.6ms → 3.4ms). Two ideas
 - **Staked games** (`?mode=online`, signed in): a room is shared, so a player's pick cannot change the room. Instead it **chooses the room**, like the stake does. The client sends `bots` with its `/match` request; the matchmaker ranks only rooms at that level, and a server with no room at that level opens one (`seatFor` in `server/index.js`). Everyone in a staked room picked the same level. A new pick takes effect at the next Start, and a reconnect asks for the level the run started at. A player whose body is still standing mid-round goes back to it, whatever level they now ask for.
 - **Only where there are bots.** Staked rooms only have bots in test mode. Without it the server reports no level for its rooms and ignores the one asked for, so real players are never split across lobbies over a setting that changes nothing. `GET /api/config` says which (`liveBots`), and the menu hides the picker on staked tiers when it is false.
 
-`BOT_DIFFICULTY` is the level of the rooms a server opens at startup, and of a room opened for a client that names no level. A mode always keeps one room at that level: when rooms go idle, one opened at a requested level closes first. The level of each room is in `/health` and `/internal/status`, and the welcome message tells the client, whose test-mode banner names it.
+`BOT_DIFFICULTY` is the level of the rooms a server opens at startup, and of a room opened for a client that names no level. A mode always keeps one room at that level: when rooms go idle, one opened at a requested level closes first. The level of each room is in `/health` and `/internal/status`, and the welcome message tells the client.
 
 Measured with 100 bots in the Standard arena over three minutes, averaged over three seeds: 1.80ms of simulation a tick at easy, 2.41ms at normal and 2.67ms at hard. Most of the difference comes from the extra cells that splits and bursts put on the board.
 
@@ -1026,8 +1026,6 @@ Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=1
 **Money still moves — but only demo credits.** MockRamp grants 5.00 on signup and there is no ramp behind it. That is deliberate: staking, having a pot claimed by a killer, forfeiting outside the places, and being paid for a top-5 finish are precisely the paths worth exercising, and they are worthless to test if money never moves. Watch a balance change across a round and you have tested the settlement path end to end.
 
 **`TEST_MODE=1` and `REAL_MONEY=1` refuse to start together.** Test mode drops the lobby to one player and fills the arena with bots; easy plus real funds is how money goes missing. The server throws rather than picking one.
-
-A banner across the top of the screen says test mode is on, and the HUD shifts down to clear it. It is deliberately hard to miss — mistaking test mode for production is the failure worth preventing.
 
 ### What it does not cover
 
