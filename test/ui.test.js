@@ -361,23 +361,20 @@ check("the swatches follow the theme",
 check("and so does the preview", $("lobbyMe").style["--me"] === THEMES.dark.stains[2]);
 $("swTheme").click();
 
-// The pregame menu's gear has its own dark-mode switch. It is the same
-// setting, so either switch has to show what the other one did.
-$("menuSettings").hidden = true;   // as in the markup; the stub starts shown
-$("menuGearBtn").click();
-check("the menu gear opens its panel", !$("menuSettings").hidden);
-check("and says so", $("menuGearBtn").getAttribute("aria-expanded") === "true");
-$("swMenuTheme").click();
-check("the menu switch turns dark mode on", settings.theme === "dark" &&
-  document.documentElement.getAttribute("data-theme") === "dark");
-check("and the in-game switch shows it", $("swTheme").getAttribute("aria-checked") === "true");
-check("the swatches follow the menu switch too",
-  swatches[1].style.background === THEMES.dark.stains[1], swatches[1].style.background);
-$("swTheme").click();
-check("the in-game switch turns it back off", settings.theme === "light" &&
-  $("swMenuTheme").getAttribute("aria-checked") === "false");
-$("menuGearBtn").click();
-check("a second click closes the panel", $("menuSettings").hidden);
+// The menu covers the corner gear, so the page marks when it is up and the
+// stylesheet lifts the gear over it. The mark has to follow the menu out and
+// back in, or the gear would float over a round or vanish from the menu.
+const menuUp = () => document.body.classList.contains("menu-up");
+ui.showStart();
+check("the menu marks the page while it is up", menuUp() && !$("startVeil").hidden);
+$("btnStart").click();
+check("and clears it once the game starts", !menuUp() && $("startVeil").hidden);
+ui.showStart();
+check("back at the menu, the mark returns", menuUp());
+ui.showError({ title: "x", text: "y" });
+check("an error card clears it with the menu", !menuUp() && $("startVeil").hidden);
+ui.hideError();
+ui.showStart();
 
 const typeName = v => {
   $("fLobbyName").value = v;

@@ -69,6 +69,15 @@ export function createUI({
   let tickTimer = null;
   let hudAt = 0;
 
+  // The pregame menu covers the HUD, the corner gear with it. While it is up
+  // the page says so, and the stylesheet lifts the gear above it: the same
+  // button and panel as in a round, in the same corner.
+  function setMenuShown(on) {
+    el.startVeil.hidden = !on;
+    document.body.classList.toggle("menu-up", on);
+  }
+  setMenuShown(!el.startVeil.hidden);
+
   function bumpCounter() {
     el.orbs.classList.remove("tick");
     void el.orbs.offsetWidth;      // force reflow so the animation restarts
@@ -98,7 +107,7 @@ export function createUI({
     btn.onclick = onAction || (() => location.reload());
     $("errVeil").hidden = false;
     // It sits above everything, so nothing else should be competing with it.
-    el.startVeil.hidden = true;
+    setMenuShown(false);
     el.lobbyVeil.hidden = true;
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
@@ -144,7 +153,7 @@ export function createUI({
     el.lobbyVeil.hidden = true;
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
-    el.startVeil.hidden = false;
+    setMenuShown(true);
   }
 
   // Writing textContent invalidates style and layout for that element even
@@ -358,21 +367,6 @@ export function createUI({
     gearBtn.setAttribute("aria-expanded", "false");
   });
 
-  // The pregame menu covers the corner gear, so it carries its own.
-  const menuGearBtn = $("menuGearBtn");
-  const menuPanel = $("menuSettings");
-
-  menuGearBtn.addEventListener("click", () => {
-    menuPanel.hidden = !menuPanel.hidden;
-    menuGearBtn.setAttribute("aria-expanded", String(!menuPanel.hidden));
-  });
-
-  document.addEventListener("pointerdown", e => {
-    if (menuPanel.hidden || e.target.closest(".menu-settings")) return;
-    menuPanel.hidden = true;
-    menuGearBtn.setAttribute("aria-expanded", "false");
-  });
-
   function bindSwitch(id, key, onChange) {
     const sw = $(id);
     sw.setAttribute("aria-checked", String(settings[key]));
@@ -383,20 +377,14 @@ export function createUI({
     });
   }
 
-  // Two switches, one setting: flipping either moves both.
-  const themeSwitches = [$("swTheme"), $("swMenuTheme")];
-  for (const sw of themeSwitches) {
-    sw.setAttribute("aria-checked", String(settings.theme === "dark"));
-    sw.addEventListener("click", () => {
-      settings.theme = settings.theme === "light" ? "dark" : "light";
-      document.documentElement.setAttribute("data-theme", settings.theme);
-      for (const other of themeSwitches) {
-        other.setAttribute("aria-checked", String(settings.theme === "dark"));
-      }
-      paintColours();
-      onThemeChange?.(settings.theme);
-    });
-  }
+  const swTheme = $("swTheme");
+  swTheme.addEventListener("click", () => {
+    settings.theme = settings.theme === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", settings.theme);
+    swTheme.setAttribute("aria-checked", String(settings.theme === "dark"));
+    paintColours();
+    onThemeChange?.(settings.theme);
+  });
 
   bindSwitch("swMap", "map", on => { el.minimap.hidden = !on; });
   bindSwitch("swBoard", "board", on => { el.board.hidden = !on; hudAt = 0; });
@@ -410,7 +398,7 @@ export function createUI({
 
   $("btnStart").addEventListener("click", () => {
     document.activeElement?.blur?.();
-    el.startVeil.hidden = true;
+    setMenuShown(false);
     el.overVeil.hidden = true;
     onStart();
   });
