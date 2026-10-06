@@ -24,7 +24,7 @@ the wire protocol moved twice.
 
 Ranked by how much they cost you, worst first. `README.md` has a longer
 "Before real money" checklist covering legal, KYC and responsible-gambling
-obligations; these four are the code. **None of them is fixed.**
+obligations; these five are the code. **None of them is fixed.**
 
 ### 1. Disconnecting refunds your stake
 
@@ -78,6 +78,20 @@ The only friction is mechanical: ejecting spends 16 mass and delivers 13
 plainly that coordinated feeding in a wagered round is collusion, which is
 documentation, not enforcement.
 
+### 5. Paid places are paid for mass, and the house funds it
+
+A survivor in the paid places is paid the value of the mass they finished on,
+0.005 USDC a point, the "Mass value" the HUD shows (`settleSurvivor` in
+`server/index.js`, `Ledger.payOut`, `petri.pay_out`). The house takes their pot
+and pays the rest. Nothing bounds that by what was staked: five winners on 6,000
+mass each are paid 150 USDC out of a 100-player, 100 USDC round, and a round with
+few players and large winners costs the house far more. It also makes item 4
+worse: mass fed from one account to another is now paid for by the house.
+
+The fix is a decision before it is code: a rate derived from the round's pot
+(each place's share of the real prize pool, by mass), a cap, or an operator who
+means to fund it. `README.md`, "The mass readout", has the numbers.
+
 ---
 
 ## What changed recently
@@ -111,6 +125,11 @@ well as by the suite.
 the account's seat lease before touching its money. Without the table every join is
 refused with "could not take your seat" and retried until the client gives up — the
 game is unplayable while the page, sign-in and menu all look fine.
+
+**Apply `server/db/migrations/009_mass_payout.sql`.** Paid places are paid the value
+of their mass, which needs `petri.pay_out` and lifts the house's floor so it can fund
+a round. Without it the game still plays and still pays: `server/db/pg.js` pays the
+pot instead, as before, and logs `petri.pay_out is missing` once.
 
 **This branch: apply `server/db/migrations/008_progress.sql` too.** XP and ratings
 live in `petri.progress`. Without it the game still plays: joins and matches fall back

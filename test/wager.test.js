@@ -10,7 +10,7 @@
 
 import { Ledger, MockRamp, createRamp, InsufficientFunds } from "../server/ledger.js";
 import {
-  UNIT, PRACTICE, STAKE_1_USDC, formatUsdc, parseUsdc, isValidStake, rakeOn
+  UNIT, PRACTICE, STAKE_1_USDC, formatUsdc, parseUsdc, isValidStake, rakeOn, valueOfMass
 } from "../shared/wager.js";
 
 let failures = 0;
@@ -86,6 +86,37 @@ check("rake is taken from winnings", cashed.rake === 100_000 && cashed.paid === 
 check("rake stays inside the system", R.total() === 10 * UNIT, String(R.total()));
 check("house holds the rake", R.house === 100_000);
 
+console.log("\n-- a paid place is paid its mass --");
+
+// The HUD's "Mass value" is what a paid place is paid. The house takes the
+// pot and funds any difference, which can take it below zero, but value only
+// moves: the total stays put.
+const P = new Ledger();
+P.deposit("dan", 5 * UNIT);
+P.deposit("eve", 5 * UNIT);
+P.lockStake("dan", STAKE_1_USDC);
+P.lockStake("eve", STAKE_1_USDC);
+P.claim("dan", "eve");                                   // dan's pot is 2.00
+const big = P.payOut("dan", valueOfMass(640));           // 3.20
+check("a paid place is paid the value of its mass",
+  big.paid === 3_200_000 && P.balanceOf("dan") === 7_200_000, `${big.paid} / ${P.balanceOf("dan")}`);
+check("the house takes the pot and funds the rest, below zero if it must",
+  P.potOf("dan") === 0 && P.house === 2 * UNIT - 3_200_000, String(P.house));
+check("and no value appears or disappears", P.total() === 10 * UNIT, String(P.total()));
+P.lockStake("eve", STAKE_1_USDC);
+const small = P.payOut("eve", valueOfMass(74));          // 0.37 on a 1.00 stake
+check("a small mass is paid less than its stake",
+  small.paid === 370_000 && P.balanceOf("eve") === 3_370_000, `${small.paid} / ${P.balanceOf("eve")}`);
+check("nothing is paid without a pot", P.payOut("eve", valueOfMass(500)).paid === 0);
+check("the total still holds", P.total() === 10 * UNIT, String(P.total()));
+const PR = new Ledger({ rakeBps: 250 });
+PR.deposit("fay", 5 * UNIT);
+PR.lockStake("fay", STAKE_1_USDC);
+const raked = PR.payOut("fay", 2 * UNIT);
+check("rake comes off the payout", raked.rake === 50_000 && raked.paid === 1_950_000,
+  `paid ${raked.paid}, rake ${raked.rake}`);
+check("and stays inside the system", PR.total() === 5 * UNIT, String(PR.total()));
+
 console.log("\n-- conservation under fuzzing --");
 
 const F = new Ledger({ rakeBps: 175 });
@@ -97,13 +128,14 @@ let mutations = 0, negatives = 0;
 for (let i = 0; i < 20000; i++) {
   const a = accounts[Math.floor(Math.random() * accounts.length)];
   const b = accounts[Math.floor(Math.random() * accounts.length)];
-  const op = Math.floor(Math.random() * 5);
+  const op = Math.floor(Math.random() * 6);
   try {
     if (op === 0) F.lockStake(a, STAKE_1_USDC);
     else if (op === 1) F.claim(a, b);
     else if (op === 2) F.cashOut(a);
     else if (op === 3) F.forfeit(a);
-    else F.refund(a);
+    else if (op === 4) F.refund(a);
+    else F.payOut(a, valueOfMass(20 + Math.floor(Math.random() * 3000)));
     mutations++;
   } catch { /* rejected operations are fine; they must not move money */ }
 

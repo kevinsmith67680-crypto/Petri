@@ -86,6 +86,7 @@ await import("../server/index.js");
 await new Promise(r => setTimeout(r, 400));
 
 const { PROTOCOL_VERSION, PHASE_LOBBY } = await import("../shared/protocol.js");
+const { valueOfMass } = await import("../shared/wager.js");
 
 const req = { headers: {}, socket: { remoteAddress: "10.0.0.7", setNoDelay() {} } };
 
@@ -192,21 +193,23 @@ check("players in another room are untouched", !texts(pro).some(m => m.type === 
 console.log("\n-- each paid place is told what it won --");
 
 // The congratulations card is built from this, so it has to be the ledger's
-// figures: the stake and what was actually paid. Nobody ate anybody, so each
-// pot is the player's own stake and that is what comes back.
+// figures: the stake and what was actually paid. A paid place is paid the
+// value of its mass at the whistle, the HUD's "Mass value". Nobody steers,
+// so each is at or a little over the starting mass: an orb can land on them.
 for (const [ws, name] of [[mid, "mid"], [avg, "avg"]]) {
   const seq = texts(ws);
   const at = seq.findIndex(m => m.type === "result");
   const r = seq[at];
   check(`${name} is told their own result`, r?.placed === true && [1, 2].includes(r?.place),
     JSON.stringify(r));
-  check(`${name}'s stake and payout are the ledger's`,
-    r?.stake === STANDARD && r?.paid === STANDARD && r?.settled === true, JSON.stringify(r));
+  check(`${name} is paid the value of the mass they finished on`,
+    r?.mass >= 20 && r?.paid === valueOfMass(r.mass) && r?.stake === STANDARD && r?.settled === true,
+    JSON.stringify(r));
   // The balance lands first, so the card can show what the payout produced.
   const before = seq.slice(0, at).reverse().find(m => m.type === "account");
   const opened = welcome(ws);
-  check(`${name}'s balance is pushed first, with the pot paid out`,
-    before?.pot === 0 && before?.balance === opened.balance + STANDARD,
+  check(`${name}'s balance is pushed first, with the payout in it and the pot gone`,
+    before?.pot === 0 && before?.balance === opened.balance + r?.paid,
     `${opened?.balance} -> ${before?.balance}, pot ${before?.pot}`);
 }
 

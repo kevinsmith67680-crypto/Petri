@@ -328,6 +328,26 @@ export class PgRepo {
     return { paid: Number(rows[0].paid), rake: Number(rows[0].rake) };
   }
 
+  // A paid place at the HUD's rate (Ledger.payOut). Needs migration 009.
+  // Without it the function does not exist, and the place is paid its pot
+  // instead: still exactly what the ledger moved, so the result the player
+  // is shown stays true, just not the mass figure.
+  async payOut(accountId, units, rakeBps) {
+    try {
+      const { rows } = await this.pool.query(
+        "select * from petri.pay_out($1, $2, $3)", [accountId, units, rakeBps]
+      );
+      return { paid: Number(rows[0].paid), rake: Number(rows[0].rake) };
+    } catch (err) {
+      if (err.code !== "42883") throw err;          // undefined_function
+      if (!this.warnedPayOut) {
+        this.warnedPayOut = true;
+        console.error("payout: petri.pay_out is missing; apply migration 009. Paying pots meanwhile.");
+      }
+      return this.cashOut(accountId, rakeBps);
+    }
+  }
+
   async forfeit(accountId) {
     const { rows } = await this.pool.query(
       "select petri.forfeit_pot($1) as moved", [accountId]

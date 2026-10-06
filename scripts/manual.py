@@ -971,9 +971,9 @@ def story():
           f"The top ten, with a line ruled under {STD['paidPositions']}th. That line is "
           "the pay boundary - watch who is sitting on it."],
          ["At risk / mass value",
-          f"What you are carrying, and what your mass is nominally worth "
-          f"({MASS_PER_USDC:.0f} mass reads as {money(K['UNIT'])} USDC). Shown in "
-          "wagered rounds only."],
+          f"What you staked, and what your mass is worth ({MASS_PER_USDC:.0f} mass is "
+          f"{money(K['UNIT'])} USDC). Finish in the top {STD['paidPositions']} and the "
+          "mass value at the whistle is what you are paid. Wagered rounds only."],
          ["Minimap, bottom left",
           "Where you are in the arena. Mostly it tells you how close you are to "
           "a wall, which is where players get cornered."]],
@@ -1265,12 +1265,14 @@ def story():
         ["When this happens", "Your money does this"],
         [["You join a wagered round", "Your stake moves out of your balance and into "
                                       "escrow - your pot. You cannot spend it while the round runs."],
-         ["You eat a staked player", "Their entire pot moves into yours. This is the only "
-                                     "way a pot grows."],
+         ["You eat a staked player", "All of their mass becomes yours, and their pot moves "
+                                     "into yours. The mass is what you are paid on."],
          ["You are eaten by a staked player", "Your whole pot becomes theirs."],
          [f"You finish in the top {STD['paidPositions']}, alive",
-          "Your pot is paid into your balance: your stake plus everything you took "
-          "off the players you ate."],
+          f"You are paid the value of the mass you finished on, {K['MICRO_PER_MASS'] / K['UNIT']:.3f} "
+          "USDC a point: the mass value on your HUD at the whistle. Your pot goes to "
+          f"the house. Below mass {MASS_PER_USDC:.0f} that is less than a "
+          f"{money(K['UNIT'])} stake."],
          [f"You finish alive but outside the top {STD['paidPositions']}",
           "Your pot is forfeited. Surviving is necessary; it is not sufficient."],
          ["You disconnect and are not eaten",
@@ -1289,14 +1291,14 @@ def story():
 
     s.append(P("What this means for how you play", S_H2))
     s.append(bullets([
-        "<b>Mass sets your rank, not your payout.</b> The figure the HUD shows "
-        "against your mass is a readout, not a promise. What you are actually paid "
-        "is your own escrow - stake plus claimed pots.",
-        "<b>Eating a big staked player is worth more than any amount of farming.</b> "
-        "Orbs move you up the leaderboard. Players move your money.",
-        f"<b>A large pot makes you a target.</b> Late in a round the player who has "
-        "eaten three staked rivals is carrying four stakes, and everybody can see "
-        "how big they are.",
+        f"<b>Mass sets your rank and your payout.</b> Place in the top "
+        f"{STD['paidPositions']} and the mass value on your HUD at the whistle is what "
+        f"you are paid. Mass {MASS_PER_USDC:.0f} gets a {money(K['UNIT'])} stake back; "
+        "every point above it is profit.",
+        "<b>Eating a big player is the fastest money there is.</b> All of their mass "
+        "becomes yours in one bite, and every point of it is paid if you place.",
+        "<b>Size makes you a target.</b> Late in a round the biggest players are "
+        "carrying the most money, and everybody can see how big they are.",
     ]))
 
     s.append(PageBreak())
@@ -1597,15 +1599,15 @@ def story():
 
         (8, "Pot awareness", "Winning",
          ["Only in wagered rounds, and it is what separates a good player from a "
-          "profitable one. Your payout is your escrow, and your escrow grows only "
-          "by eating other staked players.",
-          "So a round spent farming orbs to a safe fourth place returns your stake "
-          "and little else. A round in which you took two staked players and "
-          "finished fifth pays three stakes. Rank decides whether you are paid; "
-          "kills decide how much."],
-         "After each wagered round, ask which of your fights changed your escrow "
-         "and which merely changed your rank. Most players find they spent the "
-         "round on the second kind."),
+          "profitable one. A paid place is paid the value of its mass at the "
+          f"whistle, and mass {MASS_PER_USDC:.0f} only gets your stake back.",
+          "So a round spent creeping to a safe fourth place at mass 150 pays less than "
+          "you staked. A round in which you ate two big players and finished fifth on "
+          "mass 900 pays four and a half stakes. Rank decides whether you are paid; "
+          "mass decides how much."],
+         "After each wagered round, ask which of your fights grew your mass and "
+         "which merely protected your rank. Most players find they spent the round "
+         "on the second kind."),
     ]
 
     for num, title, tag, paras, dr in skills2:
@@ -1846,8 +1848,8 @@ def story():
          ["8:00 - 5:00", "Convert size into kills",
           "You should be comfortably over 100. Hunt players in the band you can "
           f"actually eat - anything under {1 / K['EAT_RATIO']:.2f}x your mass - and take "
-          "them without splitting where possible. In a wagered round this is the "
-          "only part that grows your pot."],
+          "them without splitting where possible. In a wagered round this is where "
+          "the payout is made: a kill is mass you could not farm."],
          ["5:00 - 2:00", "Manage the crown",
           f"If you are large, you are slow and you are decaying above "
           f"{K['DECAY_ABOVE']}. Stay off viruses, stay off walls, and keep eating "
@@ -1868,13 +1870,13 @@ def story():
         "gets eaten, and the cooldown is measured in tens of seconds.",
         f"<b>Carrying more than {K['DECAY_ABOVE']} mass without a plan.</b> Above it "
         "you leak, you are slow, and viruses are lethal to you.",
-        "<b>Chasing a rank instead of a pot.</b> Rank without kills pays back a "
-        "stake and a shrug.",
+        "<b>Chasing a rank instead of mass.</b> A place on small mass pays back "
+        "less than the stake.",
         "<b>Fighting in the last thirty seconds.</b> A place in hand is worth more "
         "than a place you might win.",
         "<b>Counting on a second chance.</b> There is none. Get eaten and you sit "
-        "out the rest of the round, and your pot has already left with the "
-        "player who ate you.",
+        "out the rest of the round, and your mass and your pot have already gone "
+        "to the player who ate you.",
     ]))
 
     s.append(PageBreak())

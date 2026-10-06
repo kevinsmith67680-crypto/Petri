@@ -3,7 +3,8 @@
 // Knows nothing about the simulation beyond the view shape.
 // ---------------------------------------------------------------------------
 
-import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
+import { formatUsdc, valueOfMass, MICRO_PER_MASS, PRACTICE, STAKE_1_USDC, STAKE_2_USDC }
+  from "../shared/wager.js";
 import { MODES, modeById } from "../shared/modes.js";
 import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
   from "../shared/protocol.js";
@@ -346,7 +347,7 @@ export function createUI({
   // paid, and so what the round made them. It opens over the lobby card that
   // everyone has gone back to, and closes onto it.
   function showWin({
-    place, stake = 0, paid = 0, settled = true, round, standings = [], paidPositions, myName
+    place, stake = 0, paid = 0, settled = true, mass = 0, round, standings = [], paidPositions, myName
   }) {
     const medal = $("winMedal");
     medal.textContent = String(place);
@@ -354,23 +355,25 @@ export function createUI({
     medal.className = `medal p${Math.min(Math.max(place, 1), 4)}`;
     setText($("winTitle"), `You finished ${ordinal(place)}`);
 
-    // Profit is what the player made; the payout includes their own stake
-    // back. A place with no kills pays the stake and nothing more, so it says
-    // what was paid rather than "+0.00".
+    // A paid place is paid the value of its mass at the whistle: the figure
+    // the HUD showed as "Mass value", so that is the number this card leads
+    // with. Profit, the payout less the stake, is in the breakdown below.
     const profit = paid - stake;
     const made = settled && profit > 0;
-    setText($("winAmountLabel"), !settled ? "Your payout" : made ? "You made" : "Paid out");
-    $("winAmount").innerHTML = settled
-      ? `${made ? "+" : ""}${formatUsdc(made ? profit : paid)}<small>USDC</small>`
-      : "&mdash;";
+    setText($("winAmountLabel"), "Your payout");
+    $("winAmount").innerHTML = settled ? `${formatUsdc(paid)}<small>USDC</small>` : "&mdash;";
     const finish = paidPositions ? `A top-${paidPositions} finish` : "A paid place";
+    const rate = formatUsdc(MICRO_PER_MASS, 3);
+    const evenAt = Math.ceil(stake / MICRO_PER_MASS);
     setText($("winLine"), !settled
       ? "Your place is recorded, but the payout could not be confirmed. Check your balance before you play again."
       : made
-        ? `${finish}${round ? ` in round ${round}` : ""}. Your winnings are in your balance.`
-        : `${finish} pays out your pot. You took nobody's stake this round, so your own came back.`);
+        ? `${finish} pays your mass: ${mass} at ${rate} USDC a point. It is in your balance.`
+        : `${finish} pays your mass: ${mass} at ${rate} USDC a point, short of your stake. ` +
+          `Past mass ${evenAt} you come out ahead.`);
 
     $("winTally").hidden = !settled;
+    setText($("winMass"), String(mass));
     setText($("winStake"), formatUsdc(stake));
     setText($("winPaid"), formatUsdc(paid));
     setText($("winProfit"), `${profit > 0 ? "+" : profit < 0 ? "\u2212" : ""}${formatUsdc(Math.abs(profit))}`);
