@@ -253,6 +253,69 @@ for (const exit of ["return socket;", "return local;", "return createLocalConnec
     i > 0 ? "" : "exit not found — has connect() been restructured?");
 }
 
+// ── standings at the whistle ────────────────────────────────────────────────
+//
+// Everyone sees the finishing positions for a few seconds before the lobby
+// opens. Surviving to the whistle and being absorbed before it are different
+// results and must not share a heading. Only survivors appear in the
+// standings, so the presence of our own row is what separates the two.
+
+console.log("\n-- standings at the whistle --");
+
+const roundTitle = () => $("roundTitle").textContent;
+const finishers = [
+  { name: "Ada", mass: 900, position: 1, paid: true },
+  { name: "Kev", mass: 700, position: 2, paid: true },
+  { name: "Bo", mass: 500, position: 3, paid: true }
+];
+const endRound = myName =>
+  ui.showRoundEnd({ number: 4, standings: finishers, nextIn: 5, paidPositions: 5, myName });
+
+$("overVeil").hidden = false;
+endRound("Bo");
+check("the standings open at the whistle", $("roundVeil").hidden === false);
+check("over a death card", $("overVeil").hidden === true);
+check("a survivor is told the position they finished on",
+  roundTitle() === "You finished 3rd", roundTitle());
+check("every survivor's position is listed",
+  ($("standingsList").innerHTML.match(/<div/g) || []).length === 3 &&
+  /1\. Ada/.test($("standingsList").innerHTML) && /3\. Bo/.test($("standingsList").innerHTML),
+  $("standingsList").innerHTML);
+check("with the paid places marked", /paid &middot; 900/.test($("standingsList").innerHTML));
+check("it says when the lobby opens", String($("nextRound").textContent) === "Back to the lobby in 5s",
+  String($("nextRound").textContent));
+check("and how many places pay, from the room rather than a fixed five",
+  /top 5 are paid/.test($("roundBlurb").textContent), $("roundBlurb").textContent);
+ui.renderIntermission({ phase: 2, remaining: 2.3, number: 4 });
+check("the count runs down from the server's clock",
+  String($("nextRound").textContent) === "Back to the lobby in 3s", String($("nextRound").textContent));
+ui.renderIntermission({ phase: 2, remaining: 0, number: 4 });
+check("and never sits on a zero", String($("nextRound").textContent) === "Back to the lobby…");
+
+endRound("Ada");
+check("first place reads as first",
+  roundTitle() === "You finished 1st", roundTitle());
+
+// Absorbed before the whistle: no row of our own, so claiming a position here
+// would invent one the player never held.
+endRound("Ghost");
+check("someone absorbed before the whistle is not given a position",
+  roundTitle() === "Round 4 over", roundTitle());
+
+ui.showRoundEnd({ number: 4, standings: [], nextIn: 5, myName: "Bo" });
+check("an empty board falls back to the plain heading",
+  roundTitle() === "Round 4 over", roundTitle());
+check("and says nobody survived", /Nobody survived/.test($("standingsList").innerHTML));
+
+endRound(undefined);
+check("a missing display name cannot match a row",
+  roundTitle() === "Round 4 over", roundTitle());
+
+ui.showLobby({ ready: 0, connected: 3, min: 2, max: 150, phase: 3 });
+check("the lobby takes over from the standings",
+  $("roundVeil").hidden === true && $("lobbyVeil").hidden === false);
+$("lobbyVeil").hidden = true;
+
 // ── congratulations ─────────────────────────────────────────────────────────
 //
 // A paid place at the whistle gets a card of its own, over the lobby everyone
@@ -679,10 +742,15 @@ console.log("\n-- level and rank --");
   check("signing out hides it", $("progressBox").hidden === true);
   check("from the lobby card as well", $("lobbyProgress").hidden === true && $("lobbyGain").hidden === true);
 
-  // The congratulations card.
+  // The standings, then the congratulations card. The whistle clears the
+  // last round's line; this round's arrives after the result.
+  ui.showRoundEnd({ number: 1, standings: [], nextIn: 5, myName: "Ada" });
+  check("the standings open without a gain line", $("roundGain").hidden === true);
   ui.showWin({ place: 1, stake: 1_000_000, paid: 2_000_000, standings: [], myName: "Ada" });
   check("the card opens without a gain line: it arrives after the result", $("winGain").hidden === true);
   ui.showProgressGain({ gained: 100, ratingChange: 23.6, rated: true, xp: 100 });
+  check("the standings show it too", $("roundGain").hidden === false &&
+    /\+100 XP/.test($("roundGain").innerHTML), $("roundGain").innerHTML);
   check("a win shows its XP, the level it reached, and the rating change",
     $("winGain").hidden === false && /\+100 XP/.test($("winGain").innerHTML) &&
     /Level 2!/.test($("winGain").innerHTML) && /Rating \+24/.test($("winGain").innerHTML),
@@ -695,7 +763,14 @@ console.log("\n-- level and rank --");
   ui.showProgressGain({ gained: 0, ratingChange: 0, rated: false, xp: 150 });
   check("nothing earned and nothing rated shows nothing",
     $("winGain").hidden === true && $("lobbyGain").hidden === true);
+  // XP that lands while the standings are up is on the card when it opens.
+  ui.showRoundEnd({ number: 2, standings: [], nextIn: 5, myName: "Ada" });
   ui.showProgressGain({ gained: 70, rated: true, ratingChange: 5, xp: 170 });
+  ui.showWin({ place: 2, stake: 1_000_000, paid: 1_000_000, standings: [], myName: "Ada" });
+  check("XP that arrived during the standings is on the card",
+    $("winGain").hidden === false && /\+70 XP/.test($("winGain").innerHTML), $("winGain").innerHTML);
+  $("btnWinLobby").click();
+  ui.showRoundEnd({ number: 3, standings: [], nextIn: 5, myName: "Ada" });
   ui.showWin({ place: 2, stake: 1_000_000, paid: 1_000_000, standings: [], myName: "Ada" });
   check("the next round's card does not show the last round's gain", $("winGain").hidden === true);
   $("btnWinLobby").click();

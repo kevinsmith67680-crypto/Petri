@@ -57,6 +57,7 @@ process.env.MAX_ROOMS = "3";
 // A long round, so nothing here races a settlement.
 process.env.ROUND_SECONDS = "60";
 process.env.COUNTDOWN_SECONDS = "1";
+process.env.STANDINGS_SECONDS = "1";
 // Short enough to watch a room wait out its lingering bodies.
 process.env.LINGER_SEC = "2";
 

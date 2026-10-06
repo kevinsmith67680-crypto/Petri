@@ -42,7 +42,7 @@ import {
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
-  PHASE_LIVE, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
+  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import { PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
@@ -129,6 +129,10 @@ const HZ = Math.max(10, Math.min(60, envInt("TICK_HZ", TICK_HZ)));
 // pressed a button are not looking at the arena; dropping them straight into
 // it costs them the opening seconds of a round they have paid for.
 const COUNTDOWN_SECONDS = envInt("COUNTDOWN_SECONDS", 5);
+
+// How long the finishing positions stay on screen at the whistle before
+// everyone is taken to the lobby.
+const STANDINGS_SECONDS = envInt("STANDINGS_SECONDS", 5);
 
 // Lobby. A round starts only once this many players have marked themselves
 // ready, and the server refuses connections past the maximum.
@@ -1258,7 +1262,7 @@ function refreshSpectate(room, meta) {
 
 // Time is up. Survivors are ranked by mass; the top paidPositions realise
 // their pot and everyone else forfeits. Surviving is necessary but not
-// sufficient — you have to place. Then everyone goes back to the lobby.
+// sufficient — you have to place. Then the standings, then the lobby.
 async function endRound(room) {
   const { world, round, mode } = room;
   // Taken now, before anything is awaited, so the round being scored is this
@@ -1291,12 +1295,14 @@ async function endRound(room) {
       position: i + 1,
       paid: i + 1 <= room.paidPositions
     })),
-    paidPositions: room.paidPositions
+    paidPositions: room.paidPositions,
+    nextIn: STANDINGS_SECONDS
   });
 
-  // Everyone back to the lobby at the whistle, un-readied. Synchronous, so
-  // the phase has left LIVE before the tick could ask again.
-  toLobby(room);
+  // The round is over for everyone at once: bodies off the board, nobody
+  // ready, and the standings up until the lobby opens. Synchronous, so the
+  // phase has left LIVE before the tick could ask again.
+  closeRound(room);
 
   // No count can start until every survivor is paid: startRound re-stakes
   // from the connection, and a round must not open on a payout in flight.
@@ -1422,13 +1428,14 @@ async function awardProgress(room, survivors, entrants) {
   }
 }
 
-// Back to the lobby at the whistle. Everyone is despawned and un-readied, so
-// the next round needs a fresh show of hands: nobody is staked into a round
-// they did not choose to play. The exception is a player who sat this round
-// out and readied during it, which was that choice, made for the next one.
-function toLobby(room) {
-  room.round.phase = PHASE_LOBBY;
-  room.round.endsAt = Infinity;
+// The whistle. Everyone is despawned and un-readied, so the next round needs
+// a fresh show of hands: nobody is staked into a round they did not choose to
+// play. The exception is a player who sat this round out and readied during
+// it, which was that choice, made for the next one. The finishing positions
+// stay on screen for STANDINGS_SECONDS, then toLobby opens the lobby.
+function closeRound(room) {
+  room.round.phase = PHASE_INTERMISSION;
+  room.round.endsAt = room.world.time + STANDINGS_SECONDS;
   for (const meta of room.clients.values()) {
     meta.ready = !!meta.readyForNext;
     meta.readyForNext = false;
@@ -1437,6 +1444,12 @@ function toLobby(room) {
     p.alive = false;
     p.cells = [];
   }
+}
+
+// The standings have been up long enough: everyone to the lobby.
+function toLobby(room) {
+  room.round.phase = PHASE_LOBBY;
+  room.round.endsAt = Infinity;
   pushLobby(room);
 }
 
@@ -1985,6 +1998,12 @@ function tickRoom(room, dt) {
     // Not awaited: settlement talks to the database and the tick must not
     // block on it. The phase flips synchronously, so this cannot run twice.
     endRound(room).catch(err => console.error("endRound:", err.message));
+  } else if (round.phase === PHASE_INTERMISSION && world.time >= round.endsAt) {
+    toLobby(room);
+    // Only someone who sat the round out, or arrived during the standings,
+    // can be ready already; with enough of them the count starts now. Held
+    // while the round is still paying out, and asked again when it is done.
+    maybeStartRound(room);
   } else if (round.phase === PHASE_COUNTDOWN && !room.starting) {
     // Checked every tick rather than only where readiness changes, so a player
     // dropping their connection mid-count aborts it the same as un-readying.
