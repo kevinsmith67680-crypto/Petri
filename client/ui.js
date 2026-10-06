@@ -358,6 +358,21 @@ export function createUI({
     gearBtn.setAttribute("aria-expanded", "false");
   });
 
+  // The pregame menu covers the corner gear, so it carries its own.
+  const menuGearBtn = $("menuGearBtn");
+  const menuPanel = $("menuSettings");
+
+  menuGearBtn.addEventListener("click", () => {
+    menuPanel.hidden = !menuPanel.hidden;
+    menuGearBtn.setAttribute("aria-expanded", String(!menuPanel.hidden));
+  });
+
+  document.addEventListener("pointerdown", e => {
+    if (menuPanel.hidden || e.target.closest(".menu-settings")) return;
+    menuPanel.hidden = true;
+    menuGearBtn.setAttribute("aria-expanded", "false");
+  });
+
   function bindSwitch(id, key, onChange) {
     const sw = $(id);
     sw.setAttribute("aria-checked", String(settings[key]));
@@ -368,14 +383,20 @@ export function createUI({
     });
   }
 
-  const swTheme = $("swTheme");
-  swTheme.addEventListener("click", () => {
-    settings.theme = settings.theme === "light" ? "dark" : "light";
-    document.documentElement.setAttribute("data-theme", settings.theme);
-    swTheme.setAttribute("aria-checked", String(settings.theme === "dark"));
-    paintColours();
-    onThemeChange?.(settings.theme);
-  });
+  // Two switches, one setting: flipping either moves both.
+  const themeSwitches = [$("swTheme"), $("swMenuTheme")];
+  for (const sw of themeSwitches) {
+    sw.setAttribute("aria-checked", String(settings.theme === "dark"));
+    sw.addEventListener("click", () => {
+      settings.theme = settings.theme === "light" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", settings.theme);
+      for (const other of themeSwitches) {
+        other.setAttribute("aria-checked", String(settings.theme === "dark"));
+      }
+      paintColours();
+      onThemeChange?.(settings.theme);
+    });
+  }
 
   bindSwitch("swMap", "map", on => { el.minimap.hidden = !on; });
   bindSwitch("swBoard", "board", on => { el.board.hidden = !on; hudAt = 0; });

@@ -731,6 +731,15 @@
   }
   html[data-theme="dark"] .badge{ background:#3a3216; color:#f0dfa4; border-color:#5c4f22; }
 
+  /* The badge's bottom margin moves to the row, so the gear centres on the
+     badge itself and the badge stays where it was. */
+  .head-tools{ display:flex; align-items:center; gap:12px; margin-bottom:17.5px; }
+  .head-tools .badge{ margin-bottom:0; }
+  .menu-settings{ position:relative; line-height:normal; }
+  .menu-settings .settings{
+    position:absolute; top:calc(100% + 10px); right:0; z-index:2;
+  }
+
   .wallet[hidden]{ display:none; }
   .wallet{
     margin-top:27.5px;
@@ -891,7 +900,7 @@
     .seg button{ padding:11.2px 0; }
     .keys{ margin-top:17.5px; }
     .card button{ margin-top:18px; }
-    .badge{ margin-bottom:12.5px; }
+    .head-tools{ margin-bottom:12.5px; }
   }
 
   @media (max-width:640px){
@@ -1041,7 +1050,26 @@
         <img class="logo dark" src="./assets/logo-dark.png"
              alt="" aria-hidden="true" width="660" height="530">
       </h1>
-      <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
+      <div class="head-tools">
+        <span class="badge" id="demoBadge">DEMO — NO REAL MONEY</span>
+        <!-- The in-game gear sits under this overlay, so the menu has its own.
+             Only the theme is here: the rest of the settings are for the HUD. -->
+        <div class="menu-settings">
+          <button class="gear" id="menuGearBtn" type="button" aria-label="Settings" aria-expanded="false" aria-controls="menuSettings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.1"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+          <div class="settings" id="menuSettings" hidden>
+            <h2>Settings</h2>
+            <div class="row">
+              <label id="lblMenuTheme" for="swMenuTheme">Dark mode</label>
+              <button class="switch" id="swMenuTheme" type="button" role="switch" aria-checked="false" aria-labelledby="lblMenuTheme"></button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="panes">
