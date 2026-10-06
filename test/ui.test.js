@@ -323,6 +323,43 @@ ui.renderCountdown({ phase: 3, remaining: 0, number: 0 });
 check("and the stale number is not ticked any more",
   $("lobbyCountNum").textContent === "Go", $("lobbyCountNum").textContent);
 
+// Nobody joins a round under way. A player arriving during one waits on the
+// lobby card, which the lobby message opens with the round's phase (live is
+// 1, intermission 2) rather than the lobby's.
+ui.setReady(false);
+ui.showLobby({ ready: 3, connected: 4, min: 1, max: 150, phase: 1 });
+check("a player waiting out a round is told one is in progress",
+  /round is in progress/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
+check("and that they are in the next one, not this",
+  /next one/.test($("lobbyHint").textContent), $("lobbyHint").textContent);
+// The round's own players are all still ready, so the meter would read full
+// and claim the round is about to start.
+check("the meter does not pretend the room is about to start",
+  $("lobbyMeter").hidden === true && $("lobbyCount").hidden === true);
+check("the button is about the next round", $("btnReady").textContent === "I'm in for the next round",
+  $("btnReady").textContent);
+ui.renderCountdown({ phase: 1, remaining: 74.2, number: 3 });
+check("the time left in the round is ticked from the server's clock",
+  /1:15 left/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
+ui.setReady(true);
+ui.showLobby({ ready: 4, connected: 4, min: 1, max: 150, phase: 1 });
+check("readying while they wait says so", $("btnReady").textContent === "In for the next round",
+  $("btnReady").textContent);
+ui.renderCountdown({ phase: 2, remaining: 4, number: 3 });
+check("the line follows the round into its standings",
+  /just finished/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
+ui.showRoundEnd({ number: 3, standings: [], nextIn: 4, myName: "Ada" });
+check("and the standings replace the lobby card, as for everyone", $("lobbyVeil").hidden === true);
+// Back between rounds, the card is the ordinary lobby again.
+ui.showLobby({ ready: 1, connected: 4, min: 2, max: 150, phase: 3 });
+check("between rounds the lobby is back to normal",
+  $("lobbyMeter").hidden === false && /Waiting for 1 more/.test($("lobbyLine").textContent),
+  $("lobbyLine").textContent);
+ui.renderCountdown({ phase: 1, remaining: 30, number: 4 });
+check("and no longer ticks a round it is not waiting on",
+  /Waiting for 1 more/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
+ui.setReady(false);
+
 console.log("\n-- your cell, on the lobby card --");
 
 const swatches = $("swatches").children;

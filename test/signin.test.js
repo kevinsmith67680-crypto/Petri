@@ -514,6 +514,10 @@ console.log("\n-- a round opening is not a death --");
             round: 1, roundSeconds: 120, lobbyMin: 1, lobbyMax: 150, test: true,
             stake: 1_000_000, signedIn: true, displayName: "Me", protocol: PROTOCOL_VERSION });
 
+  // Ready, as anyone dealt into a round is: one who is not stays in the
+  // lobby at the whistle (below).
+  $("btnReady").click();
+
   // The despawned frame the count leaves behind, then the whistle.
   deliver(snapshot(false, counting), true);
   deliver({ type: "round_start", mode: "standard", number: 2, seconds: 120 });
@@ -531,6 +535,62 @@ console.log("\n-- a round opening is not a death --");
   deliver(snapshot(false, live), true);
   stepFrame();
   check("being eaten for real still shows one", $("overVeil").hidden === false);
+}
+
+console.log("\n-- nobody is dropped into a round they are not in --");
+
+// The server deals bodies at the whistle and nowhere else: a player who
+// arrives during a round, or was not ready when it started, waits it out.
+// The lobby card is where they wait, and where they opt into the next one,
+// so it has to stay up through a round instead of only between them.
+{
+  const { PROTOCOL_VERSION, PHASE_LIVE, PHASE_LOBBY } = await import("../shared/protocol.js");
+  const open = async () => {
+    $("stake1").click();
+    $("btnStart").click();
+    await afterMatch();
+    const ws = sockets[sockets.length - 1];
+    (ws.handlers.open || []).forEach(fn => fn());
+    return data => ws.handlers.message.forEach(fn => fn({ data: JSON.stringify(data) }));
+  };
+  const welcome = extra => ({
+    type: "welcome", id: "me", nid: 1, tickHz: 20, mode: "standard", round: 1,
+    roundSeconds: 120, lobbyMin: 1, lobbyMax: 150, test: true, stake: 1_000_000,
+    signedIn: true, displayName: "Me", protocol: PROTOCOL_VERSION, ...extra
+  });
+  const lobby = (phase, extra = {}) => ({
+    type: "lobby", mode: "standard", ready: 1, connected: 2, min: 1, max: 150, phase, starts: null, ...extra
+  });
+
+  // Arriving while a round is being played.
+  let deliver = await open();
+  $("lobbyVeil").hidden = true;
+  deliver(lobby(PHASE_LIVE));        // the arrival's broadcast, ahead of the welcome
+  check("a mid-round lobby message alone does not open the card", $("lobbyVeil").hidden === true);
+  deliver(welcome({ waiting: true }));
+  deliver(lobby(PHASE_LIVE));
+  check("a player arriving mid-round waits on the lobby card", $("lobbyVeil").hidden === false);
+  check("which says a round is in progress", /round is in progress/.test($("lobbyLine").textContent),
+    $("lobbyLine").textContent);
+  deliver({ type: "round_end", number: 1, standings: [], nextIn: 3 });
+  check("the standings replace it when the round ends",
+    $("lobbyVeil").hidden === true && $("roundVeil").hidden === false);
+  deliver(lobby(PHASE_LIVE, { connected: 5 }));
+  check("after which it is an ordinary lobby again, not reopened mid-round",
+    $("lobbyVeil").hidden === true);
+
+  // In the lobby, but not ready when the round starts.
+  deliver = await open();
+  deliver(welcome({}));
+  deliver(lobby(PHASE_LOBBY));
+  check("an unready player is in the lobby", $("lobbyVeil").hidden === false);
+  deliver({ type: "round_start", mode: "standard", number: 2, seconds: 120 });
+  check("and stays there when the round starts without them", $("lobbyVeil").hidden === false);
+  check("told a round is in progress", /round is in progress/.test($("lobbyLine").textContent),
+    $("lobbyLine").textContent);
+  deliver(lobby(PHASE_LIVE, { connected: 3 }));
+  check("and kept up to date while they wait", String($("lobbyConnected").textContent) === "3",
+    $("lobbyConnected").textContent);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

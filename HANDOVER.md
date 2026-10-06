@@ -217,7 +217,6 @@ the tick keeps sending snapshots. The tick's countdown branch is guarded with
 
 | Item | Where |
 |---|---|
-| **Mid-round arrivals spawn straight into the live round.** The README and the join handler's own comment say they wait in the lobby; the code despawns them only when the round is *not* live. Decide which is meant — it matters in a staked room, and it means a mid-round arrival never sees the lobby to pick a colour | `server/index.js`, the join handler ("Arrivals wait in the lobby") |
 | Without `DATABASE_URL`, `/api/stats` returns each match's `accountId` and `killerId` — another player's account id. The Postgres backend lists its columns and does not | `server/db/memory.js`, `getMatches()` |
 | Found by reading, not reproduced: after a refused join ("Back to menu"), pressing Start with Practice selected sends `respawn` down the dead socket instead of starting practice, because `start()` only rebuilds the connection for a staked tier | `client/main.js`, `start()` |
 | Shared links have no preview image. `og:image` must be an absolute URL and the game answers on two hosts, so it needs a decision on which | `index.html` head |

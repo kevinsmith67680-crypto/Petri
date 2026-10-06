@@ -186,6 +186,7 @@ export function createUI({
   }
 
   let iAmReady = false;
+  let lobbyWaiting = false;
 
   // The last second of the count is spent starting the round, so it reads as
   // the word rather than a zero sitting on screen.
@@ -213,37 +214,67 @@ export function createUI({
     // is in and who is ready is the lobby's own information, and it is what
     // a player deciding whether to stay needs while the count runs.
     const counting = phase === PHASE_COUNTDOWN;
+    // Opened during a round: this player arrived while it was being played
+    // and is held out of it. The meter would read the round's own players
+    // as a lobby that is ready to go, so it gives way to how long is left.
+    lobbyWaiting = phase === PHASE_LIVE || phase === PHASE_INTERMISSION;
     el.lobbyCount.hidden = !counting;
-    $("lobbyMeter").hidden = counting;
+    $("lobbyMeter").hidden = counting || lobbyWaiting;
     // Written here as well as from the snapshot clock, because the card is
     // opened by this message: leaving it to the next frame shows the previous
     // count's final number for as long as it takes one to arrive.
     if (counting && typeof starts === "number") setText($("lobbyCountNum"), countText(starts));
 
     const short = Math.max(0, min - ready);
-    $("lobbyLine").textContent = counting
-      ? "Everyone is ready."
-      : short === 0
-        ? "Starting now."
-        : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`;
-    $("lobbyHint").textContent = counting
-      ? "Leaving the lobby now stops the round from starting."
-      : `The match begins as soon as ${min} player${min === 1 ? " is" : "s are"} ready. Capacity ${max}.`;
+    // Written through setText, which renderCountdown also uses for the time
+    // left, so the two never fight over what the line last said.
+    setText($("lobbyLine"), lobbyWaiting
+      ? waitingLine(phase, null)
+      : counting
+        ? "Everyone is ready."
+        : short === 0
+          ? "Starting now."
+          : `Waiting for ${short} more player${short === 1 ? "" : "s"} to be ready.`);
+    $("lobbyHint").textContent = lobbyWaiting
+      ? "Nobody joins a round once it has started. Ready up now and you are in the next one."
+      : counting
+        ? "Leaving the lobby now stops the round from starting."
+        : `The match begins as soon as ${min} player${min === 1 ? " is" : "s are"} ready. Capacity ${max}.`;
+    renderReadyButton();
+  }
 
+  // Which round the button is about, said in the same words as the standings
+  // card's, since a waiting player is opting into the one after this.
+  function renderReadyButton() {
     const btn = $("btnReady");
+    const counting = !el.lobbyCount.hidden;
     // Nobody is being waited on once the count is running, so the button stops
     // saying so. It is still a toggle: pressing it calls the round off.
-    btn.textContent = iAmReady
-      ? (counting ? "Ready" : "Ready — waiting for others")
-      : "I'm ready";
+    btn.textContent = lobbyWaiting
+      ? (iAmReady ? "In for the next round" : "I'm in for the next round")
+      : iAmReady
+        ? (counting ? "Ready" : "Ready — waiting for others")
+        : "I'm ready";
     btn.setAttribute("aria-pressed", String(iAmReady));
   }
+
+  const waitingLine = (phase, remaining) =>
+    phase === PHASE_INTERMISSION
+      ? "That round has just finished. The next one opens shortly."
+      : typeof remaining === "number"
+        ? `A round is in progress: ${mmss(Math.max(0, Math.ceil(remaining)))} left.`
+        : "A round is in progress.";
 
   // Ticks the pre-round count on the lobby card from the snapshot clock, the
   // same way the intermission is ticked — the number on screen is the
   // server's, so it cannot drift away from when the round actually starts.
   function renderCountdown(round) {
     if (!el.lobbyVeil || el.lobbyVeil.hidden) return;
+    // A waiting player watches the round they are held out of run down.
+    if (lobbyWaiting && round && (round.phase === PHASE_LIVE || round.phase === PHASE_INTERMISSION)) {
+      setText($("lobbyLine"), waitingLine(round.phase, round.remaining));
+      return;
+    }
     if (!round || round.phase !== PHASE_COUNTDOWN) return;
     setText($("lobbyCountNum"), countText(Math.max(0, Math.round(round.remaining))));
   }
@@ -271,6 +302,9 @@ export function createUI({
     // The round ending supersedes a death card: if you were eaten seconds
     // before the whistle, the standings are the more useful thing to see.
     el.overVeil.hidden = true;
+    // And the lobby card of a player who waited the round out: the standings
+    // are where everyone opts into the next one.
+    el.lobbyVeil.hidden = true;
     // The last round's gain is not this one's. This round's arrives a moment
     // after the standings, once the server has written it.
     $("roundGain").hidden = true;

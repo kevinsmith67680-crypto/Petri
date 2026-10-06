@@ -1086,11 +1086,10 @@ def story():
         [50 * mm, None, None]))
 
     s.append(P("Two details worth knowing. The ring is <b>turned by a fresh angle "
-               "every round</b>, so there is no memorised opening. And a "
-               "<b>mid-round respawn is not on the ring</b> - it is a uniformly random "
-               "point anywhere in the arena, which is deliberate: a ring position is "
-               "an opening, and handing one to somebody who died at minute eight "
-               "would be a reward for dying.", S_BODY))
+               "every round</b>, so there is no memorised opening. And the ring is "
+               "<b>the only way onto the board</b>: nobody joins a round once it has "
+               "started, and nobody respawns in one. Arrive late, or get eaten, and "
+               "you wait in the lobby for the next round's whistle.", S_BODY))
 
     s.append(PageBreak())
 
@@ -1277,12 +1276,12 @@ def story():
 
     s.append(Spacer(1, 4))
     s.append(callout(
-        "Death ends your wager, even if you play on",
-        "You can respawn and keep playing after being eaten, and you should - "
-        "position is still worth having. But your pot left with your killer. "
-        f"Finishing in the top {STD['paidPositions']} after dying once pays out an empty "
-        "escrow, which is nothing. <b>Your wager is decided the moment you are "
-        "eaten, not at the whistle.</b>", DANGER, colors.HexColor("#fbeceb")))
+        "Death ends your round",
+        "Once you are eaten you are out until the next round. You can watch the "
+        "rest from the spectator view, but there is no respawn and no way back onto "
+        "the board until the next whistle. Your pot left with your killer. "
+        "<b>Your wager is decided the moment you are eaten, not at the "
+        "whistle.</b>", DANGER, colors.HexColor("#fbeceb")))
 
     s.append(P("What this means for how you play", S_H2))
     s.append(bullets([
@@ -1400,8 +1399,8 @@ def story():
 
     s.append(P("What it means for how you play", S_H2))
     s.append(bullets([
-        "<b>Only the life you were dealt in with counts.</b> Eaten and respawned, "
-        "you can play on, but the new life cannot win XP or lift your rating.",
+        "<b>One life per round.</b> Eaten, you are out until the next round: "
+        "there is no respawn to play on with.",
         "<b>Leaving does not dodge a loss.</b> Walk away mid-round and you are out "
         "the moment your cell leaves the arena, ranked with the eaten.",
         f"<b>Surviving is worth rating even outside the top {paid}.</b> Everyone "
@@ -1869,8 +1868,9 @@ def story():
         "stake and a shrug.",
         "<b>Fighting in the last thirty seconds.</b> A place in hand is worth more "
         "than a place you might win.",
-        "<b>Treating a respawn as a second chance at the money.</b> It is not. Your "
-        "pot left with the player who ate you.",
+        "<b>Counting on a second chance.</b> There is none. Get eaten and you sit "
+        "out the rest of the round, and your pot has already left with the "
+        "player who ate you.",
     ]))
 
     s.append(PageBreak())

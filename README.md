@@ -384,9 +384,9 @@ Absorbed players get a **Spectate** button on the death card alongside Play agai
 
 The scoping rules survive intact. **A spectator inherits the target's view radius, not a free view of the arena** — the tests assert that no cell and no pellet outside the target's own radius reaches them. Spectating is also refused while alive, which would otherwise be a second camera on the board.
 
-Loose ends handled: the watched player can be eaten at any moment, so targets are re-checked every tick and the view cycles on automatically. Respawning, a new round, and returning to the lobby all end spectating.
+Loose ends handled: the watched player can be eaten at any moment, so targets are re-checked every tick and the view cycles on automatically. A new round and returning to the lobby both end spectating.
 
-**One thing to think about.** Mid-round respawning is still allowed, so a player can die, watch the leader, and rejoin. Mid-round spawn points stay random — only round starts use the ring — so the intel is of limited use — but if that bothers you, the fix is to make death final for the round and spectating the only option after it.
+**Death is final for the round.** Nobody comes onto the board while a round is being played. The server ignores `respawn` in its rooms, so a player who is eaten can spectate until the whistle but not rejoin. Play again opens a fresh join, and a join during a round waits in the lobby: the welcome carries `waiting: true`, the lobby card stays up through the round with the time left, and the player can ready up there for the next one. A player who was in the lobby but not ready at the whistle is left out of the round the same way, and waits on the same card. Watching the leader for a few minutes therefore buys nothing until the next round, which is dealt onto a fresh ring anyway. Practice runs in the browser and still respawns.
 
 ### The mass readout
 
@@ -665,7 +665,7 @@ Neither is money. Neither moves a balance, and neither is affected by the stake.
 
 **XP goes to winners.** A win is the same thing the payout means by one: standing at the whistle in the paid places, with position counted among everyone standing, bots included, exactly as `cashOut` counts it. First to fifth earn 100, 70, 50, 35 and 25. Being eaten earns nothing, and neither does standing at the whistle outside the paid places. Levels are XP on a curve: reaching level *L* takes 50·*L*·(*L*−1) in total, so one first place is level 2, about ten is level 5, and about forty-five is level 10.
 
-**Only the life you were dealt in with counts.** Players who were ready at the whistle are the round's entrants (`dealEntrants` in `server/index.js`). An entrant is out the moment they are eaten, or the moment their body leaves the round if they walked away (a lingering body timing out, a replaced connection, leaving). A mid-round respawn is a new, unstaked life. It can play on, but it cannot win XP or move a rating.
+**Only the life you were dealt in with counts.** Players who were ready at the whistle are the round's entrants (`dealEntrants` in `server/index.js`). An entrant is out the moment they are eaten, or the moment their body leaves the round if they walked away (a lingering body timing out, a replaced connection, leaving). There is no second life to play on: nobody respawns or joins during a round, so an entrant who is eaten is out until the next one.
 
 **The rating is multiplayer Elo.** New accounts start at 1000. At the whistle the entrants are put in finishing order: survivors by position, then the eliminated, last out first. Every pair is scored as a head-to-head, won by the better finish, against what their two ratings predicted, and each player's total is scaled by 1/(n−1). So one round moves a rating by at most K however big the field, and finishing above a stronger player is worth more than finishing above a weaker one. K is 48 for an account's first ten rated rounds, so a new player finds their level quickly, and 24 after that. A round with a single person in it (alone with bots in test mode) earns its XP but is not rated: there is nobody to be rated against. Ratings fall into named ranks: Bronze below 900, Silver, Gold from 1100, Platinum from 1300, Diamond from 1500.
 
@@ -905,7 +905,7 @@ The wire carries a virus's compact id and feed count alongside its position (7 b
 
 **Everyone starts the same distance apart.** Random spawn points decided rounds before they began: two players could open within eating distance of each other while a third had a quarter of the board to itself. The field is now dealt onto one ring at equal angular spacing (`spawnRing` in `shared/sim.js`), so every opening position is interchangeable — same distance to either neighbour, same distance to the centre, same distance to the wall. The target gap is 520 units; a lobby too big to seat at that spacing gets the widest ring the arena holds instead, which is tighter but still even (100 players come out 268 apart, about fifteen starting diameters). The ring is turned by a seeded angle each round, so it is reproducible from the world seed without landing on the same points every time. Where bots stand in for a short lobby, the humans are dealt into the ring at even intervals rather than left in a block.
 
-Only round starts use the ring. A **mid-round respawn is still random**, which is deliberate: a ring position is an opening, and handing one to a player who died at minute eight would be a reward for dying.
+Only round starts use the ring, and in the server's rooms they are the only way onto the board: nobody joins or respawns during a round. Practice, which runs in the browser, still respawns you at a random point.
 
 The clock sits top centre: a large countdown, the round number, and the **wall-clock time the round finishes** ("ends 16:10"). The finish time is formatted to the minute and stays fixed for the whole round, because `now` and `remaining` move together — verified across a full ten minutes, one distinct value. The countdown turns red and pulses in the last 30 seconds, which is the only motion in the HUD so it reads as urgency rather than decoration.
 
@@ -1089,6 +1089,6 @@ Nothing here is production-ready for handling funds. At minimum, all of these ne
 
 ## Behaviour notes
 
-- Your orb count is per life. Respawning starts a fresh run and resets it, along with peak mass and cells eaten.
+- Your orb count is per life. In practice, respawning starts a fresh run and resets it, along with peak mass and cells eaten. In a live room a life is the round: once eaten, you play again in the next one.
 - Offline mode steps at the render rate rather than a fixed 20Hz. There is nothing to interpolate against locally and variable `dt` looks smoother. The simulation is `dt`-scaled, so both modes play materially the same.
 - Online mode renders roughly 100ms behind the server so there are always two snapshots to interpolate between. Lower it in `net.js` (`INTERP_MS`) for less latency at the cost of stutter when packets are late.

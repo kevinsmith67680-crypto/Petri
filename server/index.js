@@ -1328,9 +1328,8 @@ async function endRound(room) {
 // ── progress: XP and rating ─────────────────────────────────────────────────
 //
 // The rules are in shared/progress.js. Who takes part is decided here: the
-// humans dealt in at the whistle, with the life they were dealt in with. A
-// mid-round respawn is a new, unstaked life — it can play on, but it cannot
-// win XP or move a rating, and dying in it changes nothing.
+// humans dealt in at the whistle, with the life they were dealt in with.
+// Nobody joins or respawns during a round, so that life is the only one.
 //
 // Entrants are keyed by the body rather than its id, because a reconnect
 // moves the same body to a new id (resumeLingering).
@@ -1584,7 +1583,9 @@ wss.on("connection", (ws, req) => {
           // standings are still on screen means the next round can start the
           // moment the clock runs out, instead of everyone being dropped into
           // a lobby and asked again.
-          if (room.round.phase === PHASE_LIVE) return;
+          // During a live round, only from someone without a body in it: a
+          // player waiting for the next round opts in from the lobby card.
+          if (room.round.phase === PHASE_LIVE && room.world.players.get(id)?.alive) return;
           meta.ready = msg.ready !== false;
           pushLobby(room);
           maybeStartRound(room);
@@ -1806,17 +1807,24 @@ wss.on("connection", (ws, req) => {
         syncBots(room);
         pushLobby(room);
 
-        // Arrivals wait in the lobby rather than dropping into a live round.
-        if (!resumed && room.round.phase !== PHASE_LIVE) {
+        // Arrivals wait in the lobby rather than dropping into a live round:
+        // a body is only ever dealt at the whistle (startRound). One arriving
+        // while a round is being played, or wound up, is told it is waiting,
+        // and watches the lobby card until the next one.
+        if (!resumed) {
           player.alive = false;
           player.cells = [];
         }
+        const waiting = !resumed &&
+          room.round.phase !== PHASE_LOBBY && room.round.phase !== PHASE_COUNTDOWN;
 
         ws.send(JSON.stringify({
           type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
           // Readiness belongs to the connection, so a fresh one starts unready
           // unless it picked a live run back up. Said, so the button agrees.
           ready: meta.ready,
+          // Held out of a round already under way, until the next one.
+          waiting,
           // The colour actually in use, which is the server's choice when the
           // client did not make one, so the lobby can show it as selected.
           ci: player.ci,
@@ -1840,6 +1848,10 @@ wss.on("connection", (ws, req) => {
           displayName,
           ...(await backend.snapshot(meta.accountId))
         }));
+        // The lobby state broadcast on arrival went out before the welcome,
+        // while the client still took the room for one it was playing in.
+        // Sent again now that it knows it is waiting, so the card opens.
+        if (waiting) ws.send(JSON.stringify(lobbyState(room)));
         return;
       } finally {
         room.arriving--;
@@ -1867,7 +1879,10 @@ wss.on("connection", (ws, req) => {
       setAim(meta.room.world, id, msg.x, msg.y);
     } else if (msg.type === MSG.ACTION) {
       if (!allow(meta.actBucket)) return;
-      if (msg.action === "respawn") meta.spectateId = null;
+      // Nobody joins a round under way, and a respawn would be a way in: a
+      // body is dealt at the whistle and nowhere else. Someone eaten, or
+      // waiting, plays again in the next round.
+      if (msg.action === "respawn") return;
       queueAction(meta.room.world, id, msg.action);
     }
   });

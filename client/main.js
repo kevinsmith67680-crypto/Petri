@@ -17,7 +17,7 @@ import { SERVER_URL, MATCHMAKER_URL } from "./config.js";
 import { requestTicket } from "./match.js";
 import { PRACTICE } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
-import { PHASE_LOBBY, PHASE_COUNTDOWN } from "../shared/protocol.js";
+import { PHASE_LOBBY, PHASE_COUNTDOWN, PHASE_LIVE } from "../shared/protocol.js";
 import { STAIN_COUNT } from "../shared/sim.js";
 import { createAccountClient } from "./account.js";
 
@@ -283,6 +283,9 @@ function connect(stake = PRACTICE) {
       ready = !!w.ready;
       ui.setReady(ready);
       ui.setNextReady(ready);
+      // Arrived during a round: no body until the next one. The lobby message
+      // that follows opens the card, which is let through while waiting.
+      waitingForRound = !!w.waiting;
       // With no pick of their own, show the player the colour they were given.
       if (colourPick === null) ui.setColour(w.ci);
       if (w.progress) ui.renderProgress(w.progress);
@@ -410,16 +413,27 @@ function onEvent() { /* reserved for future server-pushed events */ }
 // The round ended for everyone at once, so the death card would be wrong here:
 // surviving to the whistle is not being eaten.
 let ready = false;
+// Joined while a round was being played. The server holds new arrivals out
+// of it, so the lobby card stays up through the round instead of being kept
+// for the gaps between them.
+let waitingForRound = false;
+// The newest lobby figures, for a card opened by something other than a lobby
+// message: the whistle, for a player it left out.
+let lastLobby = null;
 
 function onRound(msg) {
   if (msg.type === "lobby") {
+    lastLobby = msg;
     ui.setTestMode(msg.test);
     // The server broadcasts lobby state on every join and leave, including
     // during a live round. Acting on those would drop a mid-game player back
     // to the lobby overlay because somebody else connected.
     // PHASE_COUNTDOWN is still the lobby: the card stays up and swaps the
     // ready meter for the count, so it has to be let through here too.
-    if (msg.phase !== PHASE_LOBBY && msg.phase !== PHASE_COUNTDOWN) return;
+    // The exception is a player waiting out a round they arrived during:
+    // the card is the only thing they have.
+    const between = msg.phase === PHASE_LOBBY || msg.phase === PHASE_COUNTDOWN;
+    if (!between && !waitingForRound) return;
     if (spectating) { spectating = false; ui.hideSpectator(); }
     // The lobby overlay replaces the start card: in live mode you do not
     // press Start, you declare yourself ready and wait for the room.
@@ -436,6 +450,9 @@ function onRound(msg) {
   if (msg.type === "round_end") {
     running = false;
     seenAlive = false;
+    // Waiting is over: the standings card, and the next lobby, are the same
+    // for everyone from here.
+    waitingForRound = false;
     // Readiness survives the intermission on the server, so the button starts
     // from wherever the player left it rather than silently resetting.
     ui.setNextReady(ready);
@@ -448,6 +465,17 @@ function onRound(msg) {
     refreshStats();
   } else if (msg.type === "round_start") {
     if (spectating) { spectating = false; ui.hideSpectator(); }
+    // Not ready at the whistle, so not dealt in. The round is closed to them
+    // now, and they wait it out on the lobby card like a late arrival, able to
+    // opt into the next one. Without this the card closed on an arena they had
+    // no body in, with nothing to say why.
+    if (!ready) {
+      waitingForRound = true;
+      running = false;
+      ui.showLobby({ ...lastLobby, phase: PHASE_LIVE });
+      return;
+    }
+    waitingForRound = false;
     // Readiness is not reset here. The server keeps it from one round to the
     // next, so resetting it left the next lobby offering "I'm ready" to a
     // player it was already counting in — and pressing it did nothing.
@@ -522,6 +550,8 @@ function onAccount(msg) {
 
 function start() {
   if (spectating) stopSpectating();
+  // A new run's connection says for itself whether it has to wait.
+  waitingForRound = false;
   const stake = ui.getStake();
   // A stake is locked at join time, so a wagered run needs a fresh socket.
   // Reusing the old one would let a client re-enter a paid run for free.
@@ -616,6 +646,7 @@ document.getElementById("btnReady").addEventListener("click", () => {
 function returnToMenu() {
   if (spectating) stopSpectating();
   ready = false;
+  waitingForRound = false;
   ui.setReady(false);
   running = false;
   seenAlive = false;
