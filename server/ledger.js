@@ -31,7 +31,8 @@ export class Ledger {
   constructor({ rakeBps = DEFAULT_RAKE_BPS, auditLimit = 5000 } = {}) {
     this.balances = new Map();   // account -> settled, withdrawable units
     this.escrow = new Map();     // account -> units at risk in the current run
-    this.house = 0;              // rake and unclaimed forfeits
+    this.house = 0;              // rake, forfeits, and pots taken at payout,
+                                 // less what payouts cost; can go below zero
     this.rakeBps = rakeBps;
     this.audit = [];
     this.auditLimit = auditLimit;
@@ -131,6 +132,26 @@ export class Ledger {
     this.balances.set(account, this.balanceOf(account) + pot);
     this.record("refund", { account, units: pot });
     return pot;
+  }
+
+  // A paid place, settled at the rate the HUD shows: the player is paid the
+  // value of their mass at the whistle (less rake), and the house takes their
+  // pot. The two need not match. A winner who grew more than was staked is
+  // paid from the house, which can go below zero for it: that is the operator
+  // funding the round. Value only moves, so total() is unchanged.
+  //
+  // Nothing is paid without a pot: an account that staked nothing in this
+  // round has no place to be paid for.
+  payOut(account, units) {
+    const pot = this.potOf(account);
+    if (pot <= 0 || !Number.isSafeInteger(units) || units <= 0) return { paid: 0, rake: 0 };
+    const rake = rakeOn(units, this.rakeBps);
+    const paid = units - rake;
+    this.escrow.set(account, 0);
+    this.house += pot - paid;
+    this.balances.set(account, this.balanceOf(account) + paid);
+    this.record("payout", { account, units: paid, pot, rake });
+    return { paid, rake };
   }
 
   // Realise escrow back into withdrawable balance, less rake.

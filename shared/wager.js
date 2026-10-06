@@ -28,18 +28,17 @@ export const STAKE_TIERS = [PRACTICE, STAKE_1_USDC, STAKE_2_USDC];
 // operator takes a rake here, and it must be disclosed to players.
 export const DEFAULT_RAKE_BPS = 0;
 
-// ── mass valuation (DISPLAY ONLY) ───────────────────────────────────────────
+// ── mass valuation ──────────────────────────────────────────────────────────
 //
-// A readout showing what a player's mass is "worth" at a fixed rate. It is a
-// scoreboard figure, NOT a claim on funds, and nothing in server/ledger.js
-// reads it.
+// What a player's mass is worth at a fixed rate. The HUD shows it live as
+// "Mass value", and a survivor in the paid places is paid exactly this for the
+// mass they finished on (server/index.js, settleSurvivor), so the two cannot
+// drift apart.
 //
-// At 0.005 USDC per mass point the figure tracks reality reasonably closely:
-// spawning shows 0.10 against a 1.00 stake, and a 100-player round with an
-// average mass of 200 carries about as much notional value as was staked into
-// it. It drifts above parity as players grow, so it still must not be settled
-// against — payouts remain bounded by what was actually staked: your pot,
-// settled on death, cash-out, or surviving the round.
+// At 0.005 USDC per mass point spawning shows 0.10 against a 1.00 stake, and
+// mass 200 breaks even. The rate is fixed rather than derived from the pot, so
+// winners who grow large are paid more than was staked, and the house funds
+// the difference. See README, "The mass readout", before real money.
 export const MICRO_PER_MASS = 5_000;     // 0.005 USDC per mass point
 
 export function valueOfMass(mass) {

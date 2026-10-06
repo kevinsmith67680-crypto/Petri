@@ -108,7 +108,9 @@ create table if not exists petri.balances (
 -- House holdings: rake and forfeits. Single row, id = 0.
 create table if not exists petri.house (
   id       int primary key default 0 check (id = 0),
-  balance  bigint not null default 0 check (balance >= 0)
+  -- No floor: a paid place is paid the value of its mass, and when winners
+  -- grow more than was staked the house funds the difference (pay_out).
+  balance  bigint not null default 0
 );
 insert into petri.house (id, balance) values (0, 0) on conflict do nothing;
 
@@ -206,6 +208,29 @@ begin
   insert into petri.ledger_entries (kind, account_id, units, meta)
     values ('cashout', p_account, pot - cut, jsonb_build_object('rake', cut));
   return query select (pot - cut)::bigint, cut::bigint;
+end $$;
+
+-- A paid place, settled at the rate the HUD shows: the player is paid
+-- p_units (the value of their mass at the whistle) less rake, and the house
+-- takes their pot. Nothing is paid without a pot.
+create or replace function petri.pay_out(p_account uuid, p_units bigint, p_rake_bps int)
+returns table (paid bigint, rake bigint) language plpgsql as $$
+declare pot bigint; cut bigint;
+begin
+  select escrow into pot from petri.balances where account_id = p_account for update;
+  if pot is null or pot <= 0 or p_units is null or p_units <= 0 then
+    return query select 0::bigint, 0::bigint; return;
+  end if;
+
+  cut := (p_units * p_rake_bps) / 10000;
+  update petri.balances
+     set escrow = 0, balance = balance + (p_units - cut), updated_at = now()
+   where account_id = p_account;
+  update petri.house set balance = balance + pot - (p_units - cut) where id = 0;
+  insert into petri.ledger_entries (kind, account_id, units, meta)
+    values ('payout', p_account, p_units - cut,
+            jsonb_build_object('pot', pot, 'rake', cut, 'mass_value', p_units));
+  return query select (p_units - cut)::bigint, cut::bigint;
 end $$;
 
 create or replace function petri.forfeit_pot(p_account uuid)

@@ -918,9 +918,9 @@
     display:flex; align-items:baseline; gap:7px;
     padding-left:14px; border-left:1px solid var(--line);
   }
-  /* Two money figures sit side by side here and only one of them is real.
-     The stake is what you can lose; the mass value is indicative. Tinting it
-     stops it reading as a second stake. */
+  /* Two money figures sit side by side here. The stake is what you can lose;
+     the mass value is what a paid place would be paid if the whistle went
+     now. Tinting it stops it reading as a second stake. */
   .pot-note b{ color:var(--accent); }
   .pot .unit{ font-size:11px; font-weight:500; color:var(--muted); }
 
@@ -1130,15 +1130,15 @@
           <h2>Orbs</h2>
           <div class="facts">
             <div><span>Each orb is worth</span><em>3.4 mass</em></div>
-            <div><span>Mass is shown at</span><em>0.005 USDC</em></div>
+            <div><span>Each mass point is worth</span><em>0.005 USDC</em></div>
             <div><span>Break even against your stake at</span><em>mass 200</em></div>
           </div>
-          <p class="aside">The cash figure is indicative only. Your finishing position is what pays.</p>
+          <p class="aside">Finish in the top 5 and the cash figure by your mass is what you are paid, at the whistle. Finish anywhere else and your stake is lost.</p>
         </div>
 
         <div class="block">
           <h2>Eating and being eaten</h2>
-          <p>You need to be roughly a fifth larger to swallow another player, and taking them takes their stake with them. Green spores burst you into ten pieces once you pass mass 127 — so the larger you get, the smaller the safe part of the board becomes.</p>
+          <p>You need to be roughly a fifth larger to swallow another player, and all of their mass becomes yours. Green spores burst you into ten pieces once you pass mass 127 — so the larger you get, the smaller the safe part of the board becomes.</p>
         </div>
 
         <div class="block">
@@ -1493,6 +1493,7 @@
       <b id="winAmount">+0.00<small>USDC</small></b>
     </div>
     <div class="tally win-tally" id="winTally">
+      <div>Mass at the whistle <em id="winMass">0</em></div>
       <div>Your stake <em id="winStake">0.00</em></div>
       <div>Paid out <em id="winPaid">0.00</em></div>
       <div>Profit <em id="winProfit">0.00</em></div>

@@ -369,10 +369,11 @@ This is the real reason for a database rather than a JSON file. Every money oper
 |---|---|
 | `petri.lock_stake` | balance → escrow |
 | `petri.claim_pot` | loser's escrow → winner's escrow |
+| `petri.pay_out` | a paid place: the value of its mass → balance, less rake; its escrow → house (migration 009) |
 | `petri.cash_out` | escrow → balance, less rake |
 | `petri.forfeit_pot` / `petri.refund_pot` | escrow → house / balance |
 
-"Credit the winner, then crash before debiting the loser" is not a state this can reach. `claim_pot` locks both rows in account-id order so two players eating each other in the same tick cannot deadlock. `balances` carries `check (balance >= 0)` and `check (escrow >= 0)`, which makes "no account goes negative" a guarantee of the database rather than a property of the application code — an overdraft raises a constraint violation instead of silently succeeding.
+"Credit the winner, then crash before debiting the loser" is not a state this can reach. `claim_pot` locks both rows in account-id order so two players eating each other in the same tick cannot deadlock. `balances` carries `check (balance >= 0)` and `check (escrow >= 0)`, which makes "no account goes negative" a guarantee of the database rather than a property of the application code — an overdraft raises a constraint violation instead of silently succeeding. The house has no such floor: it funds paid places whose mass is worth more than was staked.
 
 `petri.money_total` is a view comparing money held against deposits minus withdrawals. Query it, or wire it to a monitor.
 
@@ -392,7 +393,7 @@ Loose ends handled: the watched player can be eaten at any moment, so targets ar
 
 During a live round the top-left corner shows what your mass is "worth" at **0.005 USDC per mass point**, alongside what you currently have staked. It is hidden in practice mode, where no money is involved.
 
-**This is a scoreboard figure, not a claim on funds.** Nothing in `server/ledger.js` reads it, and no settlement path touches it.
+**It is what a paid place is paid.** At the whistle each survivor in the paid places is paid the value of the mass they finished on, at this rate: the same figure the HUD showed as "Mass value" (rounded mass, as the snapshot sends it, times 0.005). The house takes their pot. Survivors outside the paid places forfeit their stake, as before, and the congratulations card leads with the payout and breaks it down into mass, stake, payout, profit and the new balance.
 
 | | at 0.005/point |
 |---|---|
@@ -402,13 +403,11 @@ During a live round the top-left corner shows what your mass is "worth" at **0.0
 | Large player (mass 2,000) | 10.00 USDC |
 | Round leader (mass 6,000) | 30.00 USDC |
 
-The rate gives the readout a natural break-even: **mass 200 is worth exactly a 1.00 USDC stake**, so a player spawns showing less than they put in and has to grow to get back to level. That reads well.
+The rate gives the payout a natural break-even: **mass 200 is worth exactly a 1.00 USDC stake**, so a player who places below it is paid less than they staked, and has to grow past it to come out ahead.
 
-It still is not a payout rate, though it is far closer than it was. A full 100-player round with an average mass of 400 shows 200 USDC of notional value against 100 USDC staked — 2×, down from 200× at the original 0.5 rate. Above an average mass of 200 the arena still displays more value than exists, so settling against it would over-pay.
+**The house funds the difference, and the difference is not bounded.** Payouts are no longer limited to what was staked. In a full 100-player round the top five finishing between them on 15,000 mass are paid 75 USDC against 100 USDC staked, and the house keeps the rest; but five winners on 6,000 mass each are paid 150 USDC against the same 100, and the house pays the 50. A round with few players and large winners can cost the house far more than it took. The ledger allows for it (`Ledger.payOut`, `petri.pay_out`; the house balance has no floor since migration 009), and every movement is still conservative: value only moves. **This must be settled before real money**: either a bounded rate derived from the round's pot (your share of the real prize pool, proportional to your mass, which keeps total payouts equal to total stakes by construction), or a cap, or an operator who means to fund it.
 
-Payouts stay bounded by what was actually staked — your pot, settled on death, cash-out, or surviving to the whistle. The server logs the rate at startup and warns if `REAL_MONEY` is on.
-
-If you want mass to genuinely determine payouts, the rate has to be **derived from the pot rather than fixed**: your share of the round's real prize pool, proportional to your mass. That keeps total payouts equal to total stakes by construction. `MICRO_PER_MASS` in `shared/wager.js` adjusts the display; making it real is a different and larger change.
+`MICRO_PER_MASS` in `shared/wager.js` sets the rate for the HUD and the payout together, so the two cannot drift apart.
 
 ### Ejecting mass
 
@@ -874,7 +873,7 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 | Rounds | None, play indefinitely | 10 minutes, 5s of standings, then back to the lobby |
 | Wagering | No | Yes |
 
-When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
+When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **the paid places are paid the value of their mass** (see "The mass readout"); the rest forfeit. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
 
 ### The player's manual
 
@@ -1053,7 +1052,8 @@ Value moves only in response to simulation events:
 |---|---|
 | Join a wagered run | Stake moves from balance into escrow |
 | Eat another staked player | Their whole pot moves to your escrow |
-| Cash out while alive | Escrow moves to balance, less rake (currently 0) |
+| Finish in the paid places | The value of your mass moves to balance, less rake (currently 0); your escrow goes to the house |
+| Finish outside them | Your escrow is forfeited to the house |
 | Die to a staked player | Your pot is already theirs |
 | Die to a bot | Pot is forfeited to the house — see the flaw below |
 | Disconnect and stay uneaten | Pot is refunded after the 6-second linger window |

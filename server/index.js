@@ -1281,7 +1281,12 @@ async function endRound(room) {
   for (const [ws, meta] of room.clients) {
     const player = world.players.get(meta.id);
     if (!player || !player.alive) continue;
-    settling.push({ ws, meta, player, position: survivors.indexOf(player) + 1, stake: meta.stake });
+    settling.push({
+      ws, meta, player, position: survivors.indexOf(player) + 1, stake: meta.stake,
+      // The figure the HUD showed, rounded as the snapshot sends it, taken
+      // now because closing the round below takes the cells off the board.
+      mass: Math.round(totalMass(player))
+    });
     meta.stake = PRACTICE;
   }
 
@@ -1321,14 +1326,16 @@ async function endRound(room) {
   }
 }
 
-async function settleSurvivor(room, { ws, meta, player, position, stake }, field) {
+async function settleSurvivor(room, { ws, meta, player, position, stake, mass }, field) {
   const placed = position > 0 && position <= room.paidPositions;
   let payout = 0;
   let settled = !(stake > PRACTICE && meta.accountId);
   try {
     if (!settled) {
       if (placed) {
-        ({ paid: payout } = await backend.cashOut(meta.accountId, RAKE_BPS));
+        // A paid place is paid the value of its mass at the whistle: the
+        // same figure the HUD showed as "Mass value", at the same rate.
+        ({ paid: payout } = await backend.payOut(meta.accountId, valueOfMass(mass), RAKE_BPS));
       } else {
         await backend.forfeit(meta.accountId);
       }
@@ -1357,7 +1364,7 @@ async function settleSurvivor(room, { ws, meta, player, position, stake }, field
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify({
       type: "result", round: room.round.number, place: position, placed,
-      stake, paid: payout, settled, peak: Math.round(player.peak), eaten: player.eaten
+      stake, paid: payout, settled, mass, peak: Math.round(player.peak), eaten: player.eaten
     }));
   }
 }
@@ -2139,11 +2146,12 @@ process.on("SIGINT", () => { shutdown("SIGINT"); });
 if (MICRO_PER_MASS > 0) {
   const spawnValue = valueOfMass(20);
   console.log(
-    `  mass    : displayed at ${formatUsdc(MICRO_PER_MASS, 4)} USDC/point ` +
-    `(spawn shows ${formatUsdc(spawnValue)}, display only)`
+    `  mass    : ${formatUsdc(MICRO_PER_MASS, 4)} USDC/point, shown live and paid to the ` +
+    `top places at the whistle (spawn shows ${formatUsdc(spawnValue)})`
   );
   if (REAL_MONEY) {
-    console.warn("  WARNING : the mass readout is indicative; never settle against it.");
+    console.warn("  WARNING : paid places are paid at a fixed rate per mass point; the house " +
+      "funds any round whose winners grew more than was staked.");
   }
 }
 

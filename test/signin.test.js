@@ -399,7 +399,7 @@ console.log("\n-- readiness follows the server across rounds --");
   // Each paid place is told its own result, which opens the congratulations
   // card over the lobby. One that lands during the standings waits for it.
   say({ type: "result", round: 1, place: 9, placed: false, stake: 1_000_000, paid: 0, settled: true });
-  say({ type: "result", round: 1, place: 2, placed: true, stake: 1_000_000, paid: 2_500_000, settled: true });
+  say({ type: "result", round: 1, place: 2, placed: true, stake: 1_000_000, paid: 2_500_000, mass: 500, settled: true });
   check("a paid place's card waits for the standings to finish", $("winVeil").hidden === true);
 
   say(lobbyMsg(3));
@@ -408,7 +408,7 @@ console.log("\n-- readiness follows the server across rounds --");
   check("un-readied, as the server has it", pressed() === "false", pressed());
   check("and the button asks again", $("btnReady").textContent === "I'm ready", $("btnReady").textContent);
   check("with the congratulations card on top", $("winVeil").hidden === false);
-  check("saying what the round made", /^\+1\.50</.test($("winAmount").innerHTML), $("winAmount").innerHTML);
+  check("leading with the payout", /^2\.50</.test($("winAmount").innerHTML), $("winAmount").innerHTML);
   $("btnWinLobby").click();
   check("which closes back onto the lobby",
     $("winVeil").hidden === true && $("lobbyVeil").hidden === false);

@@ -160,6 +160,10 @@ export class MemoryRepo {
     if (rakeBps !== undefined) this.ledger.rakeBps = rakeBps;
     return this.ledger.cashOut(accountId);
   }
+  async payOut(accountId, units, rakeBps) {
+    if (rakeBps !== undefined) this.ledger.rakeBps = rakeBps;
+    return this.ledger.payOut(accountId, units);
+  }
   async forfeit(accountId) { return this.ledger.forfeit(accountId); }
   async refund(accountId) { return this.ledger.refund(accountId); }
   async potOf(accountId) { return this.ledger.potOf(accountId); }

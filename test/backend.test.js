@@ -137,6 +137,16 @@ async function runContract(name, backend) {
   })();
   check("rake is withheld", cut === 100_000, `${cut}`);
 
+  // A paid place is paid the value of its mass, not its pot.
+  await backend.lockStake(bob.id, STAKE_1_USDC);
+  const beforePay = (await backend.snapshot(bob.id)).balance;
+  const { paid: massPaid } = await backend.payOut(bob.id, 3_200_000, 0);
+  check("a paid place is paid its mass value", massPaid === 3_200_000, `${massPaid}`);
+  snap = await backend.snapshot(bob.id);
+  check("into the balance, with the pot taken", snap.balance === beforePay + 3_200_000 && snap.pot === 0,
+    `${beforePay} -> ${snap.balance}, pot ${snap.pot}`);
+  check("nothing is paid without a pot", (await backend.payOut(bob.id, 3_200_000, 0)).paid === 0);
+
   await backend.lockStake(bob.id, STAKE_1_USDC);
   check("forfeit empties the pot", (await backend.forfeit(bob.id)) === UNIT);
   await backend.lockStake(bob.id, STAKE_1_USDC);

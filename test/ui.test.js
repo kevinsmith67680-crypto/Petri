@@ -331,8 +331,10 @@ const placings = [
   { name: "Cy", mass: 200, position: 6, paid: false }
 ];
 const txt = id => String($(id).textContent);
+// A paid place is paid the value of its mass at the whistle: 700 mass at
+// 0.005 USDC a point is 3.50, the figure the HUD showed as "Mass value".
 const win = extra => ui.showWin({
-  place: 3, stake: 1 * UNIT, paid: 3.5 * UNIT, settled: true, round: 4,
+  place: 3, stake: 1 * UNIT, paid: 3.5 * UNIT, mass: 700, settled: true, round: 4,
   standings: placings, paidPositions: 5, myName: "Bo", ...extra
 });
 $("winVeil").hidden = true;
@@ -343,14 +345,15 @@ check("the card opens", $("winVeil").hidden === false);
 check("over the lobby, which stays open beneath it", $("lobbyVeil").hidden === false);
 check("it names the place", txt("winTitle") === "You finished 3rd", txt("winTitle"));
 check("third gets bronze", $("winMedal").className === "medal p3", $("winMedal").className);
-check("it leads with what the round made them",
-  txt("winAmountLabel") === "You made" && /^\+2\.50</.test($("winAmount").innerHTML),
+check("it leads with the payout, the HUD's mass value",
+  txt("winAmountLabel") === "Your payout" && /^3\.50</.test($("winAmount").innerHTML),
   `${txt("winAmountLabel")} ${$("winAmount").innerHTML}`);
-check("and says where it went", /top-5 finish in round 4/.test(txt("winLine")), txt("winLine"));
-check("then breaks it down: stake, payout, profit and the balance it left",
-  txt("winStake") === "1.00" && txt("winPaid") === "3.50" &&
+check("and says how it was worked out",
+  /top-5 finish pays your mass: 700 at 0\.005 USDC a point/.test(txt("winLine")), txt("winLine"));
+check("then breaks it down: mass, stake, payout, profit and the balance it left",
+  txt("winMass") === "700" && txt("winStake") === "1.00" && txt("winPaid") === "3.50" &&
   txt("winProfit") === "+2.50" && txt("winBalance") === "7.50",
-  [txt("winStake"), txt("winPaid"), txt("winProfit"), txt("winBalance")].join(" / "));
+  [txt("winMass"), txt("winStake"), txt("winPaid"), txt("winProfit"), txt("winBalance")].join(" / "));
 check("the paid places are listed, and only those",
   ($("winStandings").innerHTML.match(/<div/g) || []).length === 3 && !/Cy/.test($("winStandings").innerHTML),
   $("winStandings").innerHTML);
@@ -373,15 +376,16 @@ check("Back to lobby closes it onto the lobby card",
   $("winVeil").hidden === true && $("lobbyVeil").hidden === false);
 check("where the ready button has focus", globalThis.__focused === "btnReady", globalThis.__focused);
 
-// A place with no kills: the pot was the player's own stake, so that is what
-// came back. "+0.00" under "You made" would read as a mistake.
-win({ place: 1, paid: 1 * UNIT });
+// A place that grew less than its stake was worth: paid its mass all the
+// same, which is a loss, and the card says what it would have taken.
+win({ place: 1, paid: 370_000, mass: 74 });
 check("first gets gold", $("winMedal").className === "medal p1");
-check("a place that made nothing says what was paid instead",
-  txt("winAmountLabel") === "Paid out" && /^1\.00</.test($("winAmount").innerHTML),
+check("a small mass is still paid its value",
+  txt("winAmountLabel") === "Your payout" && /^0\.37</.test($("winAmount").innerHTML),
   `${txt("winAmountLabel")} ${$("winAmount").innerHTML}`);
-check("and why", /your own came back/.test(txt("winLine")), txt("winLine"));
-check("with the profit at zero", txt("winProfit") === "0.00", txt("winProfit"));
+check("and is told it fell short, and where the stake is made back",
+  /short of your stake/.test(txt("winLine")) && /Past mass 200/.test(txt("winLine")), txt("winLine"));
+check("with the loss shown as one", txt("winProfit") === "\u22120.63", txt("winProfit"));
 
 win({ place: 5, paid: 0, settled: false });
 check("fourth and fifth get the accent", $("winMedal").className === "medal p4");
