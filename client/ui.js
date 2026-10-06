@@ -530,7 +530,7 @@ export function createUI({
   $("btnAgain").addEventListener("click", () => {
     document.activeElement?.blur?.();
     el.overVeil.hidden = true;
-    onStart();
+    onStart({ again: true });
   });
 
   const ordinal = n => {
@@ -1233,6 +1233,8 @@ export function createUI({
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
+    // The tiers already show "Low balance"; this says it in words.
+    sayCannotAfford: () => showStakeNote("funds"),
     setColour, renderLastGame,
     getStake: () => stake,
     getBotLevel: () => botLevel,

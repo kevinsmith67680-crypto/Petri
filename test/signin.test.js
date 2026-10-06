@@ -567,6 +567,51 @@ console.log("\n-- a round opening is not a death --");
   deliver(snapshot(false, live), true);
   stepFrame();
   check("being eaten for real still shows one", $("overVeil").hidden === false);
+
+  // Play again, with the stake no longer affordable. Joining with exactly the
+  // stake left makes the tier unaffordable mid-round, and the menu drops the
+  // selection back to Practice by itself. Play again then sent a respawn down
+  // the room's socket, which put the player back in the live round with no
+  // stake: no stake bar, the round clock showing in its place, a free game.
+  deliver({ type: "account", balance: 0, pot: 0, stake: 0, staked: false, demo: true });
+  check("with nothing left, the selection falls back to Practice",
+    $("stake1").getAttribute("aria-checked") === "false" &&
+    $("stakeFree").getAttribute("aria-checked") === "true");
+  const before = ws.sent.length;
+  $("btnAgain").click();
+  const sent = ws.sent.slice(before);
+  check("Play again sends no respawn down the room's socket",
+    !sent.some(m => typeof m !== "string"), `${sent.length} sent`);
+  check("it leaves the room instead", sent.some(m => typeof m === "string" && JSON.parse(m).type === "leave"),
+    sent.join(" "));
+  check("and puts the menu up", $("startVeil").hidden === false);
+  check("saying why", $("stakeNote").hidden === false && /Not enough balance/.test($("stakeNote").textContent),
+    $("stakeNote").textContent);
+}
+
+console.log("\n-- Start from the menu on a room's socket plays practice --");
+
+// The menu can be up while the page still holds a room's socket: a join the
+// server refused sends the player back to it. Start with Practice selected
+// plays practice, in the browser, rather than respawning on the room.
+{
+  $("stake1").click();
+  $("btnStart").click();
+  await afterMatch();
+  const ws = sockets[sockets.length - 1];
+  (ws.handlers.open || []).forEach(fn => fn());
+  ws.handlers.message.forEach(fn => fn({ data: JSON.stringify({ type: "account", balance: 0, pot: 0, stake: 0, demo: true }) }));
+  $("startVeil").hidden = false;                    // as a refused join leaves it
+  const before = ws.sent.length;
+  const opened = sockets.length;
+  $("btnStart").click();
+  await afterMatch();
+  check("no respawn goes down the room's socket",
+    !ws.sent.slice(before).some(m => typeof m !== "string"));
+  check("no new room is joined", sockets.length === opened, `${sockets.length - opened} opened`);
+  check("the menu gives way to play", $("startVeil").hidden === true);
+  // Funded again, for the staked starts below.
+  ws.handlers.message.forEach(fn => fn({ data: JSON.stringify({ type: "account", balance: 5_000_000, pot: 0, stake: 0, demo: true }) }));
 }
 
 console.log("\n-- nobody is dropped into a round they are not in --");
@@ -585,9 +630,12 @@ console.log("\n-- nobody is dropped into a round they are not in --");
     (ws.handlers.open || []).forEach(fn => fn());
     return data => ws.handlers.message.forEach(fn => fn({ data: JSON.stringify(data) }));
   };
+  // With the account snapshot a real welcome carries. Without a balance the
+  // menu reads the paid tier as unaffordable and drops back to Practice.
   const welcome = extra => ({
     type: "welcome", id: "me", nid: 1, tickHz: 20, mode: "standard", round: 1,
     roundSeconds: 120, lobbyMin: 1, lobbyMax: 150, test: true, stake: 1_000_000,
+    balance: 4_000_000, pot: 1_000_000, staked: true,
     signedIn: true, displayName: "Me", protocol: PROTOCOL_VERSION, ...extra
   });
   const lobby = (phase, extra = {}) => ({

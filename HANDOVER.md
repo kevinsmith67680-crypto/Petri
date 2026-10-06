@@ -237,7 +237,6 @@ the tick keeps sending snapshots. The tick's countdown branch is guarded with
 | Item | Where |
 |---|---|
 | Without `DATABASE_URL`, `/api/stats` returns each match's `accountId` and `killerId` — another player's account id. The Postgres backend lists its columns and does not | `server/db/memory.js`, `getMatches()` |
-| Found by reading, not reproduced: after a refused join ("Back to menu"), pressing Start with Practice selected sends `respawn` down the dead socket instead of starting practice, because `start()` only rebuilds the connection for a staked tier | `client/main.js`, `start()` |
 | Shared links have no preview image. `og:image` must be an absolute URL and the game answers on two hosts, so it needs a decision on which | `index.html` head |
 | `test/control.test.js` failed once in about seventeen runs and never again. It is timing-based; the failure was not captured | `test/control.test.js` |
 | Accounts created before the age gate have `date_of_birth` NULL and are not gated | `server/db/migrations/006_age_gate.sql` |

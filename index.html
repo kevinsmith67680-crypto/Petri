@@ -66,7 +66,12 @@
 
   /* ── readout ── */
 
-  .readout{ position:fixed; top:26px; left:28px; z-index:5; pointer-events:none; }
+  /* The round clock above the readout. One fixed box, so the readout simply
+     moves down while the clock is showing. */
+  .topleft{
+    position:fixed; top:26px; left:28px; z-index:5; pointer-events:none;
+    display:flex; flex-direction:column; align-items:flex-start; gap:16px;
+  }
   .count{ display:flex; align-items:baseline; gap:10px; }
   .count b{
     font-size:60px; font-weight:600; line-height:.84;
@@ -161,24 +166,22 @@
 
   /* ── round clock ── */
 
-  .clock{
-    position:fixed; top:26px; left:50%; transform:translateX(-50%);
-    z-index:5; text-align:center; pointer-events:none;
-  }
+  .clock{ display:flex; align-items:center; gap:7px; }
   .clock[hidden]{ display:none; }
+  .clock svg{ width:20px; height:20px; color:var(--muted); flex:none; }
   .clock b{
-    display:block; font-size:26px; font-weight:600;
+    font-size:26px; font-weight:600;
     letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1;
   }
+  .clock span{ font-size:13px; color:var(--muted); }
+  .clock.ending svg{ color:#c4453b; }
+  html[data-theme="dark"] .clock.ending svg{ color:#f08a80; }
   /* Last 30 seconds: the only motion in the HUD, so it reads as urgency
      rather than decoration. */
   .clock.ending b{ color:#c4453b; animation:pulse 1s ease-in-out infinite; }
   html[data-theme="dark"] .clock.ending b{ color:#f08a80; }
   @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.55} }
   @media (prefers-reduced-motion: reduce){ .clock.ending b{ animation:none; } }
-
-  /* the pot bar shares the top centre, so shift it down when both show */
-  .pot{ top:76px; }
 
   /* ── lobby: the pregame menu's layout, two cards under the shared header ──
      Everything below is scoped to the lobby, at the menu's type scale, so
@@ -967,7 +970,11 @@
   }
 
   @media (max-width:640px){
-    .readout{ top:18px; left:18px; }
+    .topleft{ top:18px; left:18px; gap:12px; }
+    .clock b{ font-size:22px; }
+    /* In the column under the readout, not over it at the top centre. */
+    .pot{ position:static; transform:none; padding:7px 12px; gap:10px; }
+    .pot-note{ padding-left:10px; }
     .count b{ font-size:46px; }
     .board{ display:none; }
     .corner{ left:18px; bottom:22px; gap:10px; }
@@ -999,12 +1006,35 @@
 
 <canvas id="stage"></canvas>
 
-<div class="readout" aria-live="polite">
-  <div class="count"><b id="orbCount">0</b><span>orbs absorbed</span></div>
-  <div class="stats">
-    <div><i>Mass</i><em id="statMass">20</em></div>
-    <div><i>Rank</i><em id="statRank">—</em></div>
-    <div><i>Cells eaten</i><em id="statCells">0</em></div>
+<!-- Top left: the time left in the round, then the player's own numbers.
+     The clock sits outside the readout's live region, or a screen reader
+     would announce it every second. -->
+<div class="topleft">
+  <div class="clock" id="roundClock" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="13.5" r="7.5"/><path d="M12 10v3.5l2.3 2.3M9.5 3h5"/>
+    </svg>
+    <b id="clockTime">10:00</b><span>left</span>
+  </div>
+  <div class="readout" aria-live="polite">
+    <div class="count"><b id="orbCount">0</b><span>orbs absorbed</span></div>
+    <div class="stats">
+      <div><i>Mass</i><em id="statMass">20</em></div>
+      <div><i>Rank</i><em id="statRank">—</em></div>
+      <div><i>Cells eaten</i><em id="statCells">0</em></div>
+    </div>
+  </div>
+  <!-- The stake bar. Fixed at the top centre on a wide screen; on a phone,
+       where the top is too narrow for it beside the clock, it takes its place
+       in this column instead. -->
+  <div class="pot" id="potBar" hidden>
+    <i>At risk</i>
+    <b id="potValue">0.00</b>
+    <span class="pot-note">
+      <!-- The unit is a sibling, not part of statValue's text: setText writes
+           textContent and would wipe a child node on every update. -->
+      <i>Mass value</i><b id="statValue">0.00</b><span class="unit">USDC</span>
+    </span>
   </div>
 </div>
 
@@ -1077,20 +1107,6 @@
     <button id="specNext" type="button" aria-label="Next player">&rsaquo;</button>
   </div>
   <button class="leave" id="specLeave" type="button">Leave</button>
-</div>
-
-<div class="clock" id="roundClock" hidden>
-  <b id="clockTime">10:00</b>
-</div>
-
-<div class="pot" id="potBar" hidden>
-  <i>At risk</i>
-  <b id="potValue">0.00</b>
-  <span class="pot-note">
-    <!-- The unit is a sibling, not part of statValue's text: setText writes
-         textContent and would wipe a child node on every update. -->
-    <i>Mass value</i><b id="statValue">0.00</b><span class="unit">USDC</span>
-  </span>
 </div>
 
 <div class="touch">

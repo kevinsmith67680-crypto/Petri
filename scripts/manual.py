@@ -961,7 +961,7 @@ def story():
     s.append(P("What the screen is telling you", S_H2))
     s.append(datatable(
         ["Readout", "Why you care"],
-        [["Clock, top centre",
+        [["Clock, top left",
           "Time left. It turns red for the last 30 seconds, which is the only "
           "moment placing matters more than growing."],
          ["Rank, top left",
