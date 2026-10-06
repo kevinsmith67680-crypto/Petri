@@ -391,7 +391,7 @@ Loose ends handled: the watched player can be eaten at any moment, so targets ar
 
 ### The mass readout
 
-During a live round the top-left corner shows what your mass is "worth" at **0.005 USDC per mass point**, alongside what you currently have staked. It is hidden in practice mode, where no money is involved.
+During a live round the stake bar at the top centre shows what your mass is "worth" at **0.005 USDC per mass point**, alongside what you currently have staked. It is hidden in practice mode, where no money is involved.
 
 **It is what a paid place is paid.** At the whistle each survivor in the paid places is paid the value of the mass they finished on, at this rate: the same figure the HUD showed as "Mass value" (rounded mass, as the snapshot sends it, times 0.005). The house takes their pot. Survivors outside the paid places forfeit their stake, as before, and the congratulations card leads with the payout and breaks it down into mass, stake, payout, profit and the new balance.
 
@@ -906,7 +906,7 @@ The wire carries a virus's compact id and feed count alongside its position (7 b
 
 Only round starts use the ring, and in the server's rooms they are the only way onto the board: nobody joins or respawns during a round. Practice, which runs in the browser, still respawns you at a random point.
 
-The clock sits top centre: a large countdown, the round number, and the **wall-clock time the round finishes** ("ends 16:10"). The finish time is formatted to the minute and stays fixed for the whole round, because `now` and `remaining` move together — verified across a full ten minutes, one distinct value. The countdown turns red and pulses in the last 30 seconds, which is the only motion in the HUD so it reads as urgency rather than decoration.
+The clock sits top left, above the orbs counter: the time left in the round, with a clock icon. It used to sit top centre, where the stake bar is pinned, and the bar covered it, so it was only ever seen in a round where the bar was missing. The countdown turns red and pulses in the last 30 seconds, which is the only motion in the HUD so it reads as urgency rather than decoration. On a phone the stake bar moves into the top-left column, under the stats, because the top is too narrow for it beside the clock.
 
 Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
 

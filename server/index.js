@@ -1514,9 +1514,17 @@ async function startRound(room) {
   // Re-escrow before anyone is spawned. The previous round's stake was settled
   // at its end, so without this a player carried on into round two with
   // nothing at risk — playing a paid room for free.
-  for (const [ws, meta] of room.clients) {
-    if (!meta.ready || !meta.accountId) continue;
-    if (meta.stake > PRACTICE || !meta.tier || meta.tier === PRACTICE) continue;
+  //
+  // In passes, until nobody ready is left unstaked. Each re-stake is awaited,
+  // and a player can ready up meanwhile; one pass over the room missed them,
+  // and they were dealt in on a stake they no longer had: a free round, with
+  // no stake bar on their screen. Each player is tried once, so this ends, and
+  // nothing is awaited between the last pass and the deal below.
+  const tried = new Set();
+  const unstaked = () => [...room.clients].filter(([, meta]) => !tried.has(meta) &&
+    meta.ready && meta.accountId && !(meta.stake > PRACTICE) && meta.tier && meta.tier !== PRACTICE);
+  for (let due = unstaked(); due.length; due = unstaked()) for (const [ws, meta] of due) {
+    tried.add(meta);
     try {
       await backend.lockStake(meta.accountId, meta.tier);
       meta.stake = meta.tier;
@@ -1558,6 +1566,9 @@ async function startRound(room) {
     meta.spectateId = null;
     const player = world.players.get(meta.id);
     if (!player) continue;
+    // Ready without a stake can only be a player whose re-stake failed and
+    // who readied again while it was in flight. Never dealt in for free.
+    if (meta.ready && meta.accountId && !(meta.stake > PRACTICE)) meta.ready = false;
     if (meta.ready) humans.push(player);
     else { player.alive = false; player.cells = []; }
   }

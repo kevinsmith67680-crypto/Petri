@@ -574,7 +574,7 @@ function onAccount(msg) {
   });
 }
 
-function start() {
+function start({ again = false } = {}) {
   if (spectating) stopSpectating();
   pendingWin = null;
   ui.hideRoundEnd();
@@ -582,6 +582,27 @@ function start() {
   // A new run's connection says for itself whether it has to wait.
   waitingForRound = false;
   const stake = ui.getStake();
+
+  // Practice selected while this page is still on a staked room's socket.
+  // The menu drops a tier the balance cannot cover back to Practice by
+  // itself, and joining with exactly the stake left makes it unaffordable
+  // mid-round. "Play again" then sent a respawn down the room's socket: the
+  // player was back in the live round with no stake, so no stake bar, the
+  // round clock showing where it had been, and a free game. A room's socket
+  // is never respawned on. Play again goes to the menu, which says why;
+  // Start from the menu, after a refused join, plays practice as asked.
+  if (conn?.mode === "online" && stake === PRACTICE) {
+    if (again) {
+      returnToMenu();
+      ui.sayCannotAfford();
+      return;
+    }
+    const leaving = conn;
+    conn = connect(PRACTICE);
+    if (leaving.leave) leaving.leave();
+    else leaving.close?.();
+  }
+
   // A stake is locked at join time, so a wagered run needs a fresh socket.
   // Reusing the old one would let a client re-enter a paid run for free.
   if (!conn || (MODE === "online" && api?.signedIn && stake !== PRACTICE)) {
