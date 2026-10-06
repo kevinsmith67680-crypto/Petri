@@ -516,6 +516,22 @@ check("an error card clears it with the menu", !menuUp() && $("startVeil").hidde
 ui.hideError();
 ui.showStart();
 
+// The lobby card covers the corner gear the same way, so the page marks it
+// too, and the card carries the player's balance while they wait.
+const lobbyUp = () => document.body.classList.contains("lobby-up");
+ui.showLobby({ ready: 0, connected: 1, min: 2, max: 150, phase: 3 });
+check("the lobby marks the page while it is up", lobbyUp() && !$("lobbyVeil").hidden);
+ui.hideLobby();
+check("and clears it when it closes", !lobbyUp() && $("lobbyVeil").hidden);
+ui.setAccount({ balance: 4 * UNIT, pot: 1 * UNIT, stake: 1 * UNIT, staked: true, demo: true });
+check("the lobby shows the balance", String($("lobbyBal").textContent) === "4.00", String($("lobbyBal").textContent));
+check("and the stake held for the next round", $("lobbyStakeRow").hidden === false &&
+  String($("lobbyStake").textContent) === "1.00", String($("lobbyStake").textContent));
+ui.setAccount({ balance: 7.25 * UNIT, pot: 0, stake: 0, staked: false, demo: true });
+check("it follows the balance as it changes", String($("lobbyBal").textContent) === "7.25");
+check("with nothing staked, no stake line", $("lobbyStakeRow").hidden === true);
+ui.showStart();
+
 const typeName = v => {
   $("fLobbyName").value = v;
   for (const fn of $("fLobbyName").handlers.input) fn({});
