@@ -363,17 +363,78 @@
   .standings div.paid em{ color:var(--accent); font-weight:600; }
   .standings div.you span:first-child{ color:var(--accent); }
   .standings em{ font-style:normal; color:var(--muted); }
-  .next{ margin-top:18px; font-size:13px; color:var(--muted); }
   /* What the round was worth: XP and the rating change, filled in when the
-     server has written them, a moment after the standings arrive. */
+     server has written them, a moment after the result arrives. */
   .gain{ margin-top:14px; font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
   .gain[hidden]{ display:none; }
   .gain .up{ color:var(--accent); }
   .gain .down{ color:var(--muted); }
-  /* The countdown leads the standings card instead of trailing the button, so
-     it is read before the scores rather than after them. Scoped to the id
-     because .next is shared with the lobby hint, which is still a footnote. */
-  #nextRound{ margin-top:10px; font-weight:600; color:var(--text); }
+
+  /* ── congratulations: a paid place at the whistle ── */
+
+  /* Over the lobby card it returns to, which is open underneath. */
+  .veil.win{ z-index:21; }
+  .win-card{ position:relative; overflow:hidden; }
+  .medal{
+    width:58px; height:58px; border-radius:50%;
+    display:grid; place-items:center;
+    font-size:25px; font-weight:700; font-variant-numeric:tabular-nums;
+    color:#3d2c00;
+    background:radial-gradient(circle at 34% 30%, #fff4bf, #e8b62a 58%, #b8870e);
+    box-shadow:0 0 0 5px rgba(232,182,42,.2);
+  }
+  .medal.p2{
+    color:#2b2e33;
+    background:radial-gradient(circle at 34% 30%, #ffffff, #c4c9d0 58%, #8e959e);
+    box-shadow:0 0 0 5px rgba(160,167,176,.22);
+  }
+  .medal.p3{
+    color:#3a1d07;
+    background:radial-gradient(circle at 34% 30%, #ffd9b0, #c98345 58%, #925423);
+    box-shadow:0 0 0 5px rgba(201,131,69,.2);
+  }
+  .medal.p4{
+    color:#fff;
+    background:radial-gradient(circle at 34% 30%, #c9b2ea, var(--accent) 62%);
+    box-shadow:0 0 0 5px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  /* .card .x rather than .x, to outrank the card's own paragraph rule. */
+  .card .win-kicker{
+    margin-top:20px; font-size:12.5px; font-weight:700;
+    letter-spacing:.09em; text-transform:uppercase; color:var(--accent);
+  }
+  .card .win-kicker + h2{ margin-top:4px; }
+  .win-amount{ margin-top:22px; display:flex; flex-direction:column; gap:6px; }
+  .win-amount i{ font-style:normal; font-size:13px; color:var(--muted); }
+  .win-amount b{
+    font-size:56px; font-weight:600; line-height:1; letter-spacing:-.04em;
+    color:var(--accent); font-variant-numeric:tabular-nums;
+  }
+  .win-amount b small{ margin-left:8px; font-size:16px; letter-spacing:0; color:var(--muted); }
+  .win-tally[hidden]{ display:none; }
+  .tally.win-tally div{ max-width:none; }
+  .card .win-note{ font-size:12px; }
+  .win-note[hidden]{ display:none; }
+  .standings:empty{ display:none; }
+  .card .win-list{
+    margin-top:22px; font-size:12px; font-weight:700;
+    letter-spacing:.08em; text-transform:uppercase;
+  }
+  .card .win-list + .standings{ margin-top:8px; }
+  .win-list[hidden]{ display:none; }
+
+  /* One short burst when the card opens, then gone. Nothing for anyone who
+     has asked for less motion. */
+  .confetti{ position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .confetti i{
+    position:absolute; top:-14px; width:8px; height:13px; border-radius:2px;
+    opacity:0; animation:confetti 1.7s cubic-bezier(.2,.7,.4,1) forwards;
+  }
+  @keyframes confetti{
+    0%  { opacity:1; transform:translate(0, 0) rotate(0deg); }
+    100%{ opacity:0; transform:translate(var(--dx), 460px) rotate(var(--r)); }
+  }
+  @media (prefers-reduced-motion: reduce){ .confetti{ display:none; } }
 
   /* ── bottom-left corner stack ── */
 
@@ -1382,20 +1443,6 @@
   </div>
 </div>
 
-<div class="veil" id="roundVeil" hidden>
-  <div class="card">
-    <h2 id="roundTitle">Round over</h2>
-    <p class="next" id="nextRound">Next round starting…</p>
-    <p id="roundBlurb">Ten minutes are up. The top five are paid; everyone else loses their stake.</p>
-    <p class="gain" id="roundGain" hidden aria-live="polite"></p>
-    <div class="standings" id="standingsList"></div>
-    <!-- Opting in here, while the standings are still up, means the next
-         round starts the moment the clock runs out instead of dropping
-         everyone into a lobby and asking again. -->
-    <button id="btnNextReady" type="button">I'm in for the next round</button>
-  </div>
-</div>
-
 <div class="veil" id="overVeil" hidden>
   <div class="card">
     <h2 id="overTitle">You were absorbed</h2>
@@ -1412,6 +1459,34 @@
       <button id="btnAgain" type="button">Play again</button>
       <button id="btnSpectate" type="button" class="ghost">Spectate</button>
     </div>
+  </div>
+</div>
+
+<!-- A paid place at the whistle. Opened by this player's own result, which
+     the server sends once the payout has landed, so every figure on it is the
+     ledger's. It sits over the lobby card that everyone returns to. -->
+<div class="veil win" id="winVeil" hidden>
+  <div class="card win-card" role="dialog" aria-modal="true" aria-labelledby="winTitle">
+    <div class="confetti" id="winConfetti" aria-hidden="true"></div>
+    <div class="medal" id="winMedal" aria-hidden="true">1</div>
+    <p class="win-kicker">Congratulations</p>
+    <h2 id="winTitle">You finished 1st</h2>
+    <p id="winLine">A top-five finish. Your pot is paid into your balance.</p>
+    <div class="win-amount">
+      <i id="winAmountLabel">You made</i>
+      <b id="winAmount">+0.00<small>USDC</small></b>
+    </div>
+    <div class="tally win-tally" id="winTally">
+      <div>Your stake <em id="winStake">0.00</em></div>
+      <div>Paid out <em id="winPaid">0.00</em></div>
+      <div>Profit <em id="winProfit">0.00</em></div>
+      <div>Balance now <em id="winBalance">0.00</em></div>
+    </div>
+    <p class="gain" id="winGain" hidden aria-live="polite"></p>
+    <p class="win-list" id="winListLabel" hidden>Paid this round</p>
+    <div class="standings" id="winStandings"></div>
+    <p class="win-note" id="winNote" hidden>Demo credits, with no cash value.</p>
+    <button id="btnWinLobby" type="button">Back to lobby</button>
   </div>
 </div>
 

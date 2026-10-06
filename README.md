@@ -69,7 +69,6 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `BOTS` | 0; in test mode each room fills to its own lobby size | Overrides both rooms. Bots exist only while a human is in the room |
 | `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard`: the level of the test-mode rooms a server opens by default. Players who pick another are seated in rooms at their own level — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
 | `ROUND_SECONDS` | 600 | Length of a live round |
-| `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
 | `LOBBY_MAX` | 150 | Seats per room. When every room of a mode is full, another opens |
@@ -384,9 +383,9 @@ Absorbed players get a **Spectate** button on the death card alongside Play agai
 
 The scoping rules survive intact. **A spectator inherits the target's view radius, not a free view of the arena** — the tests assert that no cell and no pellet outside the target's own radius reaches them. Spectating is also refused while alive, which would otherwise be a second camera on the board.
 
-Loose ends handled: the watched player can be eaten at any moment, so targets are re-checked every tick and the view cycles on automatically. Respawning, a new round, and returning to the lobby all end spectating.
+Loose ends handled: the watched player can be eaten at any moment, so targets are re-checked every tick and the view cycles on automatically. A new round and returning to the lobby both end spectating.
 
-**One thing to think about.** Mid-round respawning is still allowed, so a player can die, watch the leader, and rejoin. Mid-round spawn points stay random — only round starts use the ring — so the intel is of limited use — but if that bothers you, the fix is to make death final for the round and spectating the only option after it.
+**Death is final for the round.** Nobody comes onto the board while a round is being played. The server ignores `respawn` in its rooms, so a player who is eaten can spectate until the whistle but not rejoin. Play again opens a fresh join, and a join during a round waits in the lobby: the welcome carries `waiting: true`, the lobby card stays up through the round with the time left, and the player can ready up there for the next one. A player who was in the lobby but not ready at the whistle is left out of the round the same way, and waits on the same card. Watching the leader for a few minutes therefore buys nothing until the next round, which is dealt onto a fresh ring anyway. Practice runs in the browser and still respawns.
 
 ### The mass readout
 
@@ -665,13 +664,13 @@ Neither is money. Neither moves a balance, and neither is affected by the stake.
 
 **XP goes to winners.** A win is the same thing the payout means by one: standing at the whistle in the paid places, with position counted among everyone standing, bots included, exactly as `cashOut` counts it. First to fifth earn 100, 70, 50, 35 and 25. Being eaten earns nothing, and neither does standing at the whistle outside the paid places. Levels are XP on a curve: reaching level *L* takes 50·*L*·(*L*−1) in total, so one first place is level 2, about ten is level 5, and about forty-five is level 10.
 
-**Only the life you were dealt in with counts.** Players who were ready at the whistle are the round's entrants (`dealEntrants` in `server/index.js`). An entrant is out the moment they are eaten, or the moment their body leaves the round if they walked away (a lingering body timing out, a replaced connection, leaving). A mid-round respawn is a new, unstaked life. It can play on, but it cannot win XP or move a rating.
+**Only the life you were dealt in with counts.** Players who were ready at the whistle are the round's entrants (`dealEntrants` in `server/index.js`). An entrant is out the moment they are eaten, or the moment their body leaves the round if they walked away (a lingering body timing out, a replaced connection, leaving). There is no second life to play on: nobody respawns or joins during a round, so an entrant who is eaten is out until the next one.
 
 **The rating is multiplayer Elo.** New accounts start at 1000. At the whistle the entrants are put in finishing order: survivors by position, then the eliminated, last out first. Every pair is scored as a head-to-head, won by the better finish, against what their two ratings predicted, and each player's total is scaled by 1/(n−1). So one round moves a rating by at most K however big the field, and finishing above a stronger player is worth more than finishing above a weaker one. K is 48 for an account's first ten rated rounds, so a new player finds their level quickly, and 24 after that. A round with a single person in it (alone with bots in test mode) earns its XP but is not rated: there is nobody to be rated against. Ratings fall into named ranks: Bronze below 900, Silver, Gold from 1100, Platinum from 1300, Diamond from 1500.
 
 The scoring is a pure function, `scoreRound` in `server/awards.js`, and `test/progress.test.js` pins its edge cases: the respawn, the walk-out, the same account twice. The server writes one round's results in one statement, `recordProgress`, which moves every column by increment. Two writers can never lose each other's update, and a result is written for players who have already left.
 
-**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. The lobby card shows the same tracker under the ready button, with the XP left to the next level, what a top-5 finish earns, and what the last round was worth. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
+**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. The lobby card shows the same tracker under the ready button, with the XP left to the next level, what a top-5 finish earns, and what the last round was worth. A moment after the whistle, the lobby card, and the congratulations card for a paid place, add what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
 
 ### Skill matchmaking
 
@@ -691,13 +690,13 @@ The game server applies the same rule when it is asked to choose (`seatFor`), an
 
 ## Between rounds
 
-A round ends, standings go up, and the next one begins. Three things used to break that.
+A round ends, everyone goes back to the lobby, and the next one begins once enough of them ready up again.
 
 **The stake was settled and never re-locked.** `meta.stake` is cleared when a round settles, so from round two onward a player was in a paid room with nothing at risk — playing for free. The tier chosen at join is now kept as `meta.tier` for the life of the connection, and re-escrowed at the start of every round. Anyone who cannot cover it is un-readied and told, rather than quietly playing free.
 
-**Readiness was wiped.** Everyone was dropped into a lobby and asked again. It now survives the intermission, and `ready` is accepted while the standings are still on screen — so the standings card carries an "I'm in for the next round" button and a full lobby rolls straight on.
+**Back to the lobby, un-readied.** At the whistle `endRound` fixes who is to be settled, broadcasts `round_end`, and sends the room straight to the lobby (`toLobby`): every body is despawned and every player un-readied, so the next round, and the next stake, is a fresh choice. The one exception is a player who sat the round out and readied during it (`meta.readyForNext`): that was a choice made for the next round, and it stands. No count can start while the last round is still paying out (`room.settling`), because `startRound` re-stakes from the connection.
 
-**The countdown was static text.** "Next round starting…" never changed. It now ticks from the snapshot clock: "Next round in 12s".
+**Each survivor is told their own result.** After their payout lands the server pushes the new balance, then a `result` message: `place`, `placed`, `stake`, `paid` and `settled`. A paid place opens the **congratulations card** over the lobby: the medal for the place, what the round made them (`paid − stake`; a place with no kills, whose pot was only their own stake, shows what was paid instead of "+0.00"), the breakdown, the balance it left, the round's paid places, and the XP when it arrives. If the payout could not be confirmed it says so and claims no figures.
 
 `startRound` became async because re-escrowing talks to the database, so `maybeStartRound` guards against starting twice while that is in flight.
 
@@ -871,7 +870,7 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 |---|---|---|
 | Where it runs | Locally, in the browser tab | Shared server arena |
 | Opponents | Bots | Real players only |
-| Rounds | None, play indefinitely | 10 minutes, then 15s intermission |
+| Rounds | None, play indefinitely | 10 minutes, then back to the lobby |
 | Wagering | No | Yes |
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
@@ -905,13 +904,13 @@ The wire carries a virus's compact id and feed count alongside its position (7 b
 
 **Everyone starts the same distance apart.** Random spawn points decided rounds before they began: two players could open within eating distance of each other while a third had a quarter of the board to itself. The field is now dealt onto one ring at equal angular spacing (`spawnRing` in `shared/sim.js`), so every opening position is interchangeable — same distance to either neighbour, same distance to the centre, same distance to the wall. The target gap is 520 units; a lobby too big to seat at that spacing gets the widest ring the arena holds instead, which is tighter but still even (100 players come out 268 apart, about fifteen starting diameters). The ring is turned by a seeded angle each round, so it is reproducible from the world seed without landing on the same points every time. Where bots stand in for a short lobby, the humans are dealt into the ring at even intervals rather than left in a block.
 
-Only round starts use the ring. A **mid-round respawn is still random**, which is deliberate: a ring position is an opening, and handing one to a player who died at minute eight would be a reward for dying.
+Only round starts use the ring, and in the server's rooms they are the only way onto the board: nobody joins or respawns during a round. Practice, which runs in the browser, still respawns you at a random point.
 
 The clock sits top centre: a large countdown, the round number, and the **wall-clock time the round finishes** ("ends 16:10"). The finish time is formatted to the minute and stays fixed for the whole round, because `now` and `remaining` move together — verified across a full ten minutes, one distinct value. The countdown turns red and pulses in the last 30 seconds, which is the only motion in the HUD so it reads as urgency rather than decoration.
 
 Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
 
-Tune with `ROUND_SECONDS`, `INTERMISSION_SECONDS` and `COUNTDOWN_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
+Tune with `ROUND_SECONDS` and `COUNTDOWN_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
 
 **Requires migration 004.** The `survived` outcome is new and the original check constraint rejects it, so run `server/db/migrations/004_survived_outcome.sql` before deploying or every end-of-round write fails.
 
@@ -1018,7 +1017,6 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
 | `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
 | `ROUND_SECONDS` | 600 | **120** |
-| `INTERMISSION_SECONDS` | 15 | **8** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
 
 Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=100 npm start` works.
@@ -1089,6 +1087,6 @@ Nothing here is production-ready for handling funds. At minimum, all of these ne
 
 ## Behaviour notes
 
-- Your orb count is per life. Respawning starts a fresh run and resets it, along with peak mass and cells eaten.
+- Your orb count is per life. In practice, respawning starts a fresh run and resets it, along with peak mass and cells eaten. In a live room a life is the round: once eaten, you play again in the next one.
 - Offline mode steps at the render rate rather than a fixed 20Hz. There is nothing to interpolate against locally and variable `dt` looks smoother. The simulation is `dt`-scaled, so both modes play materially the same.
 - Online mode renders roughly 100ms behind the server so there are always two snapshots to interpolate between. Lower it in `net.js` (`INTERP_MS`) for less latency at the cost of stutter when packets are late.

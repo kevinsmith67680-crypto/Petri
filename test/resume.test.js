@@ -55,7 +55,6 @@ process.env.MATCH_BURST = "1000";
 // A long round, so nothing here races a settlement, and no bots, so the count
 // of bodies in the arena means what it says.
 process.env.ROUND_SECONDS = "60";
-process.env.INTERMISSION_SECONDS = "1";
 // Shortened, not disabled: readying now opens a count before the round, and
 // this file needs to be on the other side of it.
 process.env.COUNTDOWN_SECONDS = "1";

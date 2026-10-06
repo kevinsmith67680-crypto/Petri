@@ -217,13 +217,11 @@ the tick keeps sending snapshots. The tick's countdown branch is guarded with
 
 | Item | Where |
 |---|---|
-| **Mid-round arrivals spawn straight into the live round.** The README and the join handler's own comment say they wait in the lobby; the code despawns them only when the round is *not* live. Decide which is meant — it matters in a staked room, and it means a mid-round arrival never sees the lobby to pick a colour | `server/index.js`, the join handler ("Arrivals wait in the lobby") |
 | Without `DATABASE_URL`, `/api/stats` returns each match's `accountId` and `killerId` — another player's account id. The Postgres backend lists its columns and does not | `server/db/memory.js`, `getMatches()` |
 | Found by reading, not reproduced: after a refused join ("Back to menu"), pressing Start with Practice selected sends `respawn` down the dead socket instead of starting practice, because `start()` only rebuilds the connection for a staked tier | `client/main.js`, `start()` |
 | Shared links have no preview image. `og:image` must be an absolute URL and the game answers on two hosts, so it needs a decision on which | `index.html` head |
 | `test/control.test.js` failed once in about seventeen runs and never again. It is timing-based; the failure was not captured | `test/control.test.js` |
 | Accounts created before the age gate have `date_of_birth` NULL and are not gated | `server/db/migrations/006_age_gate.sql` |
-| End-of-round copy is hardcoded to ten minutes and top five; wrong under other config | `index.html:1301` (`roundBlurb`) |
 | A compiled Python file was committed with the manual script | `scripts/__pycache__/` |
 | Two unreferenced images ship in the container, 868 KB | `assets/ChatGPT Image Sep 12…png`, `assets/image-1789204331359.png` |
 | `mark.png` is 796 KB and only used by the icon build script, never at runtime | `assets/mark.png`, `scripts/icons.mjs` |
@@ -262,7 +260,7 @@ Online play needs `?mode=online` **and** a signed-in account. The practice tier 
 runs locally against bots and never touches the server — there is no practice room.
 
 To see the lobby's *Last game* card filled without waiting ten minutes:
-`TEST_MODE=1 ROUND_SECONDS=6 INTERMISSION_SECONDS=2 COUNTDOWN_SECONDS=30 npm start`,
+`TEST_MODE=1 ROUND_SECONDS=6 COUNTDOWN_SECONDS=30 npm start`,
 sign up, pick a stake, ready up, and wait out one short round. To see the lobby
 wait for others instead of counting down at once, run without `TEST_MODE` and with
 `LOBBY_MIN=2`.
