@@ -227,6 +227,7 @@ def read_timings():
     out = {}
     for key, pattern in (
         ("countdown", r'envInt\("COUNTDOWN_SECONDS", (\d+)\)'),
+        ("standings", r'envInt\("STANDINGS_SECONDS", (\d+)\)'),
         ("linger", r'envInt\("LINGER_SEC", (\d+)\)'),
         ("skillWindow", r'envInt\("SKILL_WINDOW", (\d+)\)'),
         ("skillWiden", r'envInt\("SKILL_WIDEN", (\d+)\)'),
@@ -436,10 +437,11 @@ def dia_timeline():
     d = Drawing(CONTENT_W, 74)
     w = CONTENT_W
     segs = [
-        ("Lobby", "until enough are ready", 0.22, colors.HexColor("#e6e5e1")),
+        ("Lobby", "until enough are ready", 0.20, colors.HexColor("#e6e5e1")),
         (f"Count {T['countdown']}s", "everyone ready", 0.10, ACCENT),
-        (f"Round {STD['roundSeconds'] // 60} min", "the only part that pays", 0.52, colors.HexColor("#2f2f2d")),
-        ("Lobby", "ready up again", 0.16, colors.HexColor("#e6e5e1")),
+        (f"Round {STD['roundSeconds'] // 60} min", "the only part that pays", 0.44, colors.HexColor("#2f2f2d")),
+        (f"Standings {T['standings']}s", "who finished where", 0.13, colors.HexColor("#b9b7b1")),
+        ("Lobby", "ready up again", 0.13, colors.HexColor("#e6e5e1")),
     ]
     x = 0
     for label, sub, frac, col in segs:
@@ -886,10 +888,11 @@ def story():
 
     s.append(P("How a round runs", S_H2))
     s.append(dia_timeline())
-    s.append(P(f"At the whistle everyone goes back to the lobby, and nobody is "
-               f"ready: each round, and each stake, is a fresh choice. Finish in the "
-               f"top {STD['paidPositions']} and a congratulations card shows what the "
-               f"round made you.", S_CAPTION))
+    s.append(P(f"At the whistle the finishing positions go up for {T['standings']} "
+               f"seconds, then everyone goes back to the lobby and nobody is ready: each "
+               f"round, and each stake, is a fresh choice. Finish in the top "
+               f"{STD['paidPositions']} and a congratulations card shows what the round "
+               f"made you.", S_CAPTION))
 
     s.append(two_col(
         [P("You start on a ring", S_H3),
@@ -1919,7 +1922,8 @@ def story():
          ["Viruses", str(STD["world"]["viruses"]), str(HIGH["world"]["viruses"])],
          ["Round length", mmss(STD["roundSeconds"]), mmss(HIGH["roundSeconds"])],
          ["Paid places", str(STD["paidPositions"]), str(HIGH["paidPositions"])],
-         ["Countdown", f"{T['countdown']}s", f"{T['countdown']}s"]],
+         ["Countdown", f"{T['countdown']}s", f"{T['countdown']}s"],
+         ["Standings", f"{T['standings']}s", f"{T['standings']}s"]],
         [30 * mm, 14 * mm, None])]
 
     s.append(two_col(ref_a, ref_b))

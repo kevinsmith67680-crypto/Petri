@@ -58,6 +58,7 @@ process.env.ROUND_SECONDS = "60";
 // Shortened, not disabled: readying now opens a count before the round, and
 // this file needs to be on the other side of it.
 process.env.COUNTDOWN_SECONDS = "1";
+process.env.STANDINGS_SECONDS = "1";
 process.env.BOTS = "0";
 // Short enough to watch the window close within the test.
 process.env.LINGER_SEC = "3";

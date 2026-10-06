@@ -77,6 +77,7 @@ process.env.LOBBY_MAX = "4";
 process.env.MAX_ROOMS = "4";
 process.env.ROUND_SECONDS = "2";
 process.env.COUNTDOWN_SECONDS = "1";
+process.env.STANDINGS_SECONDS = "1";
 // Fixed windows, so which room fits does not depend on how long this took.
 process.env.SKILL_WINDOW = "200";
 process.env.SKILL_WIDEN = "0";
@@ -212,10 +213,15 @@ for (const [ws, name] of [[mid, "mid"], [avg, "avg"]]) {
 console.log("\n-- and then everyone is back in the lobby --");
 
 {
-  const seq = texts(mid);
-  const back = seq.slice(seq.findIndex(m => m.type === "round_end") + 1).find(m => m.type === "lobby");
-  check("the whistle sends the room back to the lobby, nobody ready",
-    back?.phase === PHASE_LOBBY && back?.ready === 0, JSON.stringify(back));
+  // The standings are up for STANDINGS_SECONDS first; the lobby follows.
+  const back = () => {
+    const seq = texts(mid);
+    return seq.slice(seq.findIndex(m => m.type === "round_end") + 1)
+      .find(m => m.type === "lobby" && m.phase === PHASE_LOBBY);
+  };
+  await until(() => !!back(), 4000);
+  check("after the standings the room is back in the lobby, nobody ready",
+    back()?.ready === 0, JSON.stringify(back()));
   await settle(2500);
   check("and no round starts until someone readies again",
     texts(mid).filter(m => m.type === "round_start").length === 1);

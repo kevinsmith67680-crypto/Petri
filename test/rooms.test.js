@@ -50,6 +50,7 @@ delete process.env.BOTS;
 // from the one that ships.
 process.env.ROUND_SECONDS = "3";
 process.env.COUNTDOWN_SECONDS = "1";
+process.env.STANDINGS_SECONDS = "1";
 // An allowlist that names somewhere else entirely. This is the production
 // shape of the bug: the list is correct for the domain and wrong for every
 // other host the same server answers on. Joins in this file are driven
@@ -407,10 +408,19 @@ console.log("\n-- the whistle sends everyone back to the lobby --");
   check("round one starts", await until(() => texts().some(m => m.type === "round_start")));
 
   check("round one ends", await until(() => texts().some(m => m.type === "round_end")));
-  const seq = texts();
-  const back = seq.slice(seq.findIndex(m => m.type === "round_end") + 1).find(m => m.type === "lobby");
-  check("the whistle sends everyone back to the lobby", back?.phase === PHASE_LOBBY, JSON.stringify(back));
-  check("with nobody counted in for the next round", back?.ready === 0, String(back?.ready));
+  const whistle = Date.now();
+  const end = texts().find(m => m.type === "round_end");
+  check("the standings go up for as long as the server says", end?.nextIn === 1, String(end?.nextIn));
+  const lobbyAfter = () => {
+    const seq = texts();
+    return seq.slice(seq.findIndex(m => m.type === "round_end") + 1)
+      .find(m => m.type === "lobby" && m.phase === PHASE_LOBBY);
+  };
+  check("then everyone is sent back to the lobby", await until(() => !!lobbyAfter(), 4000));
+  // Polled every 50ms, so a little under the full second.
+  check("once the standings have had their time", Date.now() - whistle >= 800,
+    `${Date.now() - whistle}ms`);
+  check("with nobody counted in for the next round", lobbyAfter()?.ready === 0, String(lobbyAfter()?.ready));
 
   // Longer than the count, which would have run had anyone stayed ready.
   await settle(2500);

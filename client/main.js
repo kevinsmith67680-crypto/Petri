@@ -296,17 +296,19 @@ function connect(stake = PRACTICE) {
       ui.showProgressGain(msg);
     });
     // This player's own settlement at the whistle, sent once the payout has
-    // landed. A paid place opens the congratulations card over the lobby.
+    // landed. A paid place opens the congratulations card over the lobby, so
+    // one that lands while the standings are still up waits for the lobby.
     on("result", msg => {
       refreshStats();
-      if (msg.placed) {
-        ui.showWin({
-          ...msg,
-          standings: lastRoundEnd?.standings || [],
-          paidPositions: lastRoundEnd?.paidPositions,
-          myName: api?.account?.displayName
-        });
-      }
+      if (!msg.placed) return;
+      const win = {
+        ...msg,
+        standings: lastRoundEnd?.standings || [],
+        paidPositions: lastRoundEnd?.paidPositions,
+        myName: api?.account?.displayName
+      };
+      if (ui.el.roundVeil.hidden) ui.showWin(win);
+      else pendingWin = win;
     });
     on("reconnecting", ({ attempt, of }) => {
       // The game keeps its last frame on screen while this runs; it is a
@@ -428,6 +430,8 @@ let ready = false;
 // The last round's standings, for the congratulations card, which opens when
 // this player's own result arrives a moment after them.
 let lastRoundEnd = null;
+// A congratulations card waiting for the standings to give way to the lobby.
+let pendingWin = null;
 // Joined while a round was being played. The server holds new arrivals out
 // of it, so the lobby card stays up through the round instead of being kept
 // for the gaps between them.
@@ -460,13 +464,14 @@ function onRound(msg) {
     const opening = ui.el.lobbyVeil.hidden;
     ui.showLobby(msg);
     if (opening) refreshStats();
+    if (pendingWin) { ui.showWin(pendingWin); pendingWin = null; }
     return;
   }
   if (msg.type === "round_end") {
-    // Everyone goes back to the lobby at the whistle, un-readied: the lobby
-    // state the server sends right behind this message opens the card, and
-    // closes a death card or the spectator bar on the way. A paid place
-    // gets the congratulations card on top, once its result arrives.
+    // The finishing positions, for everyone, until the server opens the
+    // lobby a few seconds later; nobody is ready by then. They replace a
+    // death card or the spectator bar. A paid place gets the congratulations
+    // card on top of the lobby, once its result arrives.
     running = false;
     seenAlive = false;
     // As the server has it: whoever played the round is un-readied, and a
@@ -478,6 +483,14 @@ function onRound(msg) {
     waitingForRound = false;
     if (spectating) { spectating = false; ui.hideSpectator(); }
     lastRoundEnd = msg;
+    pendingWin = null;
+    ui.showRoundEnd({
+      number: msg.number,
+      standings: msg.standings,
+      nextIn: msg.nextIn,
+      paidPositions: msg.paidPositions,
+      myName: api?.account?.displayName
+    });
   } else if (msg.type === "round_start") {
     if (spectating) { spectating = false; ui.hideSpectator(); }
     // Not ready at the whistle, so not dealt in. The round is closed to them
@@ -491,7 +504,9 @@ function onRound(msg) {
       return;
     }
     waitingForRound = false;
+    pendingWin = null;
     ui.hideLobby();
+    ui.hideRoundEnd();
     ui.hideWin();
     // The server has already respawned us into the fresh arena, but the
     // newest snapshot in hand was encoded before it did — during the count,
@@ -561,6 +576,8 @@ function onAccount(msg) {
 
 function start() {
   if (spectating) stopSpectating();
+  pendingWin = null;
+  ui.hideRoundEnd();
   ui.hideWin();
   // A new run's connection says for itself whether it has to wait.
   waitingForRound = false;
@@ -650,6 +667,7 @@ function returnToMenu() {
   if (spectating) stopSpectating();
   ready = false;
   waitingForRound = false;
+  pendingWin = null;
   ui.hideWin();
   ui.setReady(false);
   running = false;

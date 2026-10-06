@@ -363,12 +363,16 @@
   .standings div.paid em{ color:var(--accent); font-weight:600; }
   .standings div.you span:first-child{ color:var(--accent); }
   .standings em{ font-style:normal; color:var(--muted); }
+  .next{ margin-top:18px; font-size:13px; color:var(--muted); }
   /* What the round was worth: XP and the rating change, filled in when the
      server has written them, a moment after the result arrives. */
   .gain{ margin-top:14px; font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
   .gain[hidden]{ display:none; }
   .gain .up{ color:var(--accent); }
   .gain .down{ color:var(--muted); }
+  /* The countdown leads the standings card, so how long it stays up is read
+     before the scores rather than after them. */
+  #nextRound{ margin-top:10px; font-weight:600; color:var(--text); }
 
   /* ── congratulations: a paid place at the whistle ── */
 
@@ -1440,6 +1444,18 @@
         <a href="./legal/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
       </nav>
     </footer>
+  </div>
+</div>
+
+<!-- The finishing positions, for everyone, for a few seconds at the
+     whistle. The lobby takes over when the server opens it. -->
+<div class="veil" id="roundVeil" hidden>
+  <div class="card">
+    <h2 id="roundTitle">Round over</h2>
+    <p class="next" id="nextRound" aria-live="polite">Back to the lobby in 5s</p>
+    <p id="roundBlurb">Time is up. The top five are paid; everyone else loses their stake.</p>
+    <p class="gain" id="roundGain" hidden aria-live="polite"></p>
+    <div class="standings" id="standingsList"></div>
   </div>
 </div>
 

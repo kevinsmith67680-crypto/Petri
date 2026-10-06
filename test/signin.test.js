@@ -382,22 +382,38 @@ console.log("\n-- readiness follows the server across rounds --");
   $("btnReady").click();
   say({ type: "round_start", mode: "standard", number: 1, seconds: 120 });
   check("readying deals the player in, and the lobby closes", $("lobbyVeil").hidden === true);
-  say({ type: "round_end", number: 1, standings: [], paidPositions: 5 });
-  say(lobbyMsg(3));
-  check("the whistle puts everyone back in the lobby", $("lobbyVeil").hidden === false);
-  check("un-readied, as the server has it", pressed() === "false", pressed());
-  check("and the button asks again", $("btnReady").textContent === "I'm ready", $("btnReady").textContent);
+  const standings = [
+    { name: "Ada", mass: 900, position: 1, paid: true },
+    { name: "Bo", mass: 600, position: 2, paid: true }
+  ];
+  say({ type: "round_end", number: 1, standings, paidPositions: 5, nextIn: 5 });
+  check("the whistle puts the finishing positions up",
+    $("roundVeil").hidden === false && /2\. Bo/.test($("standingsList").innerHTML),
+    $("standingsList").innerHTML);
+  // A lobby update during the standings (someone joining) is not the lobby
+  // opening: the server opens it when the standings have had their time.
+  say(lobbyMsg(2));
+  check("and keeps them up until the lobby opens",
+    $("roundVeil").hidden === false && $("lobbyVeil").hidden === true);
 
   // Each paid place is told its own result, which opens the congratulations
-  // card over the lobby. Anything else leaves the lobby as it is.
+  // card over the lobby. One that lands during the standings waits for it.
   say({ type: "result", round: 1, place: 9, placed: false, stake: 1_000_000, paid: 0, settled: true });
-  check("an unpaid finish opens no card", $("winVeil").hidden === true);
   say({ type: "result", round: 1, place: 2, placed: true, stake: 1_000_000, paid: 2_500_000, settled: true });
-  check("a paid place opens the congratulations card", $("winVeil").hidden === false);
-  check("with what the round made", /^\+1\.50</.test($("winAmount").innerHTML), $("winAmount").innerHTML);
+  check("a paid place's card waits for the standings to finish", $("winVeil").hidden === true);
+
+  say(lobbyMsg(3));
+  check("then everyone is back in the lobby",
+    $("lobbyVeil").hidden === false && $("roundVeil").hidden === true);
+  check("un-readied, as the server has it", pressed() === "false", pressed());
+  check("and the button asks again", $("btnReady").textContent === "I'm ready", $("btnReady").textContent);
+  check("with the congratulations card on top", $("winVeil").hidden === false);
+  check("saying what the round made", /^\+1\.50</.test($("winAmount").innerHTML), $("winAmount").innerHTML);
   $("btnWinLobby").click();
   check("which closes back onto the lobby",
     $("winVeil").hidden === true && $("lobbyVeil").hidden === false);
+  say({ type: "result", round: 1, place: 9, placed: false, stake: 1_000_000, paid: 0, settled: true });
+  check("an unpaid finish opens no card", $("winVeil").hidden === true);
 
   $("btnReady").click();
   say(lobbyMsg(3));                    // the server's echo of the ready
@@ -591,7 +607,9 @@ console.log("\n-- nobody is dropped into a round they are not in --");
   // Readying while waiting is a choice for the next round, so the whistle,
   // which un-readies everyone who played, keeps it.
   $("btnReady").click();
-  deliver({ type: "round_end", number: 1, standings: [], paidPositions: 5 });
+  deliver({ type: "round_end", number: 1, standings: [], paidPositions: 5, nextIn: 5 });
+  check("they see how the round finished, like everyone else",
+    $("roundVeil").hidden === false && $("lobbyVeil").hidden === true);
   deliver(lobby(PHASE_LOBBY));
   check("when the round ends they are in the ordinary lobby with everyone else",
     $("lobbyVeil").hidden === false && !/round is in progress/.test($("lobbyLine").textContent),

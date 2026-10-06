@@ -70,6 +70,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard`: the level of the test-mode rooms a server opens by default. Players who pick another are seated in rooms at their own level — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
+| `STANDINGS_SECONDS` | 5 | How long the finishing positions stay up before everyone goes to the lobby |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
 | `LOBBY_MAX` | 150 | Seats per room. When every room of a mode is full, another opens |
 | `MATCHMAKER` | `embedded` | `embedded` serves `/api/match` from this process, with this server as the only one. `external` leaves matchmaking to `npm run matchmaker` and answers it on `/internal/*` |
@@ -690,13 +691,13 @@ The game server applies the same rule when it is asked to choose (`seatFor`), an
 
 ## Between rounds
 
-A round ends, everyone goes back to the lobby, and the next one begins once enough of them ready up again.
+A round ends, everyone sees the finishing positions for five seconds, then everyone goes back to the lobby, and the next one begins once enough of them ready up again.
 
 **The stake was settled and never re-locked.** `meta.stake` is cleared when a round settles, so from round two onward a player was in a paid room with nothing at risk — playing for free. The tier chosen at join is now kept as `meta.tier` for the life of the connection, and re-escrowed at the start of every round. Anyone who cannot cover it is un-readied and told, rather than quietly playing free.
 
-**Back to the lobby, un-readied.** At the whistle `endRound` fixes who is to be settled, broadcasts `round_end`, and sends the room straight to the lobby (`toLobby`): every body is despawned and every player un-readied, so the next round, and the next stake, is a fresh choice. The one exception is a player who sat the round out and readied during it (`meta.readyForNext`): that was a choice made for the next round, and it stands. No count can start while the last round is still paying out (`room.settling`), because `startRound` re-stakes from the connection.
+**Back to the lobby, un-readied.** At the whistle `endRound` fixes who is to be settled, broadcasts `round_end` with the standings, and closes the round (`closeRound`): every body is despawned and every player un-readied, so the next round, and the next stake, is a fresh choice. The room sits in `PHASE_INTERMISSION` for `STANDINGS_SECONDS` while every client shows the finishing positions with a count ticked from the snapshot clock ("Back to the lobby in 3s"); then `toLobby` opens the lobby for everyone at once. Payouts start at the whistle, not after the standings. The one exception is a player who sat the round out and readied during it (`meta.readyForNext`): that was a choice made for the next round, and it stands. No count can start while the last round is still paying out (`room.settling`), because `startRound` re-stakes from the connection.
 
-**Each survivor is told their own result.** After their payout lands the server pushes the new balance, then a `result` message: `place`, `placed`, `stake`, `paid` and `settled`. A paid place opens the **congratulations card** over the lobby: the medal for the place, what the round made them (`paid − stake`; a place with no kills, whose pot was only their own stake, shows what was paid instead of "+0.00"), the breakdown, the balance it left, the round's paid places, and the XP when it arrives. If the payout could not be confirmed it says so and claims no figures.
+**Each survivor is told their own result.** After their payout lands the server pushes the new balance, then a `result` message: `place`, `placed`, `stake`, `paid` and `settled`. A paid place gets the **congratulations card** over the lobby once the standings give way to it (a result that lands during the standings is held until then): the medal for the place, what the round made them (`paid − stake`; a place with no kills, whose pot was only their own stake, shows what was paid instead of "+0.00"), the breakdown, the balance it left, the round's paid places, and the XP when it arrives. If the payout could not be confirmed it says so and claims no figures.
 
 `startRound` became async because re-escrowing talks to the database, so `maybeStartRound` guards against starting twice while that is in flight.
 
@@ -870,7 +871,7 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 |---|---|---|
 | Where it runs | Locally, in the browser tab | Shared server arena |
 | Opponents | Bots | Real players only |
-| Rounds | None, play indefinitely | 10 minutes, then back to the lobby |
+| Rounds | None, play indefinitely | 10 minutes, 5s of standings, then back to the lobby |
 | Wagering | No | Yes |
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
@@ -910,7 +911,7 @@ The clock sits top centre: a large countdown, the round number, and the **wall-c
 
 Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
 
-Tune with `ROUND_SECONDS` and `COUNTDOWN_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
+Tune with `ROUND_SECONDS`, `COUNTDOWN_SECONDS` and `STANDINGS_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
 
 **Requires migration 004.** The `survived` outcome is new and the original check constraint rejects it, so run `server/db/migrations/004_survived_outcome.sql` before deploying or every end-of-round write fails.
 
@@ -1018,6 +1019,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
 | `ROUND_SECONDS` | 600 | **120** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
+| `STANDINGS_SECONDS` | 5 | 5 |
 
 Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=100 npm start` works.
 
