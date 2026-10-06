@@ -80,6 +80,12 @@ export function createUI({
   }
   setMenuShown(!el.startVeil.hidden);
 
+  // The lobby card, the same way: the gear comes up over it while it is open.
+  function setLobbyShown(on) {
+    el.lobbyVeil.hidden = !on;
+    document.body.classList.toggle("lobby-up", on);
+  }
+
   function bumpCounter() {
     el.orbs.classList.remove("tick");
     void el.orbs.offsetWidth;      // force reflow so the animation restarts
@@ -110,7 +116,7 @@ export function createUI({
     $("errVeil").hidden = false;
     // It sits above everything, so nothing else should be competing with it.
     setMenuShown(false);
-    el.lobbyVeil.hidden = true;
+    setLobbyShown(false);
     el.roundVeil.hidden = true;
     el.winVeil.hidden = true;
     el.overVeil.hidden = true;
@@ -153,7 +159,7 @@ export function createUI({
   // a full room, or not enough balance to cover the stake they picked.
   function showStart() {
     $("errVeil").hidden = true;
-    el.lobbyVeil.hidden = true;
+    setLobbyShown(false);
     el.roundVeil.hidden = true;
     el.winVeil.hidden = true;
     el.overVeil.hidden = true;
@@ -199,7 +205,7 @@ export function createUI({
   const countText = n => (n > 0 ? String(n) : "Go");
 
   function showLobby(state) {
-    el.lobbyVeil.hidden = false;
+    setLobbyShown(true);
     el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
 
@@ -285,7 +291,7 @@ export function createUI({
     setText($("lobbyCountNum"), countText(Math.max(0, Math.round(round.remaining))));
   }
 
-  function hideLobby() { el.lobbyVeil.hidden = true; }
+  function hideLobby() { setLobbyShown(false); }
 
   // ── standings ─────────────────────────────────────────────────────────────
 
@@ -305,7 +311,7 @@ export function createUI({
     el.overVeil.hidden = true;
     // And the lobby card of a player who waited the round out: everyone sees
     // how it finished, then everyone goes to the lobby together.
-    el.lobbyVeil.hidden = true;
+    setLobbyShown(false);
     // The last round's gain is not this one's. This round's arrives a moment
     // after the standings, once the server has written it.
     gainHtml = "";
@@ -734,6 +740,12 @@ export function createUI({
     // is winnings, not what you chose to put in.
     el.potValue.textContent = formatUsdc(account.stake || 0);
     el.potBar.hidden = !(account.stake > 0);
+    // The lobby card's tracker: the same balance as the menu's, and the stake
+    // already held for the next round, which is why the balance is that much
+    // lower than before joining.
+    setText($("lobbyBal"), formatUsdc(account.balance));
+    setText($("lobbyStake"), formatUsdc(account.stake || 0));
+    $("lobbyStakeRow").hidden = !(account.stake > 0);
 
     // paintStakes drops an unaffordable selection back to practice itself.
     paintStakes();

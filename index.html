@@ -192,6 +192,19 @@
      height is worth more to the cards below it. */
   .lobby .logo{ width:140px; }
   .lobby .head{ margin-bottom:14px; }
+  /* The balance tracker, opposite the logo: the pot bar's look, so money
+     reads the same in the lobby as it does in a round. */
+  .lobby-bal{
+    display:flex; align-items:center; gap:14px;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:6px; padding:10px 16px; box-shadow:var(--shadow);
+  }
+  .lobby-bal div{ display:flex; align-items:baseline; gap:7px; }
+  .lobby-bal div + div{ padding-left:14px; border-left:1px solid var(--line); }
+  .lobby-bal div[hidden]{ display:none; }
+  .lobby-bal i{ font-style:normal; font-size:13px; color:var(--muted); white-space:nowrap; }
+  .lobby-bal b{ font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .lobby-bal span{ font-size:12px; font-weight:500; color:var(--muted); }
   /* Lighter cards than the menu's, so they stay side by side on a tablet
      rather than stacking at the menu's breakpoint. */
   .lobby .panes{ grid-template-columns:1fr 1fr; }
@@ -476,8 +489,8 @@
   .settings[hidden]{ display:none; }
   /* Over the pregame menu (z-index 20) the corner keeps only the gear: the
      minimap belongs to a round, and without it the gear drops to the bottom. */
-  body.menu-up .corner{ z-index:21; }
-  body.menu-up .minimap{ display:none; }
+  body.menu-up .corner, body.lobby-up .corner{ z-index:21; }
+  body.menu-up .minimap, body.lobby-up .minimap{ display:none; }
   .settings h2{
     font-size:13px; font-weight:600;
     padding-bottom:11px; margin-bottom:6px; border-bottom:1px solid var(--line);
@@ -731,7 +744,7 @@
   }
   /* Room under the menu for the settings gear in the corner, so scrolling to
      the end never leaves the footer underneath it on a narrow screen. */
-  #startVeil{ padding-bottom:88px; }
+  #startVeil, #lobbyVeil{ padding-bottom:88px; }
 
   .panes{
     display:grid; grid-template-columns:1.05fr 1fr;
@@ -971,6 +984,11 @@
 
   @media (max-width:640px){
     .topleft{ top:18px; left:18px; gap:12px; }
+    /* The lobby's balance tracker drops under the logo here: tighter, so it
+       stays inside the cards' width. */
+    .lobby-bal{ gap:10px; padding:8px 12px; }
+    .lobby-bal div + div{ padding-left:10px; }
+    .lobby-bal b{ font-size:17px; }
     .clock b{ font-size:22px; }
     /* In the column under the readout, not over it at the top centre. */
     .pot{ position:static; transform:none; padding:7px 12px; gap:10px; }
@@ -1336,6 +1354,12 @@
              alt="engulfs" width="660" height="516">
         <img class="logo dark" src="./assets/logo-dark.png"
              alt="" aria-hidden="true" width="660" height="530">
+      </div>
+      <!-- The player's money while they wait: the balance, and the stake
+           already held for the next round. Both from the server's ledger. -->
+      <div class="lobby-bal">
+        <div><i>Balance</i><b id="lobbyBal">0.00</b><span>USDC</span></div>
+        <div id="lobbyStakeRow" hidden><i>At stake</i><b id="lobbyStake">0.00</b><span>USDC</span></div>
       </div>
     </div>
 
