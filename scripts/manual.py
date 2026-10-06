@@ -222,12 +222,11 @@ def read_constants():
 
 
 def read_timings():
-    """Round, intermission and countdown lengths, from the server's defaults."""
+    """Countdown and other lengths, from the server's defaults."""
     src = (ROOT / "server" / "index.js").read_text()
     out = {}
     for key, pattern in (
         ("countdown", r'envInt\("COUNTDOWN_SECONDS", (\d+)\)'),
-        ("intermission", r'envInt\("INTERMISSION_SECONDS", TEST_MODE \? \d+ : (\d+)\)'),
         ("linger", r'envInt\("LINGER_SEC", (\d+)\)'),
         ("skillWindow", r'envInt\("SKILL_WINDOW", (\d+)\)'),
         ("skillWiden", r'envInt\("SKILL_WIDEN", (\d+)\)'),
@@ -437,10 +436,10 @@ def dia_timeline():
     d = Drawing(CONTENT_W, 74)
     w = CONTENT_W
     segs = [
-        ("Lobby", "until the room fills", 0.20, colors.HexColor("#e6e5e1")),
+        ("Lobby", "until enough are ready", 0.22, colors.HexColor("#e6e5e1")),
         (f"Count {T['countdown']}s", "everyone ready", 0.10, ACCENT),
         (f"Round {STD['roundSeconds'] // 60} min", "the only part that pays", 0.52, colors.HexColor("#2f2f2d")),
-        (f"Standings {T['intermission']}s", "opt in for the next", 0.18, colors.HexColor("#b9b7b1")),
+        ("Lobby", "ready up again", 0.16, colors.HexColor("#e6e5e1")),
     ]
     x = 0
     for label, sub, frac, col in segs:
@@ -887,8 +886,10 @@ def story():
 
     s.append(P("How a round runs", S_H2))
     s.append(dia_timeline())
-    s.append(P(f"Readiness carries over, so a full lobby rolls straight from the "
-               f"standings into the next count.", S_CAPTION))
+    s.append(P(f"At the whistle everyone goes back to the lobby, and nobody is "
+               f"ready: each round, and each stake, is a fresh choice. Finish in the "
+               f"top {STD['paidPositions']} and a congratulations card shows what the "
+               f"round made you.", S_CAPTION))
 
     s.append(two_col(
         [P("You start on a ring", S_H3),
@@ -1406,7 +1407,7 @@ def story():
         f"<b>Surviving is worth rating even outside the top {paid}.</b> Everyone "
         "alive at the whistle finishes above everyone who was eaten.",
         "<b>Where to see it.</b> The menu and the lobby card show your level, the XP "
-        "to your next one, and your rank. The standings card says what the round "
+        "to your next one, and your rank. The lobby card says what the round "
         "was worth: <i>+100 XP &middot; Level 2! &middot; Rating +24</i>.",
     ]))
     s.append(Spacer(1, 6))
@@ -1918,8 +1919,7 @@ def story():
          ["Viruses", str(STD["world"]["viruses"]), str(HIGH["world"]["viruses"])],
          ["Round length", mmss(STD["roundSeconds"]), mmss(HIGH["roundSeconds"])],
          ["Paid places", str(STD["paidPositions"]), str(HIGH["paidPositions"])],
-         ["Countdown", f"{T['countdown']}s", f"{T['countdown']}s"],
-         ["Standings", f"{T['intermission']}s", f"{T['intermission']}s"]],
+         ["Countdown", f"{T['countdown']}s", f"{T['countdown']}s"]],
         [30 * mm, 14 * mm, None])]
 
     s.append(two_col(ref_a, ref_b))

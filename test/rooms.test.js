@@ -49,7 +49,6 @@ delete process.env.BOTS;
 // that starts without passing through PHASE_COUNTDOWN is a different code path
 // from the one that ships.
 process.env.ROUND_SECONDS = "3";
-process.env.INTERMISSION_SECONDS = "1";
 process.env.COUNTDOWN_SECONDS = "1";
 // An allowlist that names somewhere else entirely. This is the production
 // shape of the bug: the list is correct for the domain and wrong for every
@@ -95,7 +94,7 @@ async function matched(token, stake, extra = {}, bots = null) {
   return { type: "join", ticket: got.ticket, protocol: PROTOCOL_VERSION, ...extra };
 }
 
-const { PROTOCOL_VERSION, PHASE_COUNTDOWN, decodeSnapshot } = await import("../shared/protocol.js");
+const { PROTOCOL_VERSION, PHASE_COUNTDOWN, PHASE_LOBBY, decodeSnapshot } = await import("../shared/protocol.js");
 
 async function join(username, stake, protocol = PROTOCOL_VERSION, bots = null) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
@@ -377,11 +376,11 @@ check("the count runs out and the round starts",
   msgs.some(m => m.includes("round_start")), msgs.join(" ").slice(0, 120) || "nothing");
 check("the room reports itself live", (await room("highstakes")).phase === "live");
 
-console.log("\n-- one round rolls into the next --");
+console.log("\n-- the whistle sends everyone back to the lobby --");
 
-// The stake is settled when a round ends. Without re-escrowing at the start of
-// the next one, a player carried on staking nothing — playing a paid room for
-// free. Readiness also used to be wiped, so everyone had to opt in again.
+// The stake is settled when a round ends, and everyone goes back to the lobby
+// un-readied: the next round is a fresh choice, and a fresh stake, for each
+// player. Readying again starts it, staked like the first and not for free.
 {
   const tok = await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -390,6 +389,10 @@ console.log("\n-- one round rolls into the next --");
   const money = async () => (await (await fetch(`http://localhost:${PORT}/api/me`, {
     headers: { Authorization: `Bearer ${tok}` }
   })).json());
+  const until = async (cond, ms = 8000) => {
+    for (let t = 0; t < ms && !(await cond()); t += 50) await settle(50);
+    return cond();
+  };
 
   const ws = new FakeWS();
   globalThis.__wss.emit("connection", ws, req);
@@ -400,21 +403,27 @@ console.log("\n-- one round rolls into the next --");
   check("joining escrows the stake", joined.pot === 1_000_000, `${joined.pot}`);
 
   await ws.deliver({ type: "ready", ready: true });
-  await settle(1400);                     // the count, plus margin
   const texts = () => ws.out.filter(m => m !== "<binary>").map(JSON.parse);
-  check("round one starts", texts().some(m => m.type === "round_start"));
+  check("round one starts", await until(() => texts().some(m => m.type === "round_start")));
 
-  // Round (3s), intermission (1s) and the next count (1s), with margin.
-  await settle(6500);
+  check("round one ends", await until(() => texts().some(m => m.type === "round_end")));
+  const seq = texts();
+  const back = seq.slice(seq.findIndex(m => m.type === "round_end") + 1).find(m => m.type === "lobby");
+  check("the whistle sends everyone back to the lobby", back?.phase === PHASE_LOBBY, JSON.stringify(back));
+  check("with nobody counted in for the next round", back?.ready === 0, String(back?.ready));
+
+  // Longer than the count, which would have run had anyone stayed ready.
+  await settle(2500);
   const rounds = texts().filter(m => m.type === "round_start").length;
-  check("round two starts without being asked again", rounds >= 2, `${rounds} rounds`);
+  check("the next round waits to be asked for", rounds === 1, `${rounds} rounds`);
 
   // Polling HTTP races the round clock, so assert on what the server pushed:
-  // the re-stake happens during startRound and pushes an account update, so
-  // there must be one carrying a full escrow AFTER the first round ended.
-  const seq = texts();
-  const firstEnd = seq.findIndex(m => m.type === "round_end");
-  const restake = seq.slice(firstEnd).find(m => m.type === "account" && m.pot === 1_000_000);
+  // the re-stake happens during startRound and pushes an account update.
+  const mark = texts().length;
+  await ws.deliver({ type: "ready", ready: true });
+  check("readying again starts round two",
+    await until(() => texts().slice(mark).some(m => m.type === "round_start"), 4000));
+  const restake = texts().slice(mark).find(m => m.type === "account" && m.pot === 1_000_000);
   check("round two is staked, not free", !!restake,
     restake ? `pot ${restake.pot}` : "no re-stake was pushed");
   check("and the stake reported is the tier chosen", restake && restake.stake === 1_000_000,
@@ -739,7 +748,7 @@ console.log("\n-- nobody joins a round under way --");
     `${readyBefore} -> ${lobbies().at(-1)?.ready}`);
 
   const ended = await until(() => texts(late).some(m => m.type === "round_end"));
-  check("they get the standings when the round ends", ended);
+  check("they hear the round end with everyone else", ended);
   const dealt = await until(() => timeline(late).some(t => t.starts >= 1 && t.snap.me.alive));
   check("and are dealt into the next round", dealt);
   check("having had no body before it",

@@ -253,44 +253,85 @@ for (const exit of ["return socket;", "return local;", "return createLocalConnec
     i > 0 ? "" : "exit not found — has connect() been restructured?");
 }
 
-// ── round-end heading ───────────────────────────────────────────────────────
+// ── congratulations ─────────────────────────────────────────────────────────
 //
-// Surviving to the whistle and being absorbed before it are different results
-// and must not share a heading. Only survivors appear in the standings, so the
-// presence of our own row is what separates the two.
+// A paid place at the whistle gets a card of its own, over the lobby everyone
+// goes back to. Every figure on it is the server's: what was staked and what
+// was actually paid, so the profit is the ledger's, not the HUD's estimate.
 
-console.log("\n-- round end --");
+console.log("\n-- congratulations for a paid place --");
 
-const roundTitle = () => $("roundTitle").textContent;
 const placings = [
   { name: "Ada", mass: 900, position: 1, paid: true },
   { name: "Kev", mass: 700, position: 2, paid: true },
-  { name: "Bo", mass: 500, position: 3, paid: true }
+  { name: "Bo", mass: 500, position: 3, paid: true },
+  { name: "Cy", mass: 200, position: 6, paid: false }
 ];
-const endRound = myName =>
-  ui.showRoundEnd({ number: 4, standings: placings, nextIn: 12, myName });
+const txt = id => String($(id).textContent);
+const win = extra => ui.showWin({
+  place: 3, stake: 1 * UNIT, paid: 3.5 * UNIT, settled: true, round: 4,
+  standings: placings, paidPositions: 5, myName: "Bo", ...extra
+});
+$("winVeil").hidden = true;
+$("lobbyVeil").hidden = false;
+ui.setAccount({ balance: 7.5 * UNIT, pot: 0, staked: false, demo: true });
+win();
+check("the card opens", $("winVeil").hidden === false);
+check("over the lobby, which stays open beneath it", $("lobbyVeil").hidden === false);
+check("it names the place", txt("winTitle") === "You finished 3rd", txt("winTitle"));
+check("third gets bronze", $("winMedal").className === "medal p3", $("winMedal").className);
+check("it leads with what the round made them",
+  txt("winAmountLabel") === "You made" && /^\+2\.50</.test($("winAmount").innerHTML),
+  `${txt("winAmountLabel")} ${$("winAmount").innerHTML}`);
+check("and says where it went", /top-5 finish in round 4/.test(txt("winLine")), txt("winLine"));
+check("then breaks it down: stake, payout, profit and the balance it left",
+  txt("winStake") === "1.00" && txt("winPaid") === "3.50" &&
+  txt("winProfit") === "+2.50" && txt("winBalance") === "7.50",
+  [txt("winStake"), txt("winPaid"), txt("winProfit"), txt("winBalance")].join(" / "));
+check("the paid places are listed, and only those",
+  ($("winStandings").innerHTML.match(/<div/g) || []).length === 3 && !/Cy/.test($("winStandings").innerHTML),
+  $("winStandings").innerHTML);
+check("with the player's own row marked",
+  /class="paid you"><span>3\. Bo/.test($("winStandings").innerHTML));
+check("demo credits are labelled as such", $("winNote").hidden === false);
+check("the round's XP is not guessed at: it arrives afterwards", $("winGain").hidden === true);
+ui.showProgressGain({ gained: 50, ratingChange: 6, rated: true, xp: 50 });
+check("and is shown on the card when it does",
+  $("winGain").hidden === false && /\+50 XP/.test($("winGain").innerHTML), $("winGain").innerHTML);
+check("the button is ready to press", globalThis.__focused === "btnWinLobby", globalThis.__focused);
 
-endRound("Bo");
-check("a survivor is told the position they finished on",
-  roundTitle() === "You finished 3rd", roundTitle());
+// A lobby update arrives on every join and leave. None of them is a reason to
+// close the card on someone reading it.
+ui.showLobby({ ready: 0, connected: 3, min: 2, max: 150, phase: 3 });
+check("lobby updates leave the card up", $("winVeil").hidden === false);
 
-endRound("Ada");
-check("first place reads as first",
-  roundTitle() === "You finished 1st", roundTitle());
+$("btnWinLobby").click();
+check("Back to lobby closes it onto the lobby card",
+  $("winVeil").hidden === true && $("lobbyVeil").hidden === false);
+check("where the ready button has focus", globalThis.__focused === "btnReady", globalThis.__focused);
 
-// Absorbed before the whistle: no row of our own, so claiming a position here
-// would invent one the player never held.
-endRound("Ghost");
-check("someone absorbed before the whistle is not given a position",
-  roundTitle() === "Round 4 over", roundTitle());
+// A place with no kills: the pot was the player's own stake, so that is what
+// came back. "+0.00" under "You made" would read as a mistake.
+win({ place: 1, paid: 1 * UNIT });
+check("first gets gold", $("winMedal").className === "medal p1");
+check("a place that made nothing says what was paid instead",
+  txt("winAmountLabel") === "Paid out" && /^1\.00</.test($("winAmount").innerHTML),
+  `${txt("winAmountLabel")} ${$("winAmount").innerHTML}`);
+check("and why", /your own came back/.test(txt("winLine")), txt("winLine"));
+check("with the profit at zero", txt("winProfit") === "0.00", txt("winProfit"));
 
-ui.showRoundEnd({ number: 4, standings: [], nextIn: 12, myName: "Bo" });
-check("an empty board falls back to the plain heading",
-  roundTitle() === "Round 4 over", roundTitle());
+win({ place: 5, paid: 0, settled: false });
+check("fourth and fifth get the accent", $("winMedal").className === "medal p4");
+check("a payout the server could not confirm says so",
+  /could not be confirmed/.test(txt("winLine")), txt("winLine"));
+check("and claims no figures", $("winTally").hidden === true && $("winAmount").innerHTML === "&mdash;");
 
-endRound(undefined);
-check("a missing display name cannot match a row",
-  roundTitle() === "Round 4 over", roundTitle());
+ui.setAccount({ balance: 7.5 * UNIT, pot: 0, staked: false, demo: false });
+win();
+check("real money carries no demo label", $("winNote").hidden === true);
+ui.showStart();
+check("going back to the menu closes it", $("winVeil").hidden === true);
+$("lobbyVeil").hidden = true;
 
 console.log("\n-- the pre-round countdown --");
 
@@ -345,11 +386,6 @@ ui.setReady(true);
 ui.showLobby({ ready: 4, connected: 4, min: 1, max: 150, phase: 1 });
 check("readying while they wait says so", $("btnReady").textContent === "In for the next round",
   $("btnReady").textContent);
-ui.renderCountdown({ phase: 2, remaining: 4, number: 3 });
-check("the line follows the round into its standings",
-  /just finished/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
-ui.showRoundEnd({ number: 3, standings: [], nextIn: 4, myName: "Ada" });
-check("and the standings replace the lobby card, as for everyone", $("lobbyVeil").hidden === true);
 // Back between rounds, the card is the ordinary lobby again.
 ui.showLobby({ ready: 1, connected: 4, min: 2, max: 150, phase: 3 });
 check("between rounds the lobby is back to normal",
@@ -643,25 +679,26 @@ console.log("\n-- level and rank --");
   check("signing out hides it", $("progressBox").hidden === true);
   check("from the lobby card as well", $("lobbyProgress").hidden === true && $("lobbyGain").hidden === true);
 
-  // The round-over card.
-  ui.showRoundEnd({ number: 1, standings: [], nextIn: 5, myName: "Ada" });
-  check("the card opens without a gain line: it arrives after the standings", $("roundGain").hidden === true);
+  // The congratulations card.
+  ui.showWin({ place: 1, stake: 1_000_000, paid: 2_000_000, standings: [], myName: "Ada" });
+  check("the card opens without a gain line: it arrives after the result", $("winGain").hidden === true);
   ui.showProgressGain({ gained: 100, ratingChange: 23.6, rated: true, xp: 100 });
   check("a win shows its XP, the level it reached, and the rating change",
-    $("roundGain").hidden === false && /\+100 XP/.test($("roundGain").innerHTML) &&
-    /Level 2!/.test($("roundGain").innerHTML) && /Rating \+24/.test($("roundGain").innerHTML),
-    $("roundGain").innerHTML);
+    $("winGain").hidden === false && /\+100 XP/.test($("winGain").innerHTML) &&
+    /Level 2!/.test($("winGain").innerHTML) && /Rating \+24/.test($("winGain").innerHTML),
+    $("winGain").innerHTML);
   ui.showProgressGain({ gained: 25, ratingChange: 3, rated: true, xp: 150 });
-  check("no level-up is claimed when there was none", !/Level/.test($("roundGain").innerHTML), $("roundGain").innerHTML);
+  check("no level-up is claimed when there was none", !/Level/.test($("winGain").innerHTML), $("winGain").innerHTML);
   ui.showProgressGain({ gained: 0, ratingChange: -11.2, rated: true, xp: 150 });
-  check("a loss shows only the rating falling", /Rating -11/.test($("roundGain").innerHTML) &&
-    !/XP/.test($("roundGain").innerHTML), $("roundGain").innerHTML);
+  check("a loss shows only the rating falling", /Rating -11/.test($("winGain").innerHTML) &&
+    !/XP/.test($("winGain").innerHTML), $("winGain").innerHTML);
   ui.showProgressGain({ gained: 0, ratingChange: 0, rated: false, xp: 150 });
   check("nothing earned and nothing rated shows nothing",
-    $("roundGain").hidden === true && $("lobbyGain").hidden === true);
+    $("winGain").hidden === true && $("lobbyGain").hidden === true);
   ui.showProgressGain({ gained: 70, rated: true, ratingChange: 5, xp: 170 });
-  ui.showRoundEnd({ number: 2, standings: [], nextIn: 5, myName: "Ada" });
-  check("the next round's card does not show the last round's gain", $("roundGain").hidden === true);
+  ui.showWin({ place: 2, stake: 1_000_000, paid: 1_000_000, standings: [], myName: "Ada" });
+  check("the next round's card does not show the last round's gain", $("winGain").hidden === true);
+  $("btnWinLobby").click();
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

@@ -282,7 +282,6 @@ function connect(stake = PRACTICE) {
       // it resumed a live run.
       ready = !!w.ready;
       ui.setReady(ready);
-      ui.setNextReady(ready);
       // Arrived during a round: no body until the next one. The lobby message
       // that follows opens the card, which is let through while waiting.
       waitingForRound = !!w.waiting;
@@ -295,6 +294,19 @@ function connect(stake = PRACTICE) {
     on("progress", msg => {
       ui.renderProgress(msg);
       ui.showProgressGain(msg);
+    });
+    // This player's own settlement at the whistle, sent once the payout has
+    // landed. A paid place opens the congratulations card over the lobby.
+    on("result", msg => {
+      refreshStats();
+      if (msg.placed) {
+        ui.showWin({
+          ...msg,
+          standings: lastRoundEnd?.standings || [],
+          paidPositions: lastRoundEnd?.paidPositions,
+          myName: api?.account?.displayName
+        });
+      }
     });
     on("reconnecting", ({ attempt, of }) => {
       // The game keeps its last frame on screen while this runs; it is a
@@ -410,9 +422,12 @@ function syncCounter(view) {
 
 function onEvent() { /* reserved for future server-pushed events */ }
 
-// The round ended for everyone at once, so the death card would be wrong here:
-// surviving to the whistle is not being eaten.
+// Whether the server is counting this player in for the next round. The
+// whistle clears it: everyone goes back to the lobby and chooses again.
 let ready = false;
+// The last round's standings, for the congratulations card, which opens when
+// this player's own result arrives a moment after them.
+let lastRoundEnd = null;
 // Joined while a round was being played. The server holds new arrivals out
 // of it, so the lobby card stays up through the round instead of being kept
 // for the gaps between them.
@@ -448,21 +463,21 @@ function onRound(msg) {
     return;
   }
   if (msg.type === "round_end") {
+    // Everyone goes back to the lobby at the whistle, un-readied: the lobby
+    // state the server sends right behind this message opens the card, and
+    // closes a death card or the spectator bar on the way. A paid place
+    // gets the congratulations card on top, once its result arrives.
     running = false;
     seenAlive = false;
-    // Waiting is over: the standings card, and the next lobby, are the same
-    // for everyone from here.
+    // As the server has it: whoever played the round is un-readied, and a
+    // player who readied while waiting it out stays in for the next one.
+    if (!waitingForRound) {
+      ready = false;
+      ui.setReady(false);
+    }
     waitingForRound = false;
-    // Readiness survives the intermission on the server, so the button starts
-    // from wherever the player left it rather than silently resetting.
-    ui.setNextReady(ready);
-    ui.showRoundEnd({
-      number: msg.number,
-      standings: msg.standings,
-      nextIn: msg.nextIn,
-      myName: api?.account?.displayName
-    });
-    refreshStats();
+    if (spectating) { spectating = false; ui.hideSpectator(); }
+    lastRoundEnd = msg;
   } else if (msg.type === "round_start") {
     if (spectating) { spectating = false; ui.hideSpectator(); }
     // Not ready at the whistle, so not dealt in. The round is closed to them
@@ -476,11 +491,8 @@ function onRound(msg) {
       return;
     }
     waitingForRound = false;
-    // Readiness is not reset here. The server keeps it from one round to the
-    // next, so resetting it left the next lobby offering "I'm ready" to a
-    // player it was already counting in — and pressing it did nothing.
     ui.hideLobby();
-    ui.hideRoundEnd();
+    ui.hideWin();
     // The server has already respawned us into the fresh arena, but the
     // newest snapshot in hand was encoded before it did — during the count,
     // when everyone is despawned. Claiming to be alive here would arm the
@@ -506,7 +518,6 @@ function onAccount(msg) {
     if (msg.code === "funds") {
       ready = false;
       ui.setReady(false);
-      ui.setNextReady(false);
     }
     // Always note it in the menu, but if the player has already started the
     // menu is hidden — so put it in front of them instead of leaving a blank
@@ -550,6 +561,7 @@ function onAccount(msg) {
 
 function start() {
   if (spectating) stopSpectating();
+  ui.hideWin();
   // A new run's connection says for itself whether it has to wait.
   waitingForRound = false;
   const stake = ui.getStake();
@@ -623,15 +635,6 @@ document.getElementById("specLeave").addEventListener("click", () => {
   });
 });
 
-// Opting in from the standings card. Same message as the lobby button, so
-// the server does not care which one was pressed.
-document.getElementById("btnNextReady").addEventListener("click", () => {
-  ready = !ready;
-  ui.setNextReady(ready);
-  ui.setReady(ready);
-  conn?.sendReady?.(ready);
-});
-
 document.getElementById("btnReady").addEventListener("click", () => {
   ready = !ready;
   ui.setReady(ready);
@@ -647,6 +650,7 @@ function returnToMenu() {
   if (spectating) stopSpectating();
   ready = false;
   waitingForRound = false;
+  ui.hideWin();
   ui.setReady(false);
   running = false;
   seenAlive = false;

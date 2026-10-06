@@ -76,7 +76,6 @@ process.env.BOTS = "0";
 process.env.LOBBY_MAX = "4";
 process.env.MAX_ROOMS = "4";
 process.env.ROUND_SECONDS = "2";
-process.env.INTERMISSION_SECONDS = "1";
 process.env.COUNTDOWN_SECONDS = "1";
 // Fixed windows, so which room fits does not depend on how long this took.
 process.env.SKILL_WINDOW = "200";
@@ -85,7 +84,7 @@ process.env.SKILL_WIDEN = "0";
 await import("../server/index.js");
 await new Promise(r => setTimeout(r, 400));
 
-const { PROTOCOL_VERSION } = await import("../shared/protocol.js");
+const { PROTOCOL_VERSION, PHASE_LOBBY } = await import("../shared/protocol.js");
 
 const req = { headers: {}, socket: { remoteAddress: "10.0.0.7", setNoDelay() {} } };
 
@@ -188,6 +187,39 @@ check("the XP is stored", stats.progress?.xp === xpForPlace(1, 5), JSON.stringif
 check("and so is the rating", Math.abs(stats.progress?.rating - first?.rating) < 1e-9);
 
 check("players in another room are untouched", !texts(pro).some(m => m.type === "progress"));
+
+console.log("\n-- each paid place is told what it won --");
+
+// The congratulations card is built from this, so it has to be the ledger's
+// figures: the stake and what was actually paid. Nobody ate anybody, so each
+// pot is the player's own stake and that is what comes back.
+for (const [ws, name] of [[mid, "mid"], [avg, "avg"]]) {
+  const seq = texts(ws);
+  const at = seq.findIndex(m => m.type === "result");
+  const r = seq[at];
+  check(`${name} is told their own result`, r?.placed === true && [1, 2].includes(r?.place),
+    JSON.stringify(r));
+  check(`${name}'s stake and payout are the ledger's`,
+    r?.stake === STANDARD && r?.paid === STANDARD && r?.settled === true, JSON.stringify(r));
+  // The balance lands first, so the card can show what the payout produced.
+  const before = seq.slice(0, at).reverse().find(m => m.type === "account");
+  const opened = welcome(ws);
+  check(`${name}'s balance is pushed first, with the pot paid out`,
+    before?.pot === 0 && before?.balance === opened.balance + STANDARD,
+    `${opened?.balance} -> ${before?.balance}, pot ${before?.pot}`);
+}
+
+console.log("\n-- and then everyone is back in the lobby --");
+
+{
+  const seq = texts(mid);
+  const back = seq.slice(seq.findIndex(m => m.type === "round_end") + 1).find(m => m.type === "lobby");
+  check("the whistle sends the room back to the lobby, nobody ready",
+    back?.phase === PHASE_LOBBY && back?.ready === 0, JSON.stringify(back));
+  await settle(2500);
+  check("and no round starts until someone readies again",
+    texts(mid).filter(m => m.type === "round_start").length === 1);
+}
 
 for (const ws of [pro, mid, avg, ace]) {
   await ws.deliver({ type: "leave" });

@@ -42,7 +42,7 @@ import {
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
-  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
+  PHASE_LIVE, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import { PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
@@ -124,9 +124,6 @@ const BOT_LEVEL = (() => {
 // world-update latency at 1.5x the CPU and bandwidth. Worth raising once
 // /health shows the tick has headroom.
 const HZ = Math.max(10, Math.min(60, envInt("TICK_HZ", TICK_HZ)));
-
-// Rounds. Ten minutes of play, then a short intermission showing standings.
-const INTERMISSION_SECONDS = envInt("INTERMISSION_SECONDS", TEST_MODE ? 8 : 15);
 
 // The gap between the lobby filling and the whistle. Players who have just
 // pressed a button are not looking at the arena; dropping them straight into
@@ -1261,11 +1258,9 @@ function refreshSpectate(room, meta) {
 
 // Time is up. Survivors are ranked by mass; the top paidPositions realise
 // their pot and everyone else forfeits. Surviving is necessary but not
-// sufficient — you have to place.
+// sufficient — you have to place. Then everyone goes back to the lobby.
 async function endRound(room) {
   const { world, round, mode } = room;
-  round.phase = PHASE_INTERMISSION;
-  round.endsAt = world.time + INTERMISSION_SECONDS;
   // Taken now, before anything is awaited, so the round being scored is this
   // one whatever happens during settlement.
   const entrants = room.entrants;
@@ -1273,6 +1268,18 @@ async function endRound(room) {
   room.waitingSince = Date.now();
 
   const survivors = aliveTargets(room).sort((a, b) => totalMass(b) - totalMass(a));
+
+  // Who is settled, fixed before anything is awaited: going back to the lobby
+  // below despawns every body, and settlement must not depend on a body that
+  // is no longer there. The stake is taken off the connection here for the
+  // same reason, so nothing can read it as still riding on this round.
+  const settling = [];
+  for (const [ws, meta] of room.clients) {
+    const player = world.players.get(meta.id);
+    if (!player || !player.alive) continue;
+    settling.push({ ws, meta, player, position: survivors.indexOf(player) + 1, stake: meta.stake });
+    meta.stake = PRACTICE;
+  }
 
   broadcast(room, {
     type: "round_end",
@@ -1284,45 +1291,69 @@ async function endRound(room) {
       position: i + 1,
       paid: i + 1 <= room.paidPositions
     })),
-    paidPositions: room.paidPositions,
-    nextIn: INTERMISSION_SECONDS
+    paidPositions: room.paidPositions
   });
 
-  for (const [ws, meta] of room.clients) {
-    const player = world.players.get(meta.id);
-    if (!player || !player.alive) continue;
+  // Everyone back to the lobby at the whistle, un-readied. Synchronous, so
+  // the phase has left LIVE before the tick could ask again.
+  toLobby(room);
 
-    const position = survivors.indexOf(player) + 1;
-    const stake = meta.stake;
-    meta.stake = PRACTICE;
-
-    const placed = position > 0 && position <= room.paidPositions;
-    let payout = 0;
-    try {
-      if (stake > PRACTICE && meta.accountId) {
-        if (placed) {
-          ({ paid: payout } = await backend.cashOut(meta.accountId, RAKE_BPS));
-        } else {
-          await backend.forfeit(meta.accountId);
-        }
-      }
-    } catch (err) {
-      console.error("round settlement:", err.message);
+  // No count can start until every survivor is paid: startRound re-stakes
+  // from the connection, and a round must not open on a payout in flight.
+  room.settling = true;
+  try {
+    // One at a time, and each on its own: a fault settling one survivor
+    // must not leave the ones after them unpaid.
+    for (const s of settling) {
+      await settleSurvivor(room, s, survivors.length)
+        .catch(err => console.error("round settlement:", err.message));
     }
+    await awardProgress(room, survivors, entrants);
+  } finally {
+    room.settling = false;
+    maybeStartRound(room);
+  }
+}
 
-    recordRun(meta, {
-      duration: world.time - (player.spawnedAt || world.time),
-      rank: position || null,
-      of: survivors.length,
-      orbs: player.orbs,
-      eaten: player.eaten,
-      peak: Math.round(player.peak)
-    }, { outcome: "survived", killerId: null, stake, payout });
-
-    await pushAccount(ws, meta);
+async function settleSurvivor(room, { ws, meta, player, position, stake }, field) {
+  const placed = position > 0 && position <= room.paidPositions;
+  let payout = 0;
+  let settled = !(stake > PRACTICE && meta.accountId);
+  try {
+    if (!settled) {
+      if (placed) {
+        ({ paid: payout } = await backend.cashOut(meta.accountId, RAKE_BPS));
+      } else {
+        await backend.forfeit(meta.accountId);
+      }
+      settled = true;
+    }
+  } catch (err) {
+    console.error("round settlement:", err.message);
   }
 
-  await awardProgress(room, survivors, entrants);
+  recordRun(meta, {
+    duration: room.world.time - (player.spawnedAt || room.world.time),
+    rank: position || null,
+    of: field,
+    orbs: player.orbs,
+    eaten: player.eaten,
+    peak: Math.round(player.peak)
+  }, { outcome: "survived", killerId: null, stake, payout });
+
+  // The balance first, so the result below lands on a client that already
+  // holds the balance the payout produced.
+  await pushAccount(ws, meta);
+
+  // Each survivor's own result. A paid place is shown as a congratulations
+  // card built from these figures, so they are the ledger's, not a guess
+  // from the standings: what was staked, and what was actually paid.
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({
+      type: "result", round: room.round.number, place: position, placed,
+      stake, paid: payout, settled, peak: Math.round(player.peak), eaten: player.eaten
+    }));
+  }
 }
 
 // ── progress: XP and rating ─────────────────────────────────────────────────
@@ -1391,13 +1422,17 @@ async function awardProgress(room, survivors, entrants) {
   }
 }
 
-// Back to the lobby. Everyone is despawned and un-readied, so the next round
-// needs a fresh show of hands rather than inheriting the last one.
+// Back to the lobby at the whistle. Everyone is despawned and un-readied, so
+// the next round needs a fresh show of hands: nobody is staked into a round
+// they did not choose to play. The exception is a player who sat this round
+// out and readied during it, which was that choice, made for the next one.
 function toLobby(room) {
   room.round.phase = PHASE_LOBBY;
   room.round.endsAt = Infinity;
-  // Readiness is NOT cleared. Anyone who opted in while the standings were up
-  // stays in, so a full lobby rolls straight into the next round.
+  for (const meta of room.clients.values()) {
+    meta.ready = !!meta.readyForNext;
+    meta.readyForNext = false;
+  }
   for (const p of room.world.players.values()) {
     p.alive = false;
     p.cells = [];
@@ -1427,6 +1462,7 @@ export function startingOrder(humans, bots) {
 // visible count first, so nobody is dropped into the arena mid-sentence.
 function maybeStartRound(room) {
   if (room.round.phase !== PHASE_LOBBY) return;
+  if (room.settling) return;           // the last round is still paying out
   if (readyCount(room) < room.lobbyMin) return;
   if (room.starting) return;           // a start is already in flight
   room.round.phase = PHASE_COUNTDOWN;
@@ -1579,14 +1615,13 @@ wss.on("connection", (ws, req) => {
           if (msg.dir === "off") meta.spectateId = null;
           else cycleSpectate(room, meta, msg.dir === "prev" ? "prev" : "next");
         } else if (msg.type === "ready") {
-          // Also accepted during the intermission: deciding while the
-          // standings are still on screen means the next round can start the
-          // moment the clock runs out, instead of everyone being dropped into
-          // a lobby and asked again.
           // During a live round, only from someone without a body in it: a
           // player waiting for the next round opts in from the lobby card.
           if (room.round.phase === PHASE_LIVE && room.world.players.get(id)?.alive) return;
           meta.ready = msg.ready !== false;
+          // Chosen during a round by someone sitting it out, which makes it a
+          // choice about the next one: the whistle keeps it (toLobby).
+          meta.readyForNext = meta.ready && room.round.phase === PHASE_LIVE;
           pushLobby(room);
           maybeStartRound(room);
         } else if (msg.type === "rename") {
@@ -1950,11 +1985,6 @@ function tickRoom(room, dt) {
     // Not awaited: settlement talks to the database and the tick must not
     // block on it. The phase flips synchronously, so this cannot run twice.
     endRound(room).catch(err => console.error("endRound:", err.message));
-  } else if (round.phase === PHASE_INTERMISSION && world.time >= round.endsAt) {
-    toLobby(room);
-    // Anyone who opted in while the standings were up is already ready, so
-    // the next round can start counting down rather than waiting to be asked.
-    maybeStartRound(room);
   } else if (round.phase === PHASE_COUNTDOWN && !room.starting) {
     // Checked every tick rather than only where readiness changes, so a player
     // dropping their connection mid-count aborts it the same as un-readying.

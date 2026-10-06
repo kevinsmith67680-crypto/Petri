@@ -5,8 +5,7 @@
 
 import { formatUsdc, valueOfMass, PRACTICE, STAKE_1_USDC, STAKE_2_USDC } from "../shared/wager.js";
 import { MODES, modeById } from "../shared/modes.js";
-import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
-  from "../shared/protocol.js";
+import { PHASE_LIVE, PHASE_LOBBY, PHASE_COUNTDOWN } from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
 import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
@@ -48,7 +47,7 @@ export function createUI({
     wallet: $("walletBox"),
     clock: $("roundClock"),
     clockTime: $("clockTime"),
-    roundVeil: $("roundVeil"),
+    winVeil: $("winVeil"),
     lobbyVeil: $("lobbyVeil"),
     lobbyCount: $("lobbyCount"),
     statValue: $("statValue"),
@@ -109,7 +108,7 @@ export function createUI({
     // It sits above everything, so nothing else should be competing with it.
     setMenuShown(false);
     el.lobbyVeil.hidden = true;
-    el.roundVeil.hidden = true;
+    el.winVeil.hidden = true;
     el.overVeil.hidden = true;
   }
   function hideError() { $("errVeil").hidden = true; }
@@ -151,7 +150,7 @@ export function createUI({
   function showStart() {
     $("errVeil").hidden = true;
     el.lobbyVeil.hidden = true;
-    el.roundVeil.hidden = true;
+    el.winVeil.hidden = true;
     el.overVeil.hidden = true;
     setMenuShown(true);
   }
@@ -194,7 +193,6 @@ export function createUI({
 
   function showLobby(state) {
     el.lobbyVeil.hidden = false;
-    el.roundVeil.hidden = true;
     el.overVeil.hidden = true;
 
     const { ready = 0, connected = 0, min = 0, max = 0, phase, starts, mode } = state || {};
@@ -217,7 +215,7 @@ export function createUI({
     // Opened during a round: this player arrived while it was being played
     // and is held out of it. The meter would read the round's own players
     // as a lobby that is ready to go, so it gives way to how long is left.
-    lobbyWaiting = phase === PHASE_LIVE || phase === PHASE_INTERMISSION;
+    lobbyWaiting = phase === PHASE_LIVE;
     el.lobbyCount.hidden = !counting;
     $("lobbyMeter").hidden = counting || lobbyWaiting;
     // Written here as well as from the snapshot clock, because the card is
@@ -229,7 +227,7 @@ export function createUI({
     // Written through setText, which renderCountdown also uses for the time
     // left, so the two never fight over what the line last said.
     setText($("lobbyLine"), lobbyWaiting
-      ? waitingLine(phase, null)
+      ? waitingLine(null)
       : counting
         ? "Everyone is ready."
         : short === 0
@@ -258,21 +256,19 @@ export function createUI({
     btn.setAttribute("aria-pressed", String(iAmReady));
   }
 
-  const waitingLine = (phase, remaining) =>
-    phase === PHASE_INTERMISSION
-      ? "That round has just finished. The next one opens shortly."
-      : typeof remaining === "number"
-        ? `A round is in progress: ${mmss(Math.max(0, Math.ceil(remaining)))} left.`
-        : "A round is in progress.";
+  const waitingLine = remaining =>
+    typeof remaining === "number"
+      ? `A round is in progress: ${mmss(Math.max(0, Math.ceil(remaining)))} left.`
+      : "A round is in progress.";
 
-  // Ticks the pre-round count on the lobby card from the snapshot clock, the
-  // same way the intermission is ticked — the number on screen is the
-  // server's, so it cannot drift away from when the round actually starts.
+  // Ticks the pre-round count on the lobby card from the snapshot clock, so
+  // the number on screen is the server's and cannot drift away from when the
+  // round actually starts.
   function renderCountdown(round) {
     if (!el.lobbyVeil || el.lobbyVeil.hidden) return;
     // A waiting player watches the round they are held out of run down.
-    if (lobbyWaiting && round && (round.phase === PHASE_LIVE || round.phase === PHASE_INTERMISSION)) {
-      setText($("lobbyLine"), waitingLine(round.phase, round.remaining));
+    if (lobbyWaiting && round && round.phase === PHASE_LIVE) {
+      setText($("lobbyLine"), waitingLine(round.remaining));
       return;
     }
     if (!round || round.phase !== PHASE_COUNTDOWN) return;
@@ -281,62 +277,89 @@ export function createUI({
 
   function hideLobby() { el.lobbyVeil.hidden = true; }
 
-  // Ticks the intermission countdown on the standings card from the snapshot
-  // clock, so the wait is visibly finite rather than a frozen "starting…".
-  function renderIntermission(round) {
-    if (!el.roundVeil || el.roundVeil.hidden) return;
-    if (!round || round.phase !== PHASE_INTERMISSION) return;
-    const left = Math.max(0, Math.ceil(round.remaining));
-    setText($("nextRound"), left > 0
-      ? `Next round in ${left}s`
-      : "Starting…");
+  // ── congratulations ───────────────────────────────────────────────────────
+
+  // A paid place at the whistle. Built from the server's own result for this
+  // player, sent once the payout has landed: the stake, what was actually
+  // paid, and so what the round made them. It opens over the lobby card that
+  // everyone has gone back to, and closes onto it.
+  function showWin({
+    place, stake = 0, paid = 0, settled = true, round, standings = [], paidPositions, myName
+  }) {
+    const medal = $("winMedal");
+    medal.textContent = String(place);
+    // Gold, silver and bronze, then the accent for the rest of the places.
+    medal.className = `medal p${Math.min(Math.max(place, 1), 4)}`;
+    setText($("winTitle"), `You finished ${ordinal(place)}`);
+
+    // Profit is what the player made; the payout includes their own stake
+    // back. A place with no kills pays the stake and nothing more, so it says
+    // what was paid rather than "+0.00".
+    const profit = paid - stake;
+    const made = settled && profit > 0;
+    setText($("winAmountLabel"), !settled ? "Your payout" : made ? "You made" : "Paid out");
+    $("winAmount").innerHTML = settled
+      ? `${made ? "+" : ""}${formatUsdc(made ? profit : paid)}<small>USDC</small>`
+      : "&mdash;";
+    const finish = paidPositions ? `A top-${paidPositions} finish` : "A paid place";
+    setText($("winLine"), !settled
+      ? "Your place is recorded, but the payout could not be confirmed. Check your balance before you play again."
+      : made
+        ? `${finish}${round ? ` in round ${round}` : ""}. Your winnings are in your balance.`
+        : `${finish} pays out your pot. You took nobody's stake this round, so your own came back.`);
+
+    $("winTally").hidden = !settled;
+    setText($("winStake"), formatUsdc(stake));
+    setText($("winPaid"), formatUsdc(paid));
+    setText($("winProfit"), `${profit > 0 ? "+" : profit < 0 ? "\u2212" : ""}${formatUsdc(Math.abs(profit))}`);
+    // The account push lands just before the result, so this is the balance
+    // the payout produced.
+    setText($("winBalance"), formatUsdc(account.balance));
+
+    const places = standings.filter(r => r.paid);
+    $("winStandings").innerHTML = places.map(r =>
+      `<div class="paid${r.name === myName ? " you" : ""}">` +
+      `<span>${r.position}. ${escapeHtml(r.name)}</span><em>${r.mass}</em></div>`
+    ).join("");
+    $("winListLabel").hidden = places.length === 0;
+
+    $("winNote").hidden = !account.demo;
+    // The round's XP is written after every survivor is paid, so it arrives
+    // after this and fills the line in then.
+    $("winGain").hidden = true;
+    burst();
+    el.winVeil.hidden = false;
+    $("btnWinLobby").focus?.();
   }
 
-  function setNextReady(on) {
-    const btn = $("btnNextReady");
-    btn.setAttribute("aria-pressed", String(!!on));
-    setText(btn, on ? "In for the next round" : "I'm in for the next round");
+  function hideWin() {
+    if (el.winVeil.hidden) return;
+    el.winVeil.hidden = true;
+    $("winConfetti").innerHTML = "";
+    // Back on the lobby card, where the one thing to do next is ready up.
+    $("btnReady").focus?.();
   }
 
-  function showRoundEnd({ number, standings, nextIn, myName }) {
-    // The round ending supersedes a death card: if you were eaten seconds
-    // before the whistle, the standings are the more useful thing to see.
-    el.overVeil.hidden = true;
-    // And the lobby card of a player who waited the round out: the standings
-    // are where everyone opts into the next one.
-    el.lobbyVeil.hidden = true;
-    // The last round's gain is not this one's. This round's arrives a moment
-    // after the standings, once the server has written it.
-    $("roundGain").hidden = true;
-    // Only survivors are listed, so a row of our own means we were still
-    // standing at the whistle — and the position on it is the one the round
-    // actually finished on. Anyone absorbed before then has no row and keeps
-    // the plain heading; the card they were just shown already said so.
-    //
-    // No denominator: standings counts who was LEFT, not who started, so
-    // "3rd of 9" would read as a far smaller result than a hundred-player
-    // round actually was.
-    const mine = standings.find(r => r.name === myName);
-    $("roundTitle").textContent = mine
-      ? `You finished ${ordinal(mine.position)}`
-      : `Round ${number} over`;
-    $("standingsList").innerHTML = standings.length
-      ? standings.map(r =>
-          `<div class="${r.name === myName ? "you" : ""}${r.paid ? " paid" : ""}">` +
-          `<span>${r.position}. ${escapeHtml(r.name)}</span>` +
-          `<em>${r.paid ? "paid &middot; " : ""}${r.mass}</em></div>`
-        ).join("")
-      : `<div><span>Nobody survived the round.</span><em></em></div>`;
-    $("nextRound").textContent = `Next round in ${nextIn}s`;
-    el.roundVeil.hidden = false;
+  // One short burst in the palette's own colours. Rebuilt each time, which is
+  // also what restarts the animation.
+  function burst() {
+    const stains = THEMES[settings.theme]?.stains || [];
+    $("winConfetti").innerHTML = Array.from({ length: 28 }, (_, i) => {
+      const left = (Math.random() * 100).toFixed(1);
+      const dx = Math.round((Math.random() - 0.5) * 180);
+      const r = Math.round((Math.random() - 0.5) * 760);
+      const delay = Math.round(Math.random() * 260);
+      const colour = stains[i % stains.length] || "currentColor";
+      return `<i style="left:${left}%;background:${colour};--dx:${dx}px;--r:${r}deg;animation-delay:${delay}ms"></i>`;
+    }).join("");
   }
 
-  function hideRoundEnd() { el.roundVeil.hidden = true; }
+  $("btnWinLobby").addEventListener("click", hideWin);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") hideWin(); });
 
   function update(view, elapsed, now) {
     if (!view) return;
     renderClock(view.round);
-    renderIntermission(view.round);
     renderCountdown(view.round);
     setText(el.orbs, view.me.orbs);
     setText(el.cells, view.me.eaten);
@@ -497,9 +520,10 @@ export function createUI({
       : "";
   }
 
-  // What the round just played was worth, on the round-over card.
+  // What the round just played was worth: on the congratulations card for a
+  // paid place, and on the lobby card that everyone goes back to.
   function showProgressGain({ gained = 0, ratingChange = 0, rated = false, xp = 0 }) {
-    const line = $("roundGain");
+    const line = $("winGain");
     const parts = [];
     if (gained > 0) {
       const before = levelOf(xp - gained).level;
@@ -515,8 +539,8 @@ export function createUI({
     }
     line.innerHTML = parts.join(" &middot; ");
     line.hidden = parts.length === 0;
-    // The lobby that follows the round says the same, so a player who
-    // dismissed the standings still sees what the round was worth.
+    // The lobby says the same, so it is there after the card is closed, and
+    // for everyone who did not place.
     const lobbyGain = $("lobbyGain");
     lobbyGain.innerHTML = parts.length ? `Last round: ${parts.join(" &middot; ")}` : "";
     lobbyGain.hidden = parts.length === 0;
@@ -1135,9 +1159,9 @@ export function createUI({
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     renderProgress, showProgressGain,
     setAuthAvailable, showGoogle, setAuthError, showError, setErrorText, hideError, showStart,
-    renderIntermission, renderCountdown, setNextReady,
+    renderCountdown, showWin, hideWin,
     showReconnecting, showConnecting, hideReconnecting,
-    showRoundEnd, hideRoundEnd, showLobby, hideLobby,
+    showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,
     setReady: v => { iAmReady = v; },
     setColour, renderLastGame,

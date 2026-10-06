@@ -69,7 +69,6 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `BOTS` | 0; in test mode each room fills to its own lobby size | Overrides both rooms. Bots exist only while a human is in the room |
 | `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard`: the level of the test-mode rooms a server opens by default. Players who pick another are seated in rooms at their own level — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
 | `ROUND_SECONDS` | 600 | Length of a live round |
-| `INTERMISSION_SECONDS` | 15 | Gap between rounds |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
 | `LOBBY_MAX` | 150 | Seats per room. When every room of a mode is full, another opens |
@@ -671,7 +670,7 @@ Neither is money. Neither moves a balance, and neither is affected by the stake.
 
 The scoring is a pure function, `scoreRound` in `server/awards.js`, and `test/progress.test.js` pins its edge cases: the respawn, the walk-out, the same account twice. The server writes one round's results in one statement, `recordProgress`, which moves every column by increment. Two writers can never lose each other's update, and a result is written for players who have already left.
 
-**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. The lobby card shows the same tracker under the ready button, with the XP left to the next level, what a top-5 finish earns, and what the last round was worth. A moment after the standings, the round-over card adds what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
+**What the player sees.** The account panel shows the level, an XP bar, the rank and the rating, marked *provisional* until ten rated rounds have settled it. The lobby card shows the same tracker under the ready button, with the XP left to the next level, what a top-5 finish earns, and what the last round was worth. A moment after the whistle, the lobby card, and the congratulations card for a paid place, add what the round was worth: "+100 XP · Level 2! · Rating +24". The server sends a `progress` message to each entrant still connected. The welcome and `GET /api/stats` carry the current figures.
 
 ### Skill matchmaking
 
@@ -691,13 +690,13 @@ The game server applies the same rule when it is asked to choose (`seatFor`), an
 
 ## Between rounds
 
-A round ends, standings go up, and the next one begins. Three things used to break that.
+A round ends, everyone goes back to the lobby, and the next one begins once enough of them ready up again.
 
 **The stake was settled and never re-locked.** `meta.stake` is cleared when a round settles, so from round two onward a player was in a paid room with nothing at risk — playing for free. The tier chosen at join is now kept as `meta.tier` for the life of the connection, and re-escrowed at the start of every round. Anyone who cannot cover it is un-readied and told, rather than quietly playing free.
 
-**Readiness was wiped.** Everyone was dropped into a lobby and asked again. It now survives the intermission, and `ready` is accepted while the standings are still on screen — so the standings card carries an "I'm in for the next round" button and a full lobby rolls straight on.
+**Back to the lobby, un-readied.** At the whistle `endRound` fixes who is to be settled, broadcasts `round_end`, and sends the room straight to the lobby (`toLobby`): every body is despawned and every player un-readied, so the next round, and the next stake, is a fresh choice. The one exception is a player who sat the round out and readied during it (`meta.readyForNext`): that was a choice made for the next round, and it stands. No count can start while the last round is still paying out (`room.settling`), because `startRound` re-stakes from the connection.
 
-**The countdown was static text.** "Next round starting…" never changed. It now ticks from the snapshot clock: "Next round in 12s".
+**Each survivor is told their own result.** After their payout lands the server pushes the new balance, then a `result` message: `place`, `placed`, `stake`, `paid` and `settled`. A paid place opens the **congratulations card** over the lobby: the medal for the place, what the round made them (`paid − stake`; a place with no kills, whose pot was only their own stake, shows what was paid instead of "+0.00"), the breakdown, the balance it left, the round's paid places, and the XP when it arrives. If the payout could not be confirmed it says so and claims no figures.
 
 `startRound` became async because re-escrowing talks to the database, so `maybeStartRound` guards against starting twice while that is in flight.
 
@@ -871,7 +870,7 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 |---|---|---|
 | Where it runs | Locally, in the browser tab | Shared server arena |
 | Opponents | Bots | Real players only |
-| Rounds | None, play indefinitely | 10 minutes, then 15s intermission |
+| Rounds | None, play indefinitely | 10 minutes, then back to the lobby |
 | Wagering | No | Yes |
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **any pot they are carrying is paid out**. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
@@ -911,7 +910,7 @@ The clock sits top centre: a large countdown, the round number, and the **wall-c
 
 Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
 
-Tune with `ROUND_SECONDS`, `INTERMISSION_SECONDS` and `COUNTDOWN_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
+Tune with `ROUND_SECONDS` and `COUNTDOWN_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
 
 **Requires migration 004.** The `survived` outcome is new and the original check constraint rejects it, so run `server/db/migrations/004_survived_outcome.sql` before deploying or every end-of-round write fails.
 
@@ -1018,7 +1017,6 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
 | `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
 | `ROUND_SECONDS` | 600 | **120** |
-| `INTERMISSION_SECONDS` | 15 | **8** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
 
 Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=100 npm start` works.
