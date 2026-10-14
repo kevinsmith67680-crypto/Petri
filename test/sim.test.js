@@ -749,7 +749,7 @@ const run = (w, seconds, each) => {
     Math.abs(z.startAt - (600 - ZONE_AT_REMAINING)) < 1e-9, `${z.startAt}`);
   check("announced ten seconds before that",
     Math.abs(z.startAt - z.warnAt - ZONE_WARN_SECONDS) < 1e-9 && ZONE_WARN_SECONDS === 10);
-  check("and closed a minute after, with time left to fight in it",
+  check("and closed 45 seconds after, with time left to fight in it",
     Math.abs(z.endAt - z.startAt - ZONE_SHRINK_SECONDS) < 1e-9 && z.endAt < 600, `${z.endAt}`);
   const side = z.to.x1 - z.to.x0;
   check("the final square is 60% of the arena's width",

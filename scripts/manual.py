@@ -263,7 +263,7 @@ def zone_seconds(start, end):
 
 ZONE_SIDE_PCT = K["ZONE_SHRINK_TO"] * 100
 ZONE_CALL_AT = K["ZONE_AT_REMAINING"] + K["ZONE_WARN_SECONDS"]          # 1:40
-ZONE_CLOSED_AT = K["ZONE_AT_REMAINING"] - K["ZONE_SHRINK_SECONDS"]      # 0:30
+ZONE_CLOSED_AT = K["ZONE_AT_REMAINING"] - K["ZONE_SHRINK_SECONDS"]      # 0:45
 ZONE_START_LIFE = zone_seconds(K["START_MASS"], K["ZONE_MIN_MASS"])
 ZONE_HALF_1000 = zone_seconds(1000, 500)
 
@@ -1931,7 +1931,7 @@ def story():
                f"lasts {ZONE_START_LIFE:.0f} seconds out there, and a 1,000-mass cell halves in "
                f"{ZONE_HALF_1000:.0f}.", S_BODY))
     s.append(bullets([
-        "<b>You can always make it.</b> The edges move slower than any cell, so heading "
+        "<b>You can always make it.</b> The edges move slower than you can, so heading "
         "in when told is enough. Waiting is what kills.",
         "<b>The food moves in with it.</b> While the zone closes, new orbs only "
         "appear inside it, never where they would cost you mass to collect.",
