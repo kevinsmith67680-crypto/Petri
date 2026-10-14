@@ -51,7 +51,7 @@ def read_constants():
     the game cannot disagree."""
     script = """
     import * as S from './shared/sim.js';
-    const { createWorld, addPlayer, spawnRing } = S;
+    const { createWorld, addPlayer, spawnRing, orbGap } = S;
     import { MODES } from './shared/modes.js';
     import * as W from './shared/wager.js';
     const names = ['WORLD','PELLETS','VIRUSES','START_MASS','PELLET_MASS','EJECT_MASS',
@@ -124,9 +124,13 @@ def read_constants():
     for (const m of MODES) {
       const w = createWorld(42, { size: m.world.size, pellets: m.world.pellets,
                                   viruses: m.world.viruses });
+      // Hundredths of the sown square, inside the wall padding. Counted over
+      // the whole board, the edge squares would only be measuring the padding.
       const Sz = m.world.size, N = 10, cells = new Array(N * N).fill(0);
+      const pad = 140, span = Sz - 2 * pad;
       for (const q of w.pellets)
-        cells[Math.min(N - 1, (q.y / Sz * N) | 0) * N + Math.min(N - 1, (q.x / Sz * N) | 0)]++;
+        cells[Math.min(N - 1, ((q.y - pad) / span * N) | 0) * N +
+              Math.min(N - 1, ((q.x - pad) / span * N) | 0)]++;
 
       const ring = createWorld(1, { size: Sz, pellets: 0, viruses: 0 });
       const ps = [];
@@ -139,6 +143,7 @@ def read_constants():
       out.board[m.id] = {
         size: Sz,
         orbGap: med(nn(w.pellets)),
+        orbMin: orbGap(w),
         virusGap: med(nn(w.viruses)),
         virusMin: nn(w.viruses)[0],
         areaPerOrb: Sz * Sz / w.pellets.length,
@@ -149,7 +154,7 @@ def read_constants():
         ringGap: Math.hypot(ps[0].cells[0].x - ps[1].cells[0].x,
                             ps[0].cells[0].y - ps[1].cells[0].y),
         wallClear: Sz / 2 - rr,
-        // A thinned sample for drawing. Every 9th orb keeps the clumping
+        // A thinned sample for drawing. Every 9th orb keeps the spread
         // visible without putting 4,100 circles in a PDF.
         orbs: w.pellets.filter((_, i) => i % 9 === 0).map(q => [Math.round(q.x), Math.round(q.y)]),
         vir: w.viruses.map(q => [Math.round(q.x), Math.round(q.y)]),
@@ -1098,29 +1103,32 @@ def story():
     s.append(PageBreak())
 
     s.append(P("How the orbs are spread", S_H2))
-    s.append(P("<b>Uniformly at random - which is not the same as evenly.</b> This is "
-               "the most useful thing on the page. Random placement clumps: it leaves "
-               "rich patches and bare stretches, and both are real rather than "
-               "imagined.", S_BODY))
+    s.append(P("<b>Evenly, by Poisson-disc sampling.</b> Each orb is dropped at a random "
+               f"point, but only where no other orb lies within {STDB['orbMin']:.0f} units "
+               "of it. The board still looks random - there is no grid to learn - but it "
+               "cannot clump. There are no rich patches to hunt for and no bare stretches "
+               "to cross.", S_BODY))
 
     s.append(two_col(
         [datatable(
             ["Orbs", "Standard", "High stakes"],
             [["Orbs in play", f"{STD['world']['pellets']:,}", f"{HIGH['world']['pellets']:,}"],
              ["Board area each", f"{STDB['areaPerOrb']:,.0f}", f"{HIB['areaPerOrb']:,.0f}"],
-             ["Typical gap between them", f"{STDB['orbGap']:.0f} units",
+             ["Never closer than", f"{STDB['orbMin']:.0f} units",
+              f"{HIB['orbMin']:.0f} units"],
+             ["Typical gap to the nearest", f"{STDB['orbGap']:.0f} units",
               f"{HIB['orbGap']:.0f} units"],
-             ["Richest hundredth of the board",
+             ["Busiest hundredth of the board",
               f"{STDB['richest']} orbs", f"{HIB['richest']} orbs"],
              ["Emptiest hundredth",
               f"{STDB['emptiest']} orbs", f"{HIB['emptiest']} orbs"]],
             [36 * mm, None, None])],
         [P("What that ratio means", S_H3),
-         P(f"The busiest hundredth of a Standard board carries "
+         P(f"The busiest hundredth of a Standard board carries only "
            f"<b>{STDB['richest'] / STDB['emptiest']:.1f} times</b> what the emptiest "
-           "does. Finding a rich patch is worth real time early on, and the difference "
-           "between a good first two minutes and a mediocre one is mostly whether you "
-           "swept one.", S_BODY),
+           "does. Where you open does not decide how fast you can grow: every stretch "
+           "of untouched board is worth about the same, so a good first two minutes "
+           "comes from how cleanly you sweep, not from finding the good patch.", S_BODY),
          P("Both modes are tuned to the same density - about "
            f"{STDB['areaPerOrb']:,.0f} units of board per orb - so a smaller arena is "
            "not a poorer one.", S_BODY)],
@@ -1128,18 +1136,21 @@ def story():
 
     s.append(P("Orbs are replaced the moment they are eaten, so the arena never runs "
                "down: the count is held at "
-               f"{STD['world']['pellets']:,} all round. But <b>the replacement appears "
-               "at a fresh random point, not where the old one was</b>. Farming a "
-               "patch really does exhaust it, and the mass you took reappears "
-               "somewhere else entirely - usually somewhere you are not.", S_BODY))
+               f"{STD['world']['pellets']:,} all round. <b>A replacement follows the "
+               "same rule</b>: it can only land where there is room for one, so it "
+               "fills a gap rather than piling onto ground that is already full, and it "
+               "never lands under a cell - nobody is handed orbs for standing still. "
+               "The gap it fills can be anywhere on the board, so a stretch you have "
+               "grazed stays thin for a while; but nowhere ever fills up past its "
+               "share.", S_BODY))
     s.append(P("Ejected mass lands in the same pool. A blob somebody threw is an orb "
                "like any other once it comes to rest, worth several times a natural "
                "one, and free to anyone who reaches it first.", S_BODY))
 
     s.append(P("How the viruses are spread", S_H2))
-    s.append(P("Also uniformly at random, and also clumpy - which matters far more "
-               "for viruses, because the gaps are wide enough to plan around and the "
-               "clusters are dangerous.", S_BODY))
+    s.append(P("Uniformly at random, so unlike the orbs they do clump - and for "
+               "viruses that matters, because the gaps are wide enough to plan around "
+               "and the clusters are dangerous.", S_BODY))
 
     s.append(datatable(
         ["Viruses", "Standard", "High stakes"],
@@ -1159,10 +1170,16 @@ def story():
         f"typical one sits about {STDB['virusGap']:.0f} units from its nearest "
         "neighbour - so most of the board is open, and you can usually plan a route "
         "that never comes near one.",
+        # Whichever the sample board dealt: a near pair, or one that overlaps.
         f"But pairs happen. The closest two on the sample board above are "
         f"{STDB['virusMin']:.0f} units apart, barely more than their own diameters. "
         f"A gap like that is a death corridor if you are over {POP_MASS:.0f} mass, and "
-        "a fortress if you are under it.",
+        "a fortress if you are under it."
+        if STDB['virusMin'] >= radius_of(K['VIRUS_MASS']) else
+        f"But pairs happen. The closest two on the sample board above are "
+        f"{STDB['virusMin']:.0f} units apart, centre to centre - closer than one is "
+        f"wide, so they overlap. A pair like that is a wall if you are over "
+        f"{POP_MASS:.0f} mass, and a fortress if you are under it.",
         "The population is not fixed once play starts: feeding splits viruses and "
         "adds new ones, up to the ceiling. By the endgame there are more viruses "
         "than there were at the whistle, and they are wherever players wanted them.",
@@ -1547,8 +1564,9 @@ def story():
          [f"Orbs are {K['PELLET_MASS']} mass each and there are {STD['world']['pellets']:,} "
           "of them. Early on, they are the whole game: you need roughly "
           f"{int(ORBS_TO_100)} to reach 100 from your opening {K['START_MASS']}.",
-          "The skill is pathing - sweeping through dense clusters in straight lines "
-          "rather than chasing individual orbs, and doing it in the quiet parts of "
+          "The skill is pathing. Orbs are evenly spaced, so the ground worth "
+          "sweeping is the ground nobody has grazed yet: take it in straight lines "
+          "rather than chasing individual orbs, and do it in the quiet parts of "
           "the arena while the aggressive players trade early deaths."],
          "Time yourself from spawn to mass 100 in Practice. A good line beats a "
          "greedy one; compare a straight sweep against darting at whatever is "

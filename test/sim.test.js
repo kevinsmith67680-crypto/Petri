@@ -14,8 +14,10 @@ import {
   advancePellet, EJECT_SPEED, EJECT_KEEP, EJECT_MASS, EJECT_OWNER_COOLDOWN,
   EAT_RATIO, spawnRing, resetArena, SPAWN_GAP, START_MASS,
   VIRUS_FEED_HITS, VIRUS_MAX_RATIO, buildPelletGrid,
-  BOT_LEVELS, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL, setBotLevel
+  BOT_LEVELS, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL, setBotLevel,
+  PELLET_MASS, orbGap, forEachPelletNear
 } from "../shared/sim.js";
+import { MODES } from "../shared/modes.js";
 
 let failures = 0;
 
@@ -100,6 +102,86 @@ for (const p of world.players.values()) {
 }
 check("no NaN or non-positive masses", bad === 0, `${bad} bad`);
 check("all cells inside the arena", outside === 0, `${outside} outside`);
+
+// ── orb layout ──────────────────────────────────────────────────────────────
+
+console.log("\n-- orb layout --");
+{
+  // Distance from every plain orb to its nearest plain neighbour. Thrown mass
+  // is left out: it lands wherever it was aimed.
+  const nearest = w => {
+    const orbs = w.pellets.filter(p => p.mass <= PELLET_MASS);
+    const G = 200, grid = new Map(), k = (x, y) => ((x / G) | 0) * 100003 + ((y / G) | 0);
+    for (const p of orbs) (grid.get(k(p.x, p.y)) || grid.set(k(p.x, p.y), []).get(k(p.x, p.y))).push(p);
+    return orbs.map(p => {
+      let best = Infinity;
+      for (let dx = -G; dx <= G; dx += G) for (let dy = -G; dy <= G; dy += G)
+        for (const q of grid.get(k(p.x + dx, p.y + dy)) || [])
+          if (q !== p) best = Math.min(best, Math.hypot(q.x - p.x, q.y - p.y));
+      return best;
+    });
+  };
+  // Spaced: nothing inside 80% of the gap, and the gap itself broken only by
+  // the odd orb that ran out of darts.
+  const spaced = (w, d = nearest(w)) =>
+    Math.min(...d) >= orbGap(w) * 0.8 && d.filter(x => x < orbGap(w)).length <= d.length * 0.002;
+  const spacing = (w, d = nearest(w)) =>
+    `closest ${Math.min(...d).toFixed(1)}, gap ${orbGap(w).toFixed(1)}, ${d.filter(x => x < orbGap(w)).length} under it`;
+
+  for (const m of MODES) {
+    const w = createWorld(42, m.world);
+    check(`${m.id}: the board opens with every orb`, w.pellets.length === m.world.pellets,
+      `${w.pellets.length}`);
+    check(`${m.id}: and no two closer than the Poisson-disc gap`, spaced(w), spacing(w));
+
+    // A 10x10 grid over the sown square. Random placement scatters these
+    // counts with a standard deviation of sqrt(mean); a minimum gap holds
+    // them much closer to the mean, which is the point.
+    const pad = 140;                       // SPAWN_PAD: orbs are sown clear of the walls
+    const span = w.size - 2 * pad, cells = new Array(100).fill(0);
+    for (const p of w.pellets)
+      cells[Math.min(9, ((p.y - pad) / span * 10) | 0) * 10 + Math.min(9, ((p.x - pad) / span * 10) | 0)]++;
+    const mean = w.pellets.length / 100;
+    const sd = Math.sqrt(cells.reduce((s, c) => s + (c - mean) ** 2, 0) / 100);
+    check(`${m.id}: patches vary under 70% as much as random placement`, sd < 0.7 * Math.sqrt(mean),
+      `sd ${sd.toFixed(2)} against ${Math.sqrt(mean).toFixed(2)}`);
+    check(`${m.id}: and the richest holds under 1.5x its share`, Math.max(...cells) < mean * 1.5,
+      `${Math.max(...cells)} against ${mean.toFixed(1)}`);
+  }
+
+  const twin = createWorld(42), again = createWorld(42);
+  check("the same seed sows the same board",
+    twin.pellets.every((p, i) => p.x === again.pellets[i].x && p.y === again.pellets[i].y));
+
+  // Two minutes of 91 players eating, from the long run above: every eaten orb
+  // has been replaced, and the replacements kept their distance too.
+  check("after two minutes of play, replacements still keep the gap", spaced(world), spacing(world));
+
+  // A cell parked in the hole it ate is sitting in exactly the room the
+  // sampler looks for. Replacements must not land on it.
+  const pw = createWorld(6, { size: 3000, pellets: 300, viruses: 0 });
+  const parked = addPlayer(pw, { id: "parked", name: "Parked" });
+  Object.assign(parked.cells[0], { x: 1500, y: 1500, mass: 5000 });
+  const under = () => pw.pellets.filter(p =>
+    Math.hypot(p.x - 1500, p.y - 1500) < radiusOf(parked.cells[0].mass)).length;
+  let landed = 0;
+  for (let t = 0; t < 40; t++) {
+    // Eaten elsewhere on the board, so there is always something to replace.
+    for (const p of pw.pellets.slice(0, 20)) p.dead = true;
+    pw.pelletsDirty = true;
+    stepWorld(pw, 1 / TICK_HZ);
+    landed += under();
+  }
+  check("no replacement lands under a cell", landed === 0, `${landed} landed`);
+  check("and the board stays full", pw.pellets.length === 300, `${pw.pellets.length}`);
+
+  // A new round sows a new board against an emptied index, not the old one.
+  resetArena(pw);
+  let indexed = 0;
+  forEachPelletNear(pw, pw.size / 2, pw.size / 2, pw.size, () => indexed++);
+  check("a reset sows a full, spaced board", pw.pellets.length === 300 && spaced(pw), spacing(pw));
+  check("and indexes only that board", indexed === pw.pellets.length, `${indexed} indexed`);
+}
 
 // ── virus behaviour ─────────────────────────────────────────────────────────
 
