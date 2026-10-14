@@ -15,7 +15,9 @@ import {
   EAT_RATIO, spawnRing, resetArena, SPAWN_GAP, START_MASS,
   VIRUS_FEED_HITS, VIRUS_MAX_RATIO, buildPelletGrid,
   BOT_LEVELS, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL, setBotLevel,
-  PELLET_MASS, orbGap, forEachPelletNear
+  PELLET_MASS, orbGap, forEachPelletNear,
+  planZone, zoneBounds, outsideZone, ZONE_AT_REMAINING, ZONE_WARN_SECONDS,
+  ZONE_SHRINK_SECONDS, ZONE_SHRINK_TO, ZONE_MIN_MASS
 } from "../shared/sim.js";
 import { MODES } from "../shared/modes.js";
 
@@ -715,6 +717,188 @@ function watchBot({ w, bot }, seconds) {
     return [...r.players.values()].map(p => Math.round(totalMass(p) * 1000)).join();
   };
   check("hard bots replay identically from the same seed", replay() === replay());
+}
+
+console.log("\n-- the closing zone --");
+
+// A world whose round ends ten minutes from now, the way startRound plans it.
+const zoned = (seed, opts = {}) => {
+  const w = createWorld(seed, { pellets: 0, viruses: 0, ...opts });
+  const z = planZone(w, w.time + 600);
+  return { w, z };
+};
+// A spot well outside the final square: on whichever side has more room,
+// which is at least a fifth of the arena.
+const awayFrom = (w, to) => ({
+  x: to.x0 > w.size - to.x1 ? 150 : w.size - 150,
+  y: to.y0 > w.size - to.y1 ? 150 : w.size - 150
+});
+// Somewhere safe to wait for the zone, so a test's player is still alive when
+// the test moves them.
+const centre = (p, to) => Object.assign(p.cells[0], { x: (to.x0 + to.x1) / 2, y: (to.y0 + to.y1) / 2 });
+const run = (w, seconds, each) => {
+  for (let i = 0; i < Math.round(seconds * TICK_HZ); i++) {
+    const events = stepWorld(w, 1 / TICK_HZ);
+    if (each) each(events);
+  }
+};
+
+{
+  const { w, z } = zoned(31);
+  check("the edges start moving when the clock reads 1:30",
+    Math.abs(z.startAt - (600 - ZONE_AT_REMAINING)) < 1e-9, `${z.startAt}`);
+  check("announced ten seconds before that",
+    Math.abs(z.startAt - z.warnAt - ZONE_WARN_SECONDS) < 1e-9 && ZONE_WARN_SECONDS === 10);
+  check("and closed a minute after, with time left to fight in it",
+    Math.abs(z.endAt - z.startAt - ZONE_SHRINK_SECONDS) < 1e-9 && z.endAt < 600, `${z.endAt}`);
+  const side = z.to.x1 - z.to.x0;
+  check("the final square is 60% of the arena's width",
+    side === Math.round(w.size * ZONE_SHRINK_TO) && z.to.y1 - z.to.y0 === side, `${side}`);
+  check("and lies inside the arena",
+    z.to.x0 >= 0 && z.to.y0 >= 0 && z.to.x1 <= w.size && z.to.y1 <= w.size, JSON.stringify(z.to));
+  check("in whole units, as it travels", [z.to.x0, z.to.y0, z.to.x1, z.to.y1].every(Number.isInteger));
+
+  const full = zoneBounds(z, z.startAt);
+  check("the whole arena is safe until the edges move",
+    full.x0 === 0 && full.y0 === 0 && full.x1 === w.size && full.y1 === w.size);
+  const done = zoneBounds(z, z.endAt + 5);
+  check("and the final square once they arrive",
+    done.x0 === z.to.x0 && done.y0 === z.to.y0 && done.x1 === z.to.x1 && done.y1 === z.to.y1);
+  const half = zoneBounds(z, (z.startAt + z.endAt) / 2);
+  check("each edge moves at its own steady speed",
+    Math.abs(half.x0 - z.to.x0 / 2) < 1e-6 && Math.abs(half.x1 - (w.size + z.to.x1) / 2) < 1e-6);
+}
+
+{
+  // Placed by the world's own generator: different rounds, different squares,
+  // and a seed replays its square exactly.
+  const spots = new Set();
+  for (let seed = 1; seed <= 12; seed++) spots.add(JSON.stringify(zoned(seed).z.to));
+  check("the safe square is placed at random", spots.size >= 11, `${spots.size} of 12 distinct`);
+  check("and replays from its seed", JSON.stringify(zoned(5).z) === JSON.stringify(zoned(5).z));
+  // Short rounds: test mode's two minutes keep the full warning; a round
+  // shorter than the warning gets no zone at all.
+  const w = createWorld(1, { pellets: 0, viruses: 0 });
+  const short = planZone(w, 20);
+  check("a short round still gets its ten seconds' notice",
+    short && short.warnAt === 0 && short.startAt === 10 && short.endAt === 20,
+    short && `${short.warnAt} ${short.startAt} ${short.endAt}`);
+  check("and one shorter than the notice gets none", planZone(w, 8) === null && w.zone === null);
+}
+
+{
+  // One player in the middle of the final square, one far outside it. Mass
+  // 200, under the size at which cells decay by themselves.
+  const { w, z } = zoned(32);
+  const inside = addPlayer(w, { id: "in", name: "In" });
+  const outside = addPlayer(w, { id: "out", name: "Out" });
+  const far = awayFrom(w, z.to);
+  Object.assign(inside.cells[0], { x: (z.to.x0 + z.to.x1) / 2, y: (z.to.y0 + z.to.y1) / 2, mass: 200 });
+  Object.assign(outside.cells[0], { ...far, mass: 200 });
+
+  run(w, z.startAt - 0.5);
+  check("nothing drains before the edges move",
+    totalMass(inside) === 200 && totalMass(outside) === 200,
+    `${totalMass(inside).toFixed(1)} ${totalMass(outside).toFixed(1)}`);
+
+  let death = null;
+  run(w, 0.5 + ZONE_SHRINK_SECONDS, events => {
+    for (const e of events) if (e.t === "death") death = death || e;
+  });
+  check("the one left outside is drained away", !outside.alive && death && death.id === "out");
+  check("by the zone, which the death says", death && death.zone === true);
+  check("the one inside keeps every bit of its mass", inside.alive && totalMass(inside) === 200);
+}
+
+{
+  // How fast "quickly" is: from 1,000 mass, standing outside.
+  const { w, z } = zoned(33);
+  const p = addPlayer(w, { id: "p", name: "P" });
+  centre(p, z.to);
+  run(w, z.endAt - w.time);
+  const out = awayFrom(w, z.to);
+  Object.assign(p.cells[0], { ...out, mass: 1000 });
+  run(w, 7);
+  check("a big cell outside loses half its mass in seven seconds",
+    totalMass(p) < 520 && totalMass(p) > 400, totalMass(p).toFixed(0));
+  Object.assign(p.cells[0], { ...out, mass: START_MASS });
+  run(w, 3);
+  check("a starting cell is gone in three", !p.alive);
+}
+
+{
+  // A player bitten earlier and finished by the zone was not eaten: the
+  // death must not read as the bite's.
+  const { w, z } = zoned(34);
+  const p = addPlayer(w, { id: "p", name: "P" });
+  centre(p, z.to);
+  run(w, z.endAt + 1 - w.time);
+  // Two pieces, still on their rejoin cooldown so they cannot merge.
+  const far = awayFrom(w, z.to);
+  const piece = (id, dx) => ({ ...p.cells[0], id, x: far.x + dx, y: far.y,
+    mass: ZONE_MIN_MASS + 1, mergeAt: w.time + 100 });
+  p.cells = [piece(999998, 0), piece(999999, w.size > far.x + 200 ? 60 : -60)];
+  let death = null;
+  run(w, 2, events => { for (const e of events) if (e.t === "death") death = e; });
+  check("losing every piece to the zone is a zone death", death && death.zone === true);
+  // And it is cleared for the next life, which can end in a bite.
+  p.alive = false; p.cells = [];
+  queueAction(w, "p", "respawn");
+  stepWorld(w, 1 / TICK_HZ);
+  check("a respawn starts with a clean record", p.alive && p.zoned === false);
+}
+
+{
+  // While it closes, nothing new appears where it is already lethal.
+  const w = createWorld(35);
+  const z = planZone(w, w.time + 600);
+  run(w, (z.startAt + z.endAt) / 2 - w.time);
+  const before = new Set(w.pellets.map(p => p.id));
+  // Eat orbs all over the arena to force fresh ones in.
+  for (const p of w.pellets.slice(0, 500)) { p.dead = true; }
+  w.pelletsDirty = true;
+  stepWorld(w, 1 / TICK_HZ);
+  const safe = w.safe;
+  const fresh = w.pellets.filter(p => !before.has(p.id));
+  const strays = fresh.filter(p => outsideZone(safe, p.x, p.y));
+  check("fresh orbs appear inside the safe area", fresh.length >= 500 && strays.length === 0,
+    `${strays.length} of ${fresh.length} outside`);
+  // Inside the safe area as it is, not packed into the final square: that
+  // overfilled it, and every replacement cost sowOrbs its full sixty darts.
+  const late = fresh.filter(p => outsideZone(z.to, p.x, p.y)).length;
+  check("spread over all of it, not just the final square", late > 50, `${late} outside the square`);
+  fillBots(w, 20);
+  const bots = [...w.players.values()].filter(p => p.bot);
+  check("and new bots appear inside it too", bots.every(b => !outsideZone(safe, b.cells[0].x, b.cells[0].y)));
+}
+
+{
+  // Bots know about it. A full arena of them, all the way to the whistle.
+  const w = createWorld(36, { botLevel: "hard" });
+  fillBots(w, 60);
+  const z = planZone(w, w.time + 120);
+  let zoneDeaths = 0, deaths = 0;
+  run(w, 120, events => {
+    for (const e of events) if (e.t === "death") { deaths++; if (e.zone) zoneDeaths++; }
+  });
+  const alive = [...w.players.values()].filter(p => p.alive && p.cells.length);
+  const strays = alive.filter(p => p.cells.some(c => outsideZone(z.to, c.x, c.y)));
+  // A piece in flight from a split or a burst can be outside for a moment, so
+  // not none: one in twenty. Before bots knew of the zone it was most of them.
+  check("bots end the round inside the final square", strays.length <= alive.length / 20,
+    `${strays.length} of ${alive.length} outside`);
+  check("and rarely let the zone catch them", zoneDeaths <= 2, `${zoneDeaths} of ${deaths} deaths`);
+}
+
+{
+  // The next round starts over: the whole arena, and no zone until it plans one.
+  const { w, z } = zoned(37, { pellets: 300 });
+  run(w, z.endAt + 1 - w.time);
+  resetArena(w);
+  stepWorld(w, 1 / TICK_HZ);
+  check("a reset clears the zone", w.zone === null && w.safe === null);
+  check("and scatters orbs over the whole arena again",
+    w.pellets.filter(p => outsideZone(z.to, p.x, p.y)).length > 50);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

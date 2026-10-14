@@ -323,10 +323,11 @@ create table if not exists petri.matches (
 
   -- 'eaten'      swallowed by another player
   -- 'bot'        swallowed by an NPC
+  -- 'zone'       drained away outside the closing zone (migration 010)
   -- 'cashed_out' left voluntarily with the pot
   -- 'survived'   still alive when the round timer expired
   -- 'abandoned'  disconnected and the linger window expired
-  outcome           text not null check (outcome in ('eaten','bot','cashed_out','survived','abandoned')),
+  outcome           text not null check (outcome in ('eaten','bot','zone','cashed_out','survived','abandoned')),
   killer_id         uuid references petri.accounts(id) on delete set null,
 
   stake             bigint not null default 0 check (stake >= 0),

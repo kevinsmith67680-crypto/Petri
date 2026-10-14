@@ -78,6 +78,7 @@ export function createLocalConnection({
           id: "me",
           ci: me.ci,
           alive: me.alive,
+          zoned: !!me.zoned,
           orbs: me.orbs,
           eaten: me.eaten,
           mass: totalMass(me),
@@ -89,6 +90,8 @@ export function createLocalConnection({
         board: leaderboard(world),
         // Practice has no timer. PHASE_NONE tells the HUD to hide the clock.
         round: { phase: PHASE_NONE, remaining: 0, number: 0 },
+        // The zone belongs to a live round's clock, so practice never has one.
+        zone: null,
         spectating: false,
         eyeName: ""
       };

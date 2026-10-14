@@ -12,6 +12,7 @@ Requires reportlab (pip install reportlab).
 """
 
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -58,7 +59,8 @@ def read_constants():
       'EJECT_KEEP','VIRUS_MASS','VIRUS_EAT_RATIO','VIRUS_PIECES','MAX_CELLS','EAT_RATIO',
       'EAT_BONUS','MERGE_DELAY','DECAY_ABOVE','BASE_SPEED','EJECT_SPEED',
       'EJECT_OWNER_COOLDOWN','VIRUS_FEED_HITS','VIRUS_SPLIT_SPEED','VIRUS_MAX_RATIO',
-      'SPAWN_GAP','TICK_HZ'];
+      'SPAWN_GAP','TICK_HZ','ZONE_AT_REMAINING','ZONE_WARN_SECONDS',
+      'ZONE_SHRINK_SECONDS','ZONE_SHRINK_TO','ZONE_DRAIN','ZONE_DRAIN_FLAT','ZONE_MIN_MASS'];
     const out = {};
     for (const n of names) out[n] = S[n];
     out.MODES = MODES;
@@ -252,6 +254,18 @@ POP_MASS = K["VIRUS_MASS"] * K["VIRUS_EAT_RATIO"]       # 126.5
 EJECT_LOSS = (K["EJECT_MASS"] - K["EJECT_KEEP"]) / K["EJECT_MASS"] * 100
 MASS_PER_USDC = K["UNIT"] / K["MICRO_PER_MASS"]         # 200
 ORBS_TO_100 = -(-(100 - K["START_MASS"]) // K["PELLET_MASS"])
+
+def zone_seconds(start, end):
+    """How long a cell outside the zone takes to drain from one mass to
+    another: dm/dt = -(a*m + b), solved exactly."""
+    a, b = K["ZONE_DRAIN"], K["ZONE_DRAIN_FLAT"]
+    return math.log((start + b / a) / (end + b / a)) / a
+
+ZONE_SIDE_PCT = K["ZONE_SHRINK_TO"] * 100
+ZONE_CALL_AT = K["ZONE_AT_REMAINING"] + K["ZONE_WARN_SECONDS"]          # 1:40
+ZONE_CLOSED_AT = K["ZONE_AT_REMAINING"] - K["ZONE_SHRINK_SECONDS"]      # 0:30
+ZONE_START_LIFE = zone_seconds(K["START_MASS"], K["ZONE_MIN_MASS"])
+ZONE_HALF_1000 = zone_seconds(1000, 500)
 
 
 def radius_of(mass):
@@ -910,11 +924,13 @@ def story():
            "memorised opening to learn.", S_BODY)],
         dia_ring(), ratio=0.58))
 
-    s.append(P("Three things end your round", S_H2))
+    s.append(P("Four things end your round", S_H2))
     s.append(bullets([
         "<b>You are eaten.</b> Everything you were carrying goes to whoever ate you.",
         f"<b>You touch a virus while over {POP_MASS:.0f} mass.</b> You burst into "
         f"{K['VIRUS_PIECES']} pieces and become food for everyone nearby.",
+        f"<b>The zone closes over you.</b> From {mmss(K['ZONE_AT_REMAINING'])} the board "
+        "shrinks; outside it you drain away (see the playbook).",
         "<b>The clock runs out.</b> The only ending that pays.",
     ]))
 
@@ -979,9 +995,13 @@ def story():
           f"What you staked, and what your mass is worth ({MASS_PER_USDC:.0f} mass is "
           f"{money(K['UNIT'])} USDC). Finish in the top {STD['paidPositions']} and the "
           "mass value at the whistle is what you are paid. Wagered rounds only."],
+         ["Zone call, top centre",
+          f"The count before the closing zone moves, at {mmss(ZONE_CALL_AT)} left; then a red "
+          "warning for as long as any of your cells is outside it."],
          ["Minimap, bottom left",
           "Where you are in the arena. Mostly it tells you how close you are to "
-          "a wall, which is where players get cornered."]],
+          "a wall, which is where players get cornered. Late in a round it also "
+          "draws the zone's final square, and shades what is already outside."]],
         [34 * mm, None]))
 
     s.append(P("What you are actually looking at", S_H2))
@@ -1873,12 +1893,15 @@ def story():
           f"{K['DECAY_ABOVE']}. Stay off viruses, stay off walls, and keep eating "
           "enough to cover the leak. If you are mid-sized, pick off the fragments "
           "from other people's fights - a burst player is nine free meals."],
-         ["2:00 - 0:30", "Find the line",
+         [f"2:00 - {mmss(ZONE_CLOSED_AT)}", "Find the line, then the zone",
           f"Look at where {STD['paidPositions']}th place sits. If you are above it, "
           "your job is no longer to grow. If you are below it, you need one player, "
-          "and viruses are how a smaller cell removes a bigger one."],
-         ["0:30 - 0:00", "Survive",
-          "Do not split. Do not chase. Do not go near a virus. Hold open water and "
+          "and viruses are how a smaller cell removes a bigger one. At "
+          f"{mmss(ZONE_CALL_AT)} the zone is marked on your minimap: if you are outside "
+          "it, go now, while the board is still wide."],
+         [f"{mmss(ZONE_CLOSED_AT)} - 0:00", "Survive",
+          "Do not split. Do not chase. Do not go near a virus. Everyone left is in "
+          "the same square now, so open water is scarce: hold what you have and "
           "let the clock run out."]],
         [24 * mm, 30 * mm, None]))
 
@@ -1895,6 +1918,25 @@ def story():
         "<b>Counting on a second chance.</b> There is none. Get eaten and you sit "
         "out the rest of the round, and your mass and your pot have already gone "
         "to the player who ate you.",
+    ]))
+
+    s.append(P("The closing zone", S_H2))
+    s.append(P(f"When the clock reads {mmss(K['ZONE_AT_REMAINING'])} the board starts closing "
+               f"in to a square {ZONE_SIDE_PCT:.0f}% of its width, placed at random. You are "
+               f"warned {K['ZONE_WARN_SECONDS']} seconds before it moves: a banner counts down "
+               "and the square appears on your minimap. Its edges reach the square over "
+               f"{K['ZONE_SHRINK_SECONDS']} seconds and hold there until the whistle. Outside it "
+               f"each cell loses {K['ZONE_DRAIN'] * 100:.0f}% of its mass a second plus "
+               f"{K['ZONE_DRAIN_FLAT']:g}, and is gone below {K['ZONE_MIN_MASS']}: a starting cell "
+               f"lasts {ZONE_START_LIFE:.0f} seconds out there, and a 1,000-mass cell halves in "
+               f"{ZONE_HALF_1000:.0f}.", S_BODY))
+    s.append(bullets([
+        "<b>You can always make it.</b> The edges move slower than any cell, so heading "
+        "in when told is enough. Waiting is what kills.",
+        "<b>The food moves in with it.</b> While the zone closes, new orbs only "
+        "appear inside it, never where they would cost you mass to collect.",
+        "<b>A zone death is nobody's kill.</b> Your stake is lost, as it would be to "
+        "a bot, and whoever bit you earlier is paid nothing for it.",
     ]))
 
     s.append(PageBreak())
@@ -1941,6 +1983,9 @@ def story():
          ["Orbs", f"{STD['world']['pellets']:,}", f"{HIGH['world']['pellets']:,}"],
          ["Viruses", str(STD["world"]["viruses"]), str(HIGH["world"]["viruses"])],
          ["Round length", mmss(STD["roundSeconds"]), mmss(HIGH["roundSeconds"])],
+         ["Zone closes", f"{mmss(K['ZONE_AT_REMAINING'])} left", f"{mmss(K['ZONE_AT_REMAINING'])} left"],
+         ["Final square", f"{round(STD['world']['size'] * K['ZONE_SHRINK_TO']):,}",
+          f"{round(HIGH['world']['size'] * K['ZONE_SHRINK_TO']):,}"],
          ["Paid places", str(STD["paidPositions"]), str(HIGH["paidPositions"])],
          ["Countdown", f"{T['countdown']}s", f"{T['countdown']}s"],
          ["Standings", f"{T['standings']}s", f"{T['standings']}s"]],

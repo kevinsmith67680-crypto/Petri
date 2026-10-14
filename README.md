@@ -146,6 +146,7 @@ test/       sim.test.js       headless simulation checks
             backend.test.js   same contract run against memory and Postgres
             matchmaker.test.js tickets and matchmaking against fake servers
             fleet.test.js     matchmaker + two game servers + Postgres, for real
+            zone.test.js      the closing zone through a real server round
 index.html  markup and CSS
 ```
 
@@ -891,6 +892,24 @@ The shared arena is **player versus player with no bots**, running in **ten-minu
 | Wagering | No | Yes |
 
 When the timer expires everyone still alive is ranked by mass, their run is recorded with outcome `survived`, and **the paid places are paid the value of their mass** (see "The mass readout"); the rest forfeit. Surviving to the whistle has to be a way to realise a wager — otherwise a timed round would silently swallow every stake on the board. Then the arena resets: fresh orbs, fresh spores, everyone respawned at starting mass, and the next round begins.
+
+### The closing zone
+
+Fortnite's storm, on a square board. When the round clock reads **1:30** the safe area starts closing in to a square **60% of the arena's width** (5,280 units in Standard, 3,720 in High stakes), placed at random anywhere it fits. Its four edges slide in at their own steady speeds over **60 seconds**, so it reaches the final square at 0:30 and holds there to the whistle. Every player is told **ten seconds before** the edges move: a banner counts down from 10, the final square is drawn on the minimap and as a dashed outline in the arena, and from then on everything outside the safe area is tinted red, with the moving edge as a solid line.
+
+**Outside, you drain.** Each cell whose centre is outside loses 10% of its mass a second plus 2 flat, and is gone below mass 10. A starting cell lasts under three seconds; a 1,000-mass cell halves in about seven. The far edge never moves faster than 40% of the arena a minute (59 units/s in Standard), under half the speed of even a 5,000-mass cell, so anyone who heads in when told makes it. The banner turns red and stays up for as long as any of your cells is outside.
+
+**It is a rule, so it lives in `shared/sim.js`.** `planZone(world, roundEndsAt)` picks the square from the world's own seeded generator, so a seed replays its zone; `stepWorld` computes the safe area once a tick (`world.safe`) and drains anything outside it. The host decides only *when*: `startRound` plans it as the round opens, `closeRound` clears it at the whistle, and `resetArena` clears it for the next round. Practice has no round clock and so no zone. Test mode's two-minute round takes the normal path, announced at 1:40 and closing from 1:30. A round shorter than 1:40, from a short `ROUND_SECONDS`, still gets its ten seconds' warning, announced the moment the round opens, and closes until the whistle; one of ten seconds or less gets none.
+
+Three things change once it is announced, and are easy to miss:
+
+- **Nothing new appears outside the safe area.** Orbs that are eaten, viruses that are topped up and bots that respawn all come back inside the safe area as it is at that moment. Not inside the final square: orbs left outside still count towards the arena's total, so packing every replacement into the final square put nine in ten orbs into a third of the board, more than the orb sampler's minimum spacing has room for, and with 100 bots the closed zone tripled the tick (4 ms to 12 ms). As it is, the tick costs the same as a round without a zone.
+- **Bots aim inside.** Whatever a bot is doing — grazing, hunting, splitting, lining up a virus — its aim is clamped inside the safe area, by 160 units plus one and a half times the radius of its whole mass, so a big bot in pieces keeps the pieces inside too. Across twelve two-minute runs, both arenas, Normal and Hard, full fields, the zone caught no bot at all (`test/sim.test.js` pins one).
+- **A zone death is nobody's kill.** The `death` event carries `zone: true`, and settlement ignores `lastEater` for it: a player who was bitten earlier and then drained is not paid out to whoever bit them. The stake is forfeit, as for a bot kill, and the run is recorded with outcome `zone` (**migration 010**). The death card says "Caught outside the zone", told by the snapshot itself (below).
+
+**On the wire (protocol 11).** A `FLAG_ZONE` bit in the snapshot flags marks an 18-byte block after the round fields: state (announced, closing, closed), whole seconds left in that state, the safe area now and the final square, each as four `u16`. Nothing is sent before the announcement, so no client learns the square early. The client interpolates the moving edge between snapshots like everything else. The player block's `alive` byte now has a third value, `2`, for dead by the zone, so the death card reads its cause from the same frame that shows the death rather than from a separate message that could arrive out of step.
+
+The numbers are constants at the top of `shared/sim.js` (`ZONE_AT_REMAINING`, `ZONE_WARN_SECONDS`, `ZONE_SHRINK_SECONDS`, `ZONE_SHRINK_TO`, `ZONE_DRAIN`, `ZONE_DRAIN_FLAT`, `ZONE_MIN_MASS`), and the player's manual reads them from there.
 
 ### The player's manual
 

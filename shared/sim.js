@@ -105,6 +105,28 @@ export const splitLaunchSpeed = half => 780 + Math.sqrt(half) * 40;
 // steer identically; a client-only smoothing would fight the correction.
 const STEER_RATE = 12;
 
+// The closing zone. Late in a live round the safe area closes in, as in
+// Fortnite: a square ZONE_SHRINK_TO of the arena's width, placed at random,
+// and the four edges of the safe area slide in to it. A cell whose centre is
+// outside the safe area loses mass fast and is gone below ZONE_MIN_MASS.
+//
+// The edges start moving when the round clock reads ZONE_AT_REMAINING, are
+// announced ZONE_WARN_SECONDS before that, take ZONE_SHRINK_SECONDS to reach
+// the final square, and hold there until the whistle. The far edge travels at
+// most 40% of the arena in that minute — 59 units a second in Standard, under
+// half the speed of a 5,000-mass cell — so anyone paying attention walks in.
+// The drain is what punishes not paying attention.
+export const ZONE_AT_REMAINING = 90;    // the clock reads 1:30
+export const ZONE_WARN_SECONDS = 10;
+export const ZONE_SHRINK_SECONDS = 60;
+export const ZONE_SHRINK_TO = 0.6;
+// Lost per second by each cell outside: this share of its mass, plus a flat
+// amount so a small cell cannot sit out there for ever. A 20-mass cell is
+// gone in under three seconds; a 1,000-mass one halves in seven.
+export const ZONE_DRAIN = 0.1;
+export const ZONE_DRAIN_FLAT = 2;
+export const ZONE_MIN_MASS = 10;
+
 export const TICK_HZ = 20;           // authoritative server tick rate
 export const STAIN_COUNT = 7;        // palette slots; colours live client-side
 
@@ -331,6 +353,8 @@ export function createWorld(seed = 1, opts = {}) {
     grid: null,
     viruses: [],
     players: new Map(),
+    zone: null,       // the closing zone, when a round has planned one
+    safe: null,       // and the safe area this tick, once its edges move
     events: []        // drained by the host each tick
   };
 
@@ -344,10 +368,18 @@ const rand = (world, a, b) => a + world.rng() * (b - a);
 // Kept clear of the walls, so nothing spawns already pinned against one.
 const SPAWN_PAD = 140;
 
+// While the zone closes, anything new — an orb, a virus, a bot coming back —
+// appears inside the safe area, never where it is already lethal. The safe
+// area as it is now, not the square it is closing to: orbs left outside are
+// still counted, so sowing every replacement into the final square packed
+// nine in ten of them into a third of the board, past the room sowOrbs looks
+// for, and tripled the tick. Same two draws either way, so a seeded world
+// still replays identically.
 function spawnPoint(world) {
+  const z = world.safe;
   return {
-    x: rand(world, SPAWN_PAD, world.size - SPAWN_PAD),
-    y: rand(world, SPAWN_PAD, world.size - SPAWN_PAD)
+    x: rand(world, (z ? z.x0 : 0) + SPAWN_PAD, (z ? z.x1 : world.size) - SPAWN_PAD),
+    y: rand(world, (z ? z.y0 : 0) + SPAWN_PAD, (z ? z.y1 : world.size) - SPAWN_PAD)
   };
 }
 
@@ -531,6 +563,7 @@ function placePlayer(world, player, x, y, mass) {
   player.actions.length = 0;
   player.plan = null;
   player.followUp = null;
+  player.zoned = false;
 }
 
 // Target distance between neighbouring spawns. A lobby too big to seat at this
@@ -1303,12 +1336,79 @@ function driveBot(world, bot, dt) {
   return { x: clamp(tx, 60, world.size - 60), y: clamp(ty, 60, world.size - 60) };
 }
 
+// ── the closing zone ────────────────────────────────────────────────────────
+
+// How far inside the safe area's edge a bot keeps its aim: a couple of
+// seconds' grace against an edge moving in at under 60 units a second, plus
+// room for its own body. A big bot in pieces spreads them around its aim, and
+// with only the grace they hung outside and bled.
+const ZONE_BOT_MARGIN = 160;
+const zoneMarginOf = mass => ZONE_BOT_MARGIN + radiusOf(mass) * 1.5;
+
+// Plan this round's zone, given when the round ends on world.time. The final
+// square is drawn from the world's own generator, so a seeded world replays
+// the same zone. A round too short to give the full warning before its edges
+// would move — a short ROUND_SECONDS — gets the warning anyway and starts
+// late; one too short for even that gets no zone.
+export function planZone(world, roundEndsAt) {
+  // The announcement first, and the rest from it: in a short round it is
+  // exactly now, where now + 10 - 10 can come out a hair after now and miss
+  // the snapshot sent on the tick the round opens.
+  const warnAt = Math.max(world.time, roundEndsAt - ZONE_AT_REMAINING - ZONE_WARN_SECONDS);
+  const startAt = warnAt + ZONE_WARN_SECONDS;
+  if (!(startAt < roundEndsAt)) { world.zone = null; return null; }
+  // Whole units, because they travel as u16: the square the client draws and
+  // the square the server enforces are then exactly the same square.
+  const side = Math.round(world.size * ZONE_SHRINK_TO);
+  const x = Math.round(rand(world, 0, world.size - side));
+  const y = Math.round(rand(world, 0, world.size - side));
+  world.zone = {
+    size: world.size,
+    warnAt,
+    startAt,
+    endAt: Math.min(roundEndsAt, startAt + ZONE_SHRINK_SECONDS),
+    to: { x0: x, y0: y, x1: x + side, y1: y + side }
+  };
+  return world.zone;
+}
+
+// The safe area at a moment: the whole arena until the edges start to move,
+// the final square once they have arrived, and each edge moving at its own
+// steady speed between the two.
+export function zoneBounds(zone, time) {
+  const k = clamp((time - zone.startAt) / (zone.endAt - zone.startAt), 0, 1);
+  const { to, size } = zone;
+  return {
+    x0: to.x0 * k, y0: to.y0 * k,
+    x1: size + (to.x1 - size) * k, y1: size + (to.y1 - size) * k
+  };
+}
+
+// A cell is outside when its centre is, the same test the minimap answers.
+export const outsideZone = (b, x, y) => x < b.x0 || x > b.x1 || y < b.y0 || y > b.y1;
+
+function drainOutside(world, ent, safe, dt) {
+  for (let i = ent.cells.length - 1; i >= 0; i--) {
+    const c = ent.cells[i];
+    if (!outsideZone(safe, c.x, c.y)) continue;
+    c.mass -= (c.mass * ZONE_DRAIN + ZONE_DRAIN_FLAT) * dt;
+    if (c.mass >= ZONE_MIN_MASS) continue;
+    ent.cells.splice(i, 1);
+    // The zone took the last of them. Nobody ate this player, and the death
+    // event has to say so, or settlement pays whoever bit them last.
+    if (!ent.cells.length) ent.zoned = true;
+  }
+}
+
 // ── the tick ────────────────────────────────────────────────────────────────
 
 export function stepWorld(world, dt) {
   world.tick++;
   world.time += dt;
   world.events.length = 0;
+  // Once a tick, for everyone who needs it: the drain, the bots, the host.
+  world.safe = world.zone && world.time >= world.zone.startAt
+    ? zoneBounds(world.zone, world.time) : null;
 
   for (const p of world.pellets) advancePellet(p, dt, world.size);
   for (const v of world.viruses) advanceVirus(v, dt, world.size);
@@ -1335,6 +1435,14 @@ export function stepWorld(world, dt) {
     if (ent.bot) {
       const t = driveBot(world, ent, dt);
       tx = t.x; ty = t.y;
+      // Nothing a bot wants is worth having outside the safe area, so
+      // whatever it was after, it aims inside. Applied here rather than in
+      // driveBot so every one of its plans is covered, splits included.
+      if (world.safe) {
+        const m = zoneMarginOf(totalMass(ent));
+        tx = clamp(tx, world.safe.x0 + m, world.safe.x1 - m);
+        ty = clamp(ty, world.safe.y0 + m, world.safe.y1 - m);
+      }
     } else {
       tx = me.x + ent.input.x;
       ty = me.y + ent.input.y;
@@ -1350,6 +1458,7 @@ export function stepWorld(world, dt) {
     resolveOwnCells(world, ent);
     eatPellets(world, ent);
     eatViruses(world, ent);
+    if (world.safe) drainOutside(world, ent, world.safe, dt);
     ent.peak = Math.max(ent.peak, totalMass(ent));
   }
 
@@ -1388,7 +1497,9 @@ export function stepWorld(world, dt) {
         orbs: ent.orbs,
         eaten: ent.eaten,
         peak: Math.round(ent.peak),
-        duration: Math.max(0, world.time - ent.spawnedAt)
+        duration: Math.max(0, world.time - ent.spawnedAt),
+        // Drained by the closing zone rather than eaten.
+        zone: !!ent.zoned
       });
     }
   }
@@ -1416,6 +1527,11 @@ export function stepWorld(world, dt) {
 // at starting mass with their per-round counters cleared. The player set is
 // kept, so connected clients roll straight into the next round.
 export function resetArena(world) {
+  // First, so the fresh orbs and spores below are spread over the whole arena
+  // rather than inside the last round's final square.
+  world.zone = null;
+  world.safe = null;
+
   world.viruses.length = 0;
   for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
 

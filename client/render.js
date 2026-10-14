@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { WORLD, radiusOf, EJECT_KEEP, ORB_RADIUS } from "../shared/sim.js";
+import { ZONE_WARNING, ZONE_CLOSED } from "../shared/protocol.js";
 
 export const CAMERA_ZOOM = 1.5;   // 1 = original framing, 1.5 = 50% closer in
 
@@ -35,6 +36,11 @@ export const THEMES = {
     virusFill: "#6aa84f",
     virusEdge: "#47772f",
     player: "#7a56a8",
+    // The closing zone: the red the clock turns in its last thirty seconds,
+    // and the safe square in ink, like the edge of a map.
+    zoneTint: "rgba(196,69,59,.16)",
+    zoneEdge: "#c4453b",
+    zoneSafe: "rgba(0,0,0,.62)",
     stains: ["#3b6ea5", "#d1493f", "#7a56a8", "#d9779f", "#3f9377", "#d09030", "#5f8f57"]
   },
   dark: {
@@ -49,6 +55,9 @@ export const THEMES = {
     virusFill: "#57a84c",
     virusEdge: "#356f2e",
     player: "#a884e0",
+    zoneTint: "rgba(240,138,128,.14)",
+    zoneEdge: "#f08a80",
+    zoneSafe: "rgba(255,255,255,.75)",
     stains: ["#5b95d6", "#e8695c", "#a884e0", "#ec8fb5", "#4fbf9a", "#e6b04e", "#82c07c"]
   }
 };
@@ -195,6 +204,36 @@ export function createRenderer(canvas, mapCanvas) {
     ctx.stroke();
   }
 
+  // Everything outside a box, as four rectangles: no clip region and no
+  // even-odd path, which some canvases draw slowly over a whole arena.
+  function shadeOutside(c, b, size, k) {
+    c.fillRect(0, 0, size * k, b.y0 * k);
+    c.fillRect(0, b.y1 * k, size * k, (size - b.y1) * k);
+    c.fillRect(0, b.y0 * k, b.x0 * k, (b.y1 - b.y0) * k);
+    c.fillRect(b.x1 * k, b.y0 * k, (size - b.x1) * k, (b.y1 - b.y0) * k);
+  }
+
+  // The closing zone. Outside the safe area is tinted over the cells, so a
+  // cell losing mass out there looks it; the edge is a hard line, and the
+  // square it is closing to is dashed until the edge arrives on it. While it
+  // is only announced, the dashed square is all there is.
+  function drawZone(th, camera, z, size) {
+    const b = z.now, t = z.to;
+    if (z.state !== ZONE_WARNING) {
+      ctx.fillStyle = th.zoneTint;
+      shadeOutside(ctx, b, size, 1);
+      ctx.lineWidth = 3 / camera.scale;
+      ctx.strokeStyle = th.zoneEdge;
+      ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);
+    }
+    if (z.state === ZONE_CLOSED) return;
+    ctx.setLineDash([18 / camera.scale, 12 / camera.scale]);
+    ctx.lineWidth = 2 / camera.scale;
+    ctx.strokeStyle = th.zoneSafe;
+    ctx.strokeRect(t.x0, t.y0, t.x1 - t.x0, t.y1 - t.y0);
+    ctx.setLineDash([]);
+  }
+
   function draw(view, camera, th, settings) {
     lastFontSize = -1;   // font state does not survive a frame boundary
     ctx.fillStyle = th.outside;
@@ -270,10 +309,13 @@ export function createRenderer(canvas, mapCanvas) {
     const cells = view.cells.slice().sort((a, b) => a.m - b.m);
     for (const c of cells) drawCell(th, camera, c, c.o === view.me.id, settings.names);
 
+    if (view.zone) drawZone(th, camera, view.zone, size);
+
     ctx.restore();
   }
 
-  // The minimap deliberately shows nothing but you — no orbs, no rivals.
+  // The minimap deliberately shows nothing but you — no orbs, no rivals — and,
+  // once it is announced, the closing zone, which everyone is shown alike.
   function drawMinimap(view, th, settings) {
     if (!settings.map) return;
     // It shows one dot on a 132px canvas. Redrawing it 60 times a second buys
@@ -296,6 +338,25 @@ export function createRenderer(canvas, mapCanvas) {
       mapCtx.moveTo(0, p); mapCtx.lineTo(s, p);
     }
     mapCtx.stroke();
+
+    if (view.zone) {
+      const z = view.zone, t = z.to;
+      if (z.state !== ZONE_WARNING) {
+        mapCtx.fillStyle = th.zoneTint;
+        shadeOutside(mapCtx, z.now, view.world || WORLD, k);
+      }
+      // Where to be. Drawn heavier than anything else on the map: it is the
+      // one thing on it the player has to act on.
+      mapCtx.strokeStyle = th.zoneSafe;
+      mapCtx.lineWidth = 1.5;
+      mapCtx.strokeRect(t.x0 * k, t.y0 * k, (t.x1 - t.x0) * k, (t.y1 - t.y0) * k);
+      if (z.state !== ZONE_WARNING && z.state !== ZONE_CLOSED) {
+        const b = z.now;
+        mapCtx.strokeStyle = th.zoneEdge;
+        mapCtx.lineWidth = 1;
+        mapCtx.strokeRect(b.x0 * k, b.y0 * k, (b.x1 - b.x0) * k, (b.y1 - b.y0) * k);
+      }
+    }
 
     const mine = colourOf(th, -1, ownSlot(view));
     mapCtx.fillStyle = mine;

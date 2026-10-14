@@ -708,7 +708,18 @@ export function createSocketConnection({
       return q ? [lerp(q[0], v[0], k), lerp(q[1], v[1], k), v[2], v[3]] : v;
     });
 
-    return { ...newer, cells, viruses };
+    // The zone's edges move a few units a tick; taken straight from the
+    // newest frame they would step at 20Hz.
+    let zone = newer.zone;
+    if (zone && older.zone) {
+      const a = older.zone.now, b = zone.now;
+      zone = { ...zone, now: {
+        x0: lerp(a.x0, b.x0, k), y0: lerp(a.y0, b.y0, k),
+        x1: lerp(a.x1, b.x1, k), y1: lerp(a.y1, b.y1, k)
+      } };
+    }
+
+    return { ...newer, cells, viruses, zone };
   }
 
   return {
@@ -823,6 +834,7 @@ export function createSocketConnection({
           ci: snap.spectating ? colours.get(snap.eyeNid) : (colours.get(myNid) ?? ci)
         },
         round: snap.round,
+        zone: snap.zone || null,
         spectating: snap.spectating,
         // Resolved from the name cache the snapshot already maintains.
         eyeName: snap.spectating ? (names.get(snap.eyeNid) || "") : "",

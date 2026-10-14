@@ -50,6 +50,11 @@ export function headline(m) {
       ? `Eaten by ${by} while ${ordinal(pos)} of ${m.playersInArena}`
       : `Eaten by ${by}`;
   }
+  if (m.outcome === "zone") {
+    return pos && m.playersInArena
+      ? `Caught outside the zone while ${ordinal(pos)} of ${m.playersInArena}`
+      : "Caught outside the zone";
+  }
   return "Left before the whistle";
 }
 
@@ -84,8 +89,10 @@ export function shareText(m) {
       `${n ? ` and eating ${players}` : ""}. Can you beat that?`;
   }
   const eaten = m.outcome === "eaten" || m.outcome === "bot";
+  const ending = eaten ? " before something bigger got me"
+    : m.outcome === "zone" ? " before the zone closed on me" : "";
   return `I peaked at ${peak} mass in Engulfs${n ? ` and ate ${players}` : ""}` +
-    `${eaten ? " before something bigger got me" : ""}. Can you beat that?`;
+    `${ending}. Can you beat that?`;
 }
 
 // Each platform's own "compose a post" address. Facebook takes only the link
