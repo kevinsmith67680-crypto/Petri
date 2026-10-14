@@ -30,6 +30,9 @@ export const PELLET_MASS = 3.375;   // mass gained per orb
 export const EJECT_MASS = 16;       // mass spent ejecting
 export const EJECT_KEEP = 13;       // mass the ejected blob carries
 export const ORB_RADIUS = 6;        // a plain orb, fixed size regardless of mass
+// No two orbs closer than this fraction of the gap an even lattice would give
+// them — about 86 units in either arena. See sowOrbs.
+export const ORB_SPACING = 0.65;
 export const VIRUS_MASS = 110;
 export const VIRUS_EAT_RATIO = 1.15; // how much bigger you must be to pop one
 export const VIRUS_PIECES = 9;       // fragments a virus scatters you into
@@ -258,12 +261,16 @@ export function buildPelletGrid(world) {
   // collector was a quarter of the whole frame.
   const g = world.grid || (world.grid = new Map());
   for (const bucket of g.values()) bucket.length = 0;
-  for (const p of world.pellets) {
-    const k = key((p.x / GRID) | 0, (p.y / GRID) | 0);
-    const bucket = g.get(k);
-    if (bucket) bucket.push(p);
-    else g.set(k, [p]);
-  }
+  for (const p of world.pellets) gridInsert(g, p);
+}
+
+// Also used by sowOrbs, which indexes each orb the moment it is placed so the
+// next one can keep its distance from it.
+function gridInsert(g, p) {
+  const k = key((p.x / GRID) | 0, (p.y / GRID) | 0);
+  const bucket = g.get(k);
+  if (bucket) bucket.push(p);
+  else g.set(k, [p]);
 }
 
 // Visits every pellet in the buckets overlapping the box around (x, y, r).
@@ -327,7 +334,7 @@ export function createWorld(seed = 1, opts = {}) {
     events: []        // drained by the host each tick
   };
 
-  for (let i = 0; i < world.pelletCount; i++) world.pellets.push(makePellet(world));
+  sowOrbs(world);
   for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
   return world;
 }
@@ -345,14 +352,91 @@ function spawnPoint(world) {
 }
 
 function makePellet(world, x, y, mass, vx, vy, ci) {
-  const p = x === undefined ? spawnPoint(world) : { x, y };
   return {
     id: world.nextId++,
-    x: p.x, y: p.y,
+    x, y,
     mass: mass || PELLET_MASS,
     vx: vx || 0, vy: vy || 0,
     ci: ci === undefined ? Math.floor(world.rng() * STAIN_COUNT) : ci
   };
+}
+
+// ── sowing orbs ─────────────────────────────────────────────────────────────
+//
+// Orbs are placed by Poisson-disc sampling: a point is drawn at random and
+// kept only if no pellet already lies within orbGap of it, so the board is
+// random without being clumpy.
+//
+// Uniform random placement is not even. It deals rich patches and bare
+// stretches, and replacing eaten orbs at uniform random points makes that
+// worse as a round goes on: the ground players graze is stripped, the ground
+// nobody visits piles up, and where you happen to open decides how fast you
+// can grow. With a minimum gap nowhere can hold much more than its share, and
+// a replacement can only land where there is room for one, so it fills a gap
+// instead of piling onto ground that is already full. README.md, "How orbs
+// are placed", has the measurements.
+//
+// The same sampler deals the opening board and every replacement, so a board
+// late in a round is the same kind of board as the one it opened on.
+//
+// The gap scales with the arena, as a fraction of the spacing an even lattice
+// of the same count would have. Dart throwing slows as the board fills, and
+// 0.65 is where it stays cheap on a full board — seven or eight darts a
+// replacement — while still ruling out clumps. Past ORB_TRIES misses the
+// clearest dart is used, so the count is always met; in play that is one or
+// two orbs in ten thousand.
+//
+// A replacement never lands under a living cell. Every cell sits in the hole
+// it has just eaten, which is exactly the room this sampler looks for, so
+// without that rule a cell could park and collect the orbs refilling its own
+// hole.
+const ORB_TRIES = 60;
+
+export const orbGap = world =>
+  ORB_SPACING * (world.size - 2 * SPAWN_PAD) / Math.sqrt(world.pelletCount);
+
+// Tops world.pellets up to the arena's count. The grid must be current: it is
+// what each dart is checked against, and every orb placed is added to it.
+function sowOrbs(world) {
+  const want = world.pelletCount - world.pellets.length;
+  if (want <= 0) return;
+  if (!world.grid) buildPelletGrid(world);
+
+  const cells = [];
+  for (const p of world.players.values()) for (const c of p.cells) cells.push(c);
+
+  const gap = orbGap(world);
+  const clear = gap * gap;
+  for (let n = 0; n < want; n++) {
+    let x = 0, y = 0, best = -1;
+    for (let i = 0; i < ORB_TRIES && best < clear; i++) {
+      const p = spawnPoint(world);
+      const room = underCell(cells, p.x, p.y) ? 0 : roomAt(world, p.x, p.y, gap);
+      if (room > best) { best = room; x = p.x; y = p.y; }
+    }
+    const orb = makePellet(world, x, y);
+    world.pellets.push(orb);
+    gridInsert(world.grid, orb);
+  }
+}
+
+// Squared distance from (x, y) to the nearest pellet, capped at r squared.
+function roomAt(world, x, y, r) {
+  let room = r * r;
+  forEachPelletNear(world, x, y, r, p => {
+    const dx = p.x - x, dy = p.y - y;
+    const d = dx * dx + dy * dy;
+    if (d < room) room = d;
+  });
+  return room;
+}
+
+function underCell(cells, x, y) {
+  for (const c of cells) {
+    const dx = c.x - x, dy = c.y - y, r = radiusOf(c.mass);
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  return false;
 }
 
 function makeVirus(world, x, y, vx = 0, vy = 0) {
@@ -1309,10 +1393,9 @@ export function stepWorld(world, dt) {
     }
   }
 
-  // Sweep eaten pellets and top the arena back up. One pass, once a tick.
+  // Sweep eaten pellets. One pass, once a tick.
   if (world.pelletsDirty) {
     world.pellets = world.pellets.filter(p => !p.dead);
-    while (world.pellets.length < world.pelletCount) world.pellets.push(makePellet(world));
     world.pelletsDirty = false;
   }
 
@@ -1322,6 +1405,10 @@ export function stepWorld(world, dt) {
   // encoded — which showed up as orbs flickering in and out of view.
   buildPelletGrid(world);
 
+  // Then the arena is topped back up against it, so each replacement keeps
+  // its distance from everything still in play. sowOrbs indexes what it adds.
+  sowOrbs(world);
+
   return world.events;
 }
 
@@ -1329,15 +1416,20 @@ export function stepWorld(world, dt) {
 // at starting mass with their per-round counters cleared. The player set is
 // kept, so connected clients roll straight into the next round.
 export function resetArena(world) {
-  world.pellets.length = 0;
-  for (let i = 0; i < world.pelletCount; i++) world.pellets.push(makePellet(world));
-
   world.viruses.length = 0;
   for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
 
   // Evenly spaced rather than scattered: a fresh round should not hand anyone
   // a neighbour within eating distance while someone else opens alone.
   spawnRing(world, [...world.players.values()]);
+
+  // Sown after the ring, so the cells it keeps clear of are this round's and
+  // not wherever the last round left them. The index is emptied first: it
+  // still holds the old board, and sowOrbs spaces against it.
+  world.pellets.length = 0;
+  buildPelletGrid(world);
+  sowOrbs(world);
+
   for (const p of world.players.values()) {
     p.orbs = 0;
     p.eaten = 0;

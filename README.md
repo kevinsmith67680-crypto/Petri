@@ -862,6 +862,23 @@ The grid is rebuilt at the **end** of each tick, not the start. Pellets are crea
 
 **Hardware.** At 100 players this needs roughly 13 ms/tick on one core. Render's free instance (0.1 CPU) fails outright at 260% of the tick budget; Starter (0.5 CPU) runs at 52%, which works but is tight; Standard (1 CPU, $25/mo) sits at 26% and is the realistic floor for a full lobby. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
 
+### How orbs are placed
+
+**Orbs are sown by Poisson-disc sampling.** `sowOrbs` in `shared/sim.js` drops each orb at a random point and keeps it only if no pellet already lies within `orbGap` of it: 0.65 of the spacing an even lattice of the same count would have, which is 86 units in Standard and 85 in High stakes. The same sampler deals the opening board and every replacement, so a board late in a round is the same kind of board as the one it opened on.
+
+Uniform random placement, which this replaced, was not even, and replacing eaten orbs at uniform random points made it steadily worse: the ground players grazed was stripped while the ground nobody visited piled up. Measured over a 10×10 grid of the sown area, 100 bots in the Standard arena, five seeds:
+
+| | Uniform random | Poisson-disc |
+|---|---|---|
+| Fresh board: busiest / emptiest square (mean 41) | 58–67 / 24–28 | 47–50 / 32–35 |
+| Fresh board: closest two orbs | under 2 units | 84–86 units |
+| After 3 minutes: busiest / emptiest square | 116–169 / 1–3 | 59–61 / 7–13 |
+| Simulation | 2.45–2.75 ms/tick | 2.63–2.79 ms/tick |
+
+With a minimum gap nowhere can hold much more than its share, and a replacement can only land where there is room for one. Grazed ground still stays thin for a while, because the gap a replacement fills can be anywhere on the board. Sowing a full Standard board takes 4–8 ms (about 20 ms cold, before the JIT has compiled it), once a round.
+
+**A replacement never lands under a living cell.** Every cell sits in the hole it has just eaten, which is exactly the room the sampler looks for, so without the rule it steers orbs onto whoever stands still: in the same runs the bots ate 32–37k orbs in three minutes, against 27–30k under uniform placement and 24–26k with the rule. Uniform placement had its own version of this, dropping orbs under cells at random in proportion to their size. In one 100-bot test room that fed the round's eventual giant every orb on the board, every tick, by the ninth minute.
+
 ### Live rounds
 
 The shared arena is **player versus player with no bots**, running in **ten-minute rounds**.
