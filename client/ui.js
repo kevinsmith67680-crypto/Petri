@@ -6,12 +6,12 @@
 import { formatUsdc, valueOfMass, MICRO_PER_MASS, PRACTICE, STAKE_1_USDC, STAKE_2_USDC }
   from "../shared/wager.js";
 import { MODES, modeById } from "../shared/modes.js";
-import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN }
+import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN, ZONE_WARNING, ZONE_CLOSING }
   from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
 import { ago, headline, statRows, shareText, shareLinks } from "./lastgame.js";
-import { isBotLevel, DEFAULT_BOT_LEVEL } from "../shared/sim.js";
+import { isBotLevel, DEFAULT_BOT_LEVEL, outsideZone } from "../shared/sim.js";
 import { levelOf, rankOf, PROVISIONAL_GAMES, XP_FOR_PLACE } from "../shared/progress.js";
 
 const $ = id => document.getElementById(id);
@@ -49,6 +49,9 @@ export function createUI({
     wallet: $("walletBox"),
     clock: $("roundClock"),
     clockTime: $("clockTime"),
+    zoneCall: $("zoneCall"),
+    zoneTitle: $("zoneTitle"),
+    zoneSub: $("zoneSub"),
     roundVeil: $("roundVeil"),
     winVeil: $("winVeil"),
     lobbyVeil: $("lobbyVeil"),
@@ -193,6 +196,42 @@ export function createUI({
     el.clock.hidden = false;
     setText(el.clockTime, mmss(round.remaining));
     setClass(el.clock, "ending", round.remaining <= 30);
+  }
+
+  // The closing zone's call. Up for the count before its edges move, for a
+  // few seconds once they do, and for as long as the player is outside it.
+  // Everything it says comes from the snapshot; the only clock kept here is
+  // how long the "closing" notice has been up.
+  const ZONE_NOTICE_MS = 5000;
+  let zoneMovingSince = 0;
+  function renderZone(view, now) {
+    const z = view.round && view.round.phase === PHASE_LIVE ? view.zone : null;
+    let title = "", sub = "", danger = false;
+    if (!z) zoneMovingSince = 0;
+    else if (z.state === ZONE_WARNING) {
+      zoneMovingSince = 0;
+      title = `The zone closes in ${z.secs}`;
+      sub = "Get inside the square marked on your minimap";
+    } else {
+      if (!zoneMovingSince) zoneMovingSince = now;
+      // Your own cells, by centre, which is the test the server drains by.
+      // Not while spectating: then they are somebody else's.
+      const out = !view.spectating && view.me.alive &&
+        view.cells.some(c => c.o === view.me.id && outsideZone(z.now, c.x, c.y));
+      if (out) {
+        title = "You are outside the zone";
+        sub = "Losing mass every second. Get inside.";
+        danger = true;
+      } else if (z.state === ZONE_CLOSING && now - zoneMovingSince < ZONE_NOTICE_MS) {
+        title = "The zone is closing";
+        sub = `It stops in ${mmss(z.secs)}`;
+      }
+    }
+    if (el.zoneCall.hidden !== !title) el.zoneCall.hidden = !title;
+    if (!title) return;
+    setText(el.zoneTitle, title);
+    setText(el.zoneSub, sub);
+    setClass(el.zoneCall, "danger", danger);
   }
 
   let iAmReady = false;
@@ -432,6 +471,7 @@ export function createUI({
   function update(view, elapsed, now) {
     if (!view) return;
     renderClock(view.round);
+    renderZone(view, now);
     renderIntermission(view.round);
     renderCountdown(view.round);
     setText(el.orbs, view.me.orbs);
@@ -644,8 +684,17 @@ export function createUI({
   // whatever position you held — only survivors place — and this same card is
   // shown in practice, where there is no stake at all. A heading that hinted at
   // placing would therefore be wrong twice over.
-  function deathCopy(rank, of, orbs) {
+  function deathCopy(rank, of, orbs, zoned = false) {
     const ranked = rank > 0 && of > 0;
+    // Nothing reached them: they were out when the zone closed over them.
+    if (zoned) {
+      return {
+        title: "Caught outside the zone",
+        line: ranked
+          ? `You were ${rank === 1 ? "top" : ordinal(rank)} of ${of} when the zone drained you away.`
+          : "The zone drained you away before you got back inside."
+      };
+    }
     if (ranked && rank === 1) {
       return {
         title: "Absorbed in the lead",
@@ -666,14 +715,14 @@ export function createUI({
     };
   }
 
-  function showDeath({ orbs, peak, eaten, elapsed, best, rank, of }) {
+  function showDeath({ orbs, peak, eaten, elapsed, best, rank, of, zoned = false }) {
     $("finalOrbs").textContent = orbs;
     $("finalMass").textContent = Math.round(peak);
     $("finalCells").textContent = eaten;
     $("finalPos").textContent = rank ? `${ordinal(rank)} of ${of}` : "—";
     $("finalTime").textContent = mmss(elapsed);
     $("finalBest").textContent = `${best} orbs`;
-    const { title, line } = deathCopy(rank, of, orbs);
+    const { title, line } = deathCopy(rank, of, orbs, zoned);
     $("overTitle").textContent = title;
     $("overLine").textContent = line;
     el.overVeil.hidden = false;

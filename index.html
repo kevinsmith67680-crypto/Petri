@@ -183,6 +183,38 @@
   @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.55} }
   @media (prefers-reduced-motion: reduce){ .clock.ending b{ animation:none; } }
 
+  /* ── the closing zone's call ──
+     Top centre, under the stake bar, in the red the clock ends on. It is the
+     one thing in the HUD that asks the player to do something now. */
+
+  .zone-call{
+    position:fixed; top:86px; left:50%; transform:translateX(-50%);
+    z-index:6; display:flex; flex-direction:column; align-items:center; gap:3px;
+    /* Sized to its words. Left at 50%, a fixed box otherwise only has half
+       the screen to wrap in, which on a phone is a column of fragments. */
+    width:max-content; max-width:calc(100vw - 36px); padding:10px 18px 11px;
+    background:var(--panel); border:1px solid var(--line); border-top:3px solid #c4453b;
+    border-radius:6px; box-shadow:var(--shadow);
+    text-align:center; pointer-events:none;
+    animation:zoneIn .28s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .zone-call[hidden]{ display:none; }
+  .zone-call b{
+    font-size:19px; font-weight:600; letter-spacing:-.01em;
+    font-variant-numeric:tabular-nums; line-height:1.15;
+  }
+  .zone-call span{ font-size:12.5px; color:var(--muted); }
+  .zone-call.danger b{ color:#c4453b; animation:pulse 1s ease-in-out infinite; }
+  html[data-theme="dark"] .zone-call{ border-top-color:#f08a80; }
+  html[data-theme="dark"] .zone-call.danger b{ color:#f08a80; }
+  @keyframes zoneIn{
+    from{ opacity:0; transform:translate(-50%, -8px); }
+    to{ opacity:1; transform:translate(-50%, 0); }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .zone-call, .zone-call.danger b{ animation:none; }
+  }
+
   /* ── lobby: the pregame menu's layout, two cards under the shared header ──
      Everything below is scoped to the lobby, at the menu's type scale, so
      the two screens read as one set and the menu's own cards are untouched. */
@@ -997,6 +1029,10 @@
     .board{ display:none; }
     .corner{ left:18px; bottom:22px; gap:10px; }
     .minimap{ width:96px; height:96px; }
+    /* The readout column fills the top of a phone, so the call sits above
+       the minimap instead, clear of the player's own cell in the middle. */
+    .zone-call{ top:auto; bottom:136px; padding:8px 14px 9px; }
+    .zone-call b{ font-size:16px; }
     .card{ padding:28px 24px 24px; }
     .card h2{ font-size:27px; }
     .me{ grid-template-columns:72px 1fr; gap:14px 14px; }
@@ -1116,6 +1152,12 @@
      full-screen error, which only appears once recovery has given up. -->
 <div class="reconnect" id="reconnectBar" hidden>Reconnecting…</div>
 
+<!-- The closing zone: the count before its edges move, a moment's notice
+     that they are moving, and a warning to anyone caught outside. -->
+<div class="zone-call" id="zoneCall" role="status" hidden>
+  <b id="zoneTitle"></b><span id="zoneSub"></span>
+</div>
+
 <div class="perf" id="perfBox" hidden></div>
 
 <div class="spec" id="specBar" hidden>
@@ -1173,6 +1215,11 @@
         <div class="block">
           <h2>Eating and being eaten</h2>
           <p>You need to be roughly a fifth larger to swallow another player, and all of their mass becomes yours. Green spores burst you into ten pieces once you pass mass 127 — so the larger you get, the smaller the safe part of the board becomes.</p>
+        </div>
+
+        <div class="block">
+          <h2>The closing zone</h2>
+          <p>At 1:30 left in a live round the board starts closing in to a square 60% of its width, placed at random and marked on your minimap ten seconds before it moves. Outside it you lose mass fast, and a small cell is gone in seconds.</p>
         </div>
 
         <div class="block">

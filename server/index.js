@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 
 import {
-  createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnRing,
+  createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnRing, planZone,
   setAim, queueAction, stepWorld, totalMass, TICK_HZ, STAIN_COUNT,
   isBotLevel, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL
 } from "../shared/sim.js";
@@ -1192,7 +1192,9 @@ async function settle(room, events) {
   for (const e of events) {
     if (e.t !== "death") continue;
     const victim = accountOfPlayer(room, e.id);
-    const killerId = room.lastEater.get(e.id);
+    // Drained by the closing zone: whoever bit them earlier did not finish
+    // them, and is not paid for it.
+    const killerId = e.zone ? undefined : room.lastEater.get(e.id);
     room.lastEater.delete(e.id);
 
     if (!victim || !victim.accountId) continue;
@@ -1207,7 +1209,7 @@ async function settle(room, events) {
     victim.stake = PRACTICE;
 
     recordRun(victim, e, {
-      outcome: killer ? "eaten" : "bot",
+      outcome: killer ? "eaten" : e.zone ? "zone" : "bot",
       killerId: killer?.accountId || null,
       stake: wasStaked ? stake : 0,
       payout: 0
@@ -1219,7 +1221,8 @@ async function settle(room, events) {
       if (killerStaked) {
         await backend.claim(killer.accountId, victim.accountId);
       } else {
-        // Killed by a bot, or by someone with nothing at risk. Nobody won it.
+        // Killed by a bot, by someone with nothing at risk, or by the zone.
+        // Nobody won it.
         await backend.forfeit(victim.accountId);
       }
       for (const [ws, meta] of room.clients) {
@@ -1451,6 +1454,8 @@ function closeRound(room) {
     p.alive = false;
     p.cells = [];
   }
+  // Not a rule of the lobby. Off the snapshots from the whistle on.
+  room.world.zone = null;
 }
 
 // The standings have been up long enough: everyone to the lobby.
@@ -1555,6 +1560,8 @@ async function startRound(room) {
   round.phase = PHASE_LIVE;
   round.endsAt = world.time + room.roundSeconds;
   resetArena(world);
+  // The closing zone: announced when the clock reads 1:40, closing from 1:30.
+  planZone(world, round.endsAt);
 
   // Bots first: the roster has to be final before anyone is placed, or the
   // ring is spaced for a field that is about to change size.

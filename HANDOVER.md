@@ -10,7 +10,8 @@ dangerous, and what will waste your afternoon.
 **Current state.** `main` is at `5f340b4` (PR #16, merged 2026-09-24). The working
 branch `claude/nice-keller-z8vfyf` adds two things `main` does not have: rooms on
 demand, and a matchmaker with signed tickets and seat leases (see "Things worth
-knowing"). All nineteen suites green, and `npm run test:db` green against Postgres
+knowing"), and a closing zone in the last 1:30 of every live round (README, "The
+closing zone"). All twenty suites green, and `npm run test:db` green against Postgres
 16. Supabase migrations `002`–`006` are applied; **the branch needs `007` applied
 before it deploys** — see "Before deploying".
 
@@ -45,6 +46,12 @@ The fix is to settle a lingering player by `accountId` rather than by live conne
 and to clear the lingering entry when the body is eaten. `claimLingering()`
 (`server/index.js:447`) already does the second half for rejoins and is the place to
 start.
+
+**The closing zone makes this easier to reach for, not new.** A body drained by the
+zone while its owner is disconnected is settled the same broken way as one eaten: the
+victim resolves to `null`, and the linger sweep refunds. So a player caught outside
+can drop their connection to keep their stake, exactly as one about to be eaten can.
+The fix above covers both.
 
 **The lobby's Return to menu is not a new way in.** It sends `leave`, which refunds on
 the spot — but only for a player with no body. A player alive in a round who sends it
@@ -135,6 +142,16 @@ pot instead, as before, and logs `petri.pay_out is missing` once.
 live in `petri.progress`. Without it the game still plays: joins and matches fall back
 to the starting figures and fill-only seating, and the menu's career stats still load.
 But nothing a round earns is saved. The round-end write fails and logs `progress:`.
+
+**Apply `server/db/migrations/010_zone_outcome.sql`.** A player drained by the closing
+zone is recorded with outcome `zone`, which the old check constraint refuses. Without
+it the game still plays and still settles — the stake is forfeit either way — but each
+such match record fails to write and logs `recordMatch:`, so it is missing from the
+player's history.
+
+**This branch: `PROTOCOL_VERSION` 10 → 11.** The snapshot carries the closing zone
+behind a new flag, and the player's `alive` byte says when the zone killed them. Same
+consequence as every bump: open tabs are told to reload. Deploy between rounds.
 
 **This branch: `PROTOCOL_VERSION` 9 → 10.** The join presents a match ticket instead
 of a session token and stake. Open tabs on the old build are told to reload, as below.
@@ -243,7 +260,7 @@ the tick keeps sending snapshots. The tick's countdown branch is guarded with
 | A compiled Python file was committed with the manual script | `scripts/__pycache__/` |
 | Two unreferenced images ship in the container, 868 KB | `assets/ChatGPT Image Sep 12…png`, `assets/image-1789204331359.png` |
 | `mark.png` is 796 KB and only used by the icon build script, never at runtime | `assets/mark.png`, `scripts/icons.mjs` |
-| `npm install && npm test` fails — see the `ws` trap below | `test/rooms.test.js`, `test/resume.test.js`, `test/factory.test.js` |
+| `npm install && npm test` fails — see the `ws` trap below | `test/rooms.test.js`, `test/resume.test.js`, `test/factory.test.js`, `test/zone.test.js` |
 | The client chooses a region only through `?region=`; nothing measures latency to pick one | `client/main.js`, `getTicket` |
 | Each match asks every server in the region for its rooms. Fine for a handful of servers, not for hundreds; cache the status for a second or two first | `server/matchmaker/core.js`, `rank()` |
 | The per-address connection cap is still per game server, not fleet-wide | `server/index.js`, `connectionsByIp` |
@@ -268,7 +285,7 @@ at build time, so it cannot drift.
 npm install
 npm start                  # http://localhost:8080
 npm run dev                # TEST_MODE=1: rounds start with one ready player
-npm test                   # all seventeen suites (needs NO node_modules/ws: see below)
+npm test                   # all twenty suites (needs NO node_modules/ws: see below)
 DATABASE_URL=… npm run test:db   # backend contract, a real fleet, Docker (needs the real ws)
 npm run matchmaker         # the matchmaker as its own service (see README "Matchmaking")
 python3 scripts/manual.py  # rebuild the player manual (needs: pip install reportlab)
@@ -285,9 +302,9 @@ wait for others instead of counting down at once, run without `TEST_MODE` and wi
 
 ### The `ws` trap, which will cost you an hour
 
-`test/rooms.test.js`, `test/resume.test.js` and `test/factory.test.js` boot the real
-server against a **fake `ws` package that they write into `node_modules/ws`**, and
-only when no real one is installed. `test/fleet.test.js` is the opposite: it runs
+`test/rooms.test.js`, `test/resume.test.js`, `test/factory.test.js` and
+`test/zone.test.js` boot the real server against a **fake `ws` package that they write
+into `node_modules/ws`**, and only when no real one is installed. `test/fleet.test.js` is the opposite: it runs
 real processes over real sockets and needs the real package. Three consequences:
 
 - After `npm install`, both suites crash. Move `node_modules/ws` aside to run them.
@@ -419,4 +436,4 @@ disagreed with the ready count.
 | `legal/` | Draft privacy policy and terms. **Drafts** — unreviewed |
 | `docs/` | The generated player manual. Not served |
 | `scripts/manual.py` | Builds the manual; reads every number out of `shared/` at build time. Re-run after changing any tuning constant |
-| `test/` | Seventeen suites, plain Node, no framework, plus `fleet.test.js` in `test:db` |
+| `test/` | Twenty suites, plain Node, no framework, plus `fleet.test.js` in `test:db` |

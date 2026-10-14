@@ -29,7 +29,7 @@
 import { Reader, Writer, clampU16 } from "./codec.js";
 import {
   radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,
-  PELLET_MASS
+  PELLET_MASS, zoneBounds
 } from "./sim.js";
 
 // Positions travel as u16. createWorld enforces the same bound at construction
@@ -45,7 +45,8 @@ export const WORLD_LIMIT = MAX_WORLD;
 // 10: the join presents a match ticket instead of a session token and stake.
 // A page from before that would be refused every ticket and retry until it
 // gave up; told its version is stale, it asks the player to reload instead.
-export const PROTOCOL_VERSION = 10;
+// 11: the closing zone, behind FLAG_ZONE after the round block.
+export const PROTOCOL_VERSION = 11;
 
 export const MSG = {
   JOIN: "join",        // text
@@ -59,6 +60,13 @@ export const ACTIONS = ["split", "eject", "respawn"];
 
 export const FLAG_KEYFRAME = 1 << 0;
 export const FLAG_BOARD = 1 << 1;
+export const FLAG_ZONE = 1 << 2;
+
+// The closing zone, as the snapshot reports it. Nothing at all is sent before
+// it is announced, so nobody learns where the safe square is early.
+export const ZONE_WARNING = 1;    // announced; the edges have not moved yet
+export const ZONE_CLOSING = 2;    // the edges are moving in
+export const ZONE_CLOSED = 3;     // at the final square until the whistle
 
 // Round phases. Guests running the local simulation have no rounds and send
 // PHASE_NONE, which the client reads as "hide the clock".
@@ -88,6 +96,23 @@ const CELL_BYTES = 13;
 const PELLET_BYTES = 10;
 const REMOVE_BYTES = 4;
 const VIRUS_BYTES = 7;
+
+// The zone as the client needs it: what stage it is at, the whole seconds
+// left in that stage, the safe area now and the square it is closing to.
+function zoneView(world) {
+  const z = world.zone;
+  if (!z || world.time < z.warnAt) return null;
+  const t = world.time;
+  const state = t < z.startAt ? ZONE_WARNING : t < z.endAt ? ZONE_CLOSING : ZONE_CLOSED;
+  const secs = state === ZONE_WARNING ? z.startAt - t : state === ZONE_CLOSING ? z.endAt - t : 0;
+  return { state, secs: Math.min(255, Math.ceil(secs)), now: zoneBounds(z, t), to: z.to };
+}
+
+const writeBox = (w, b) => {
+  w.u16(clampU16(Math.round(b.x0))); w.u16(clampU16(Math.round(b.y0)));
+  w.u16(clampU16(Math.round(b.x1))); w.u16(clampU16(Math.round(b.y1)));
+};
+const readBox = r => ({ x0: r.u16(), y0: r.u16(), x1: r.u16(), y1: r.u16() });
 
 // ── client -> server ────────────────────────────────────────────────────────
 
@@ -215,17 +240,20 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   // is what a spectator wants to see, and the viewer's own stats are frozen.
   const rank = rankOf(world, view.id);
   const mass = totalMass(view);
+  // The same for everyone in the room, so it is public, not scoped to a view.
+  const zone = zoneView(world);
 
   const w = new Writer(1024);
   w.u8(MSG.SNAPSHOT);
-  w.u8((keyframe ? FLAG_KEYFRAME : 0) | (withBoard ? FLAG_BOARD : 0));
+  w.u8((keyframe ? FLAG_KEYFRAME : 0) | (withBoard ? FLAG_BOARD : 0) | (zone ? FLAG_ZONE : 0));
   w.u32(world.tick);
   w.f32(world.time);
   // Rooms differ in size, so the client is told rather than assuming.
   w.u16(world.size);
 
-  // me
-  w.u8(view.alive ? 1 : 0);
+  // me. Alive is 1; dead is 0, or 2 when the closing zone drained them, so
+  // the death card can say which on the same frame that shows the death.
+  w.u8(view.alive ? 1 : view.zoned ? 2 : 0);
   w.u32(view.orbs);
   w.u32(view.eaten);
   w.u32(Math.round(mass));
@@ -240,6 +268,14 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   w.u8(round ? round.phase : PHASE_NONE);
   w.u16(round ? Math.max(0, Math.round(round.remaining)) : 0);
   w.u16(round ? round.number : 0);
+
+  // zone: 18 bytes, and only in the last stretch of a round.
+  if (zone) {
+    w.u8(zone.state);
+    w.u8(zone.secs);
+    writeBox(w, zone.now);
+    writeBox(w, zone.to);
+  }
 
   // spectating flag plus whose eyes we are borrowing, so the client can name
   // them from the name table it already has.
@@ -333,8 +369,10 @@ export function decodeSnapshot(buffer) {
   const world = r.u16();
   if (!Number.isFinite(time)) throw new RangeError("bad time");
 
+  const life = r.u8();
   const me = {
-    alive: r.u8() === 1,
+    alive: life === 1,
+    zoned: life === 2,
     orbs: r.u32(),
     eaten: r.u32(),
     mass: r.u32(),
@@ -346,6 +384,12 @@ export function decodeSnapshot(buffer) {
   };
 
   const round = { phase: r.u8(), remaining: r.u16(), number: r.u16() };
+  let zone = null;
+  if (flags & FLAG_ZONE) {
+    const state = r.u8();
+    if (state < ZONE_WARNING || state > ZONE_CLOSED) throw new RangeError("bad zone state");
+    zone = { state, secs: r.u8(), now: readBox(r), to: readBox(r) };
+  }
   const spectating = r.u8() === 1;
   const eyeNid = r.u16();
 
@@ -405,7 +449,7 @@ export function decodeSnapshot(buffer) {
 
   return {
     keyframe: !!(flags & FLAG_KEYFRAME),
-    tick, time, world, me, round, spectating, eyeNid,
+    tick, time, world, me, round, zone, spectating, eyeNid,
     names, cells, added, removed, viruses, board
   };
 }

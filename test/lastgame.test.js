@@ -46,6 +46,12 @@ check("with no standing to report, only what happened",
   headline(game({ outcome: "eaten", finishPosition: null })) === "Eaten by another player");
 check("leaving early reads as leaving",
   headline(game({ outcome: "abandoned" })) === "Left before the whistle");
+// Drained by the closing zone. Nobody ate them, so nobody is named.
+check("the zone is named as the zone",
+  headline(game({ outcome: "zone", finishPosition: 7, playersInArena: 60, won: false }))
+    === "Caught outside the zone while 7th of 60");
+check("and reads as the zone even with no standing",
+  headline(game({ outcome: "zone", finishPosition: null })) === "Caught outside the zone");
 
 console.log("\n-- the numbers --");
 
@@ -82,6 +88,11 @@ const rich = game({ stake: 2 * UNIT, payout: 57.25 * UNIT });
 const post = shareText(rich);
 check("money never leaves in a post",
   !/USDC|\$|£|57|stake|won|paid|win/i.test(post), post);
+
+check("a zone death says so, still without money",
+  shareText(game({ outcome: "zone", playersEaten: 1, stake: UNIT })) ===
+    "I peaked at 812 mass in Engulfs and ate 1 player before the zone closed on me. Can you beat that?",
+  shareText(game({ outcome: "zone", playersEaten: 1, stake: UNIT })));
 
 console.log("\n-- the links --");
 

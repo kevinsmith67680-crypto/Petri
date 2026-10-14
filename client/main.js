@@ -70,6 +70,8 @@ let lastRank = 0;
 let lastOf = 0;
 let spectating = false;
 let lastRunOrbs = 0, lastRunPeak = 0, lastRunEaten = 0;
+// What ended the last run: the closing zone, or something that ate us.
+let lastDeathZoned = false;
 
 // Frame rate over a one-second window rather than instantaneously, so the
 // number is readable instead of flickering.
@@ -668,7 +670,7 @@ document.getElementById("specPrev").addEventListener("click", () => conn?.sendSp
 document.getElementById("specLeave").addEventListener("click", () => {
   stopSpectating();
   ui.showDeath({
-    orbs: lastRunOrbs, peak: lastRunPeak, eaten: lastRunEaten,
+    orbs: lastRunOrbs, peak: lastRunPeak, eaten: lastRunEaten, zoned: lastDeathZoned,
     elapsed, best, rank: lastRank, of: lastOf
   });
 });
@@ -779,7 +781,9 @@ function frame(now) {
         seenAlive = false;
         running = false;
         best = Math.max(best, fresh.me.orbs);
+        lastDeathZoned = !!fresh.me.zoned;
         ui.showDeath({
+          zoned: lastDeathZoned,
           orbs: fresh.me.orbs,
           peak: fresh.me.peak,
           eaten: fresh.me.eaten,

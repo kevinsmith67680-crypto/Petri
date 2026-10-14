@@ -14,11 +14,12 @@
 import { Reader, Writer } from "../shared/codec.js";
 import {
   encodeSnapshot, decodeSnapshot, encodeAim, encodeAction,
-  decodeClientMessage, createClientState, viewRadius, KEYFRAME_TICKS
+  decodeClientMessage, createClientState, viewRadius, KEYFRAME_TICKS,
+  ZONE_WARNING, ZONE_CLOSING, ZONE_CLOSED
 } from "../shared/protocol.js";
 import {
   createWorld, addPlayer, fillBots, stepWorld, setAim, queueAction,
-  advancePellet, TICK_HZ, centroid
+  advancePellet, TICK_HZ, centroid, planZone, zoneBounds
 } from "../shared/sim.js";
 
 let failures = 0;
@@ -331,6 +332,71 @@ check("watching a dead target falls back to self", fallback.spectating === false
   check("a moving virus keeps its id", !!same, `looking for ${shot.vid}`);
   check("and reports where it moved to", same && same[0] > got[2][0],
     same ? `${got[2][0]} -> ${same[0]}` : "gone");
+}
+
+console.log("\n-- the closing zone --");
+
+{
+  const zw = createWorld(91, { pellets: 0, viruses: 0 });
+  const zp = addPlayer(zw, { id: "me", name: "Z" });
+  // Encoded at a chosen moment. Nothing steps, so nothing else changes and
+  // two frames differ only by what the zone adds.
+  const at = t => {
+    zw.time = t;
+    const bytes = encodeSnapshot(zw, zp, createClientState(1));
+    return { bytes, snap: decodeSnapshot(bytes) };
+  };
+  const bare = at(0).bytes.length;
+  const z = planZone(zw, 600);
+
+  const early = at(z.warnAt - 0.01);
+  check("nothing about the zone is sent before it is announced",
+    early.snap.zone === null && early.bytes.length === bare);
+
+  const warn = at(z.warnAt);
+  check("announced: warning, ten seconds out",
+    warn.snap.zone && warn.snap.zone.state === ZONE_WARNING && warn.snap.zone.secs === 10,
+    JSON.stringify(warn.snap.zone && { s: warn.snap.zone.state, n: warn.snap.zone.secs }));
+  check("with the square it will close to",
+    JSON.stringify(warn.snap.zone.to) === JSON.stringify(z.to));
+  check("and the whole arena still safe",
+    warn.snap.zone.now.x0 === 0 && warn.snap.zone.now.x1 === zw.size);
+  check("for eighteen bytes", warn.bytes.length === bare + 18, `${warn.bytes.length - bare}`);
+  check("counting down to the last second",
+    at(z.startAt - 0.2).snap.zone.secs === 1 && at(z.startAt - 9.5).snap.zone.secs === 10);
+
+  const mid = (z.startAt + z.endAt) / 2;
+  const closing = at(mid).snap.zone;
+  const truth = zoneBounds(z, mid);
+  check("closing: the safe area as the server has it, to the unit",
+    closing.state === ZONE_CLOSING &&
+    ["x0", "y0", "x1", "y1"].every(k => Math.abs(closing.now[k] - truth[k]) <= 0.5),
+    JSON.stringify(closing.now));
+  check("and the seconds until it stops", closing.secs === Math.ceil(z.endAt - mid), `${closing.secs}`);
+
+  const closed = at(z.endAt + 1).snap.zone;
+  check("closed: at the final square, nothing left to count",
+    closed.state === ZONE_CLOSED && closed.secs === 0 &&
+    JSON.stringify(closed.now) === JSON.stringify(z.to));
+
+  // Byte 40 is the zone's state: past the header (12), the player block (23)
+  // and the round block (5).
+  const bad = at(z.endAt + 1).bytes.slice();
+  bad[40] = 9;
+  throws("an unknown zone state is refused", () => decodeSnapshot(bad));
+  // How a death is reported: the zone's own, so the card can say so.
+  zp.alive = false; zp.zoned = true;
+  const drained = at(z.endAt + 1).snap.me;
+  check("a player the zone drained is dead, and the snapshot says why",
+    !drained.alive && drained.zoned === true);
+  zp.zoned = false;
+  const eaten = at(z.endAt + 1).snap.me;
+  check("one that was eaten is only dead", !eaten.alive && eaten.zoned === false);
+  zp.alive = true;
+  check("and a living one is neither", at(z.endAt + 1).snap.me.alive && !at(z.endAt + 1).snap.me.zoned);
+
+  zw.zone = null;
+  check("and gone once the round clears it", at(z.endAt + 2).snap.zone === null);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
