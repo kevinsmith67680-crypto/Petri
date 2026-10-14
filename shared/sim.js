@@ -113,12 +113,12 @@ const STEER_RATE = 12;
 // The edges start moving when the round clock reads ZONE_AT_REMAINING, are
 // announced ZONE_WARN_SECONDS before that, take ZONE_SHRINK_SECONDS to reach
 // the final square, and hold there until the whistle. The far edge travels at
-// most 40% of the arena in that minute — 59 units a second in Standard, under
-// half the speed of a 5,000-mass cell — so anyone paying attention walks in.
-// The drain is what punishes not paying attention.
+// most 40% of the arena in those 45 seconds — 78 units a second in Standard,
+// which any cell short of 40,000 mass outruns — so anyone paying attention
+// walks in. The drain is what punishes not paying attention.
 export const ZONE_AT_REMAINING = 90;    // the clock reads 1:30
 export const ZONE_WARN_SECONDS = 10;
-export const ZONE_SHRINK_SECONDS = 60;
+export const ZONE_SHRINK_SECONDS = 45;  // closed at 0:45
 export const ZONE_SHRINK_TO = 0.6;
 // Lost per second by each cell outside: this share of its mass, plus a flat
 // amount so a small cell cannot sit out there for ever. A 20-mass cell is
@@ -1339,7 +1339,7 @@ function driveBot(world, bot, dt) {
 // ── the closing zone ────────────────────────────────────────────────────────
 
 // How far inside the safe area's edge a bot keeps its aim: a couple of
-// seconds' grace against an edge moving in at under 60 units a second, plus
+// seconds' grace against an edge moving in at under 80 units a second, plus
 // room for its own body. A big bot in pieces spreads them around its aim, and
 // with only the grace they hung outside and bled.
 const ZONE_BOT_MARGIN = 160;
