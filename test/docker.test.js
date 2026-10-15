@@ -35,7 +35,7 @@ const copied = new Set(
 // by the handler itself, and the rest are development files that never reach a
 // browser, so none of them need to be in the image.
 const NOT_SERVED = new Set([
-  "server", "node_modules", ".git", ".github", "test", "scripts", "docs",
+  "server", "node_modules", ".git", ".github", "test", "scripts", "docs", "bench",
   "package.json", "package-lock.json", "Dockerfile", "render.yaml",
   "README.md", ".gitignore", ".env.example"
 ]);
