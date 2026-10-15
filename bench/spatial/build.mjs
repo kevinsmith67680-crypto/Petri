@@ -31,11 +31,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(here, "../..");
 const SHARED = path.join(ROOT, "shared");
+
+// The revision the audit measured. The patches below are anchored on its
+// source, so by default the shared/ files are read from git at this commit,
+// not from the working tree: the branch has moved on since (sowOrbs, the
+// closing zone) and the anchors no longer match it. SPATIAL_REV=working reads
+// the working tree instead; any other value is a git revision.
+export const AUDITED_REV = "d93f567";
+export const REV = process.env.SPATIAL_REV || AUDITED_REV;
+
+function source(file) {
+  if (REV === "working") return fs.readFileSync(path.join(SHARED, file), "utf8");
+  return execFileSync("git", ["-C", ROOT, "show", `${REV}:shared/${file}`], { encoding: "utf8", maxBuffer: 1 << 26 });
+}
 
 function once(src, anchor, replacement, label) {
   const at = src.indexOf(anchor);
@@ -490,9 +504,9 @@ function gcombat(src, on) {
 // ── build ───────────────────────────────────────────────────────────────────
 
 export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = false, counted: k = false, tag = "", gridSize = null } = {}, outRoot) {
-  let sim = fs.readFileSync(path.join(SHARED, "sim.js"), "utf8");
-  let protocol = fs.readFileSync(path.join(SHARED, "protocol.js"), "utf8");
-  const codec = fs.readFileSync(path.join(SHARED, "codec.js"), "utf8");
+  let sim = source("sim.js");
+  let protocol = source("protocol.js");
+  const codec = source("codec.js");
 
   sim = knobs(sim);
   // Bucket size sweep. Only the constant changes.
@@ -505,7 +519,7 @@ export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = fa
   // `tag` gives a second, independent module instance of the same build, for
   // lockstep runs that need two worlds with separate __S flags.
   const name = [k ? "counted" : "plain", f && "fresh", c && "csr", g && "gcombat", gridSize && `g${gridSize}`, tag].filter(Boolean).join("-");
-  const root = outRoot || process.env.SPATIAL_BUILD_DIR || path.join(os.tmpdir(), "petri-spatial-builds");
+  const root = path.join(outRoot || process.env.SPATIAL_BUILD_DIR || path.join(os.tmpdir(), "petri-spatial-builds"), REV);
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "sim.js"), sim);

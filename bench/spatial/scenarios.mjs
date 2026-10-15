@@ -55,8 +55,12 @@ export function setupScenario(sim, key, seed = 1, overrides = {}) {
     const h = side / 2, c = size / 2;
     return { x0: c - h, x1: c + h, y0: c - h, y1: c + h };
   };
-  sim.__S.spawnBox = sc.cluster ? { pellet: boxOf(sc.cluster), player: boxOf(sc.cluster) }
+  // Clustered spawns need the hook build.mjs adds; an unpatched module (see
+  // head-check.mjs) can only run the scenarios that spawn where the game does.
+  const box = sc.cluster ? { pellet: boxOf(sc.cluster), player: boxOf(sc.cluster) }
     : sc.playerCluster ? { player: boxOf(sc.playerCluster) } : null;
+  if (sim.__S) sim.__S.spawnBox = box;
+  else if (box) throw new Error(`scenario ${key} needs a build.mjs build`);
 
   const world = sim.createWorld(seed, {
     size, pellets: sc.pellets, viruses: sc.viruses ?? VIRUSES, botLevel: sc.botLevel || "hard"
@@ -64,7 +68,7 @@ export function setupScenario(sim, key, seed = 1, overrides = {}) {
   // Only the initial orbs are clustered; refills land where the game puts
   // them. (Clustering the refills too turns the first cell big enough to
   // cover the square into a fountain that eats every refill as it lands.)
-  if (sc.cluster) sim.__S.spawnBox = { player: boxOf(sc.cluster) };
+  if (sc.cluster) sim.__S.spawnBox = { player: boxOf(sc.cluster) };   // (sim.__S exists: checked above)
 
   const humans = sc.driver !== "bots";
   for (let i = 0; i < sc.players; i++) {

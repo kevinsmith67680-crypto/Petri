@@ -3,7 +3,44 @@
 Audited at `d93f567` on `claude/nice-keller-z8vfyf`. No game code was changed.
 The benchmarks and correctness checks behind every figure here are in
 [`bench/spatial/`](../bench/spatial/README.md), and their raw output is in
-`bench/spatial/results/`.
+`bench/spatial/results/`. File and line references are to `d93f567`. The
+branch moved on during the audit; what still holds at the head is in the next
+section.
+
+## Status at the branch head (`a8319cc`)
+
+Thirteen commits landed while the audit ran: Poisson-disc orb sowing, a
+closing zone, a hold on the starting ring, and input changes. Unpatched
+modules at both revisions were re-checked with `bench/spatial/head-check.mjs`
+(`results/head-check.txt`).
+
+| | `d93f567` (audited) | `a8319cc` (head) |
+|---|---|---|
+| `eatPellets`, `cellCombat`, `forEachPelletNear`, `eatViruses`, `feedViruses` | — | byte-identical |
+| **B1**: moving pellets skipped | reproduces | **still reproduces**: a blob 15 units into a 26.5-unit reach is not eaten |
+| **B2**: index after `resetArena` | 400 stale entries, ghost orbs | **fixed** by `adb6295`, which empties the index and re-sows it inside `resetArena` (`sim.js:1595-1596` at head) |
+| Standard config, unpatched, bot AI included, median of 3 runs | 11.3 ms (p99 22.3) | 10.5 ms (p99 18.8): same picture, within noise |
+| Snapshot spatial logic (`encodeSnapshot`) | — | unchanged; fields added only |
+| Practice-mode culling (M-2) | absent | still absent (`local.js:65`, `render.js:269`) |
+| `dt` clamp (R1) | 250 ms | unchanged (`server/index.js:2123`) |
+
+What that changes below:
+
+- **C-1 still applies unchanged.** At the head, the end-of-tick rebuild is at
+  `sim.js:1566` and the advance loop at `1461`.
+- **C-2 is no longer needed.**
+- **H-2 needs one adaptation.** `sowOrbs` (`sim.js:445` at head) adds each new
+  orb to the grid as it places it (`gridInsert`), so the next dart can keep
+  its distance. A CSR layout is fixed between rebuilds, so it would need a
+  small overflow list that queries also scan and that is folded in once it
+  grows. This variant was not prototyped against the head.
+- **New linear scan at the head (Low).** `underCell` (`sim.js:479`) tests every
+  cell in the arena for every dart `sowOrbs` throws, and the zone can push
+  that to 60 darts per orb. H-1's cell grid would serve it as well. Not
+  measured separately.
+
+The verdict is unchanged: B1 is still present at the head, and it fails the
+critical requirement on its own.
 
 ## Verdict: FAIL
 
@@ -632,7 +669,9 @@ Raw output: `results/correctness.txt`.
 
 **FAIL.** The implementation has confirmed correctness problems that need
 changes: valid collisions are missed (B1), and the index points at the
-previous round (B2). That fails the brief's critical requirement.
+previous round (B2). That fails the brief's critical requirement. At the
+branch head B2 has since been fixed upstream, but B1 remains, and it is enough
+on its own for this verdict.
 
 The verdict is about *when* the index is used, not *what* the index is:
 
@@ -649,9 +688,10 @@ The verdict is about *when* the index is used, not *what* the index is:
 
 Order of work:
 
-1. **C-1 and C-2:** two one-line fixes, no gameplay change beyond eating what
-   the rules already say is eaten.
-2. **H-2 (CSR layout):** pays for C-1 and more.
+1. **C-1, plus C-2 if working from `d93f567`:** one-line fixes, with no
+   gameplay change beyond eating what the rules already say is eaten.
+2. **H-2 (CSR layout):** pays for C-1 and more. At the head it also needs the
+   overflow list for `sowOrbs`.
 3. **H-1:** only with its lockstep test alongside.
 
 The rest is optional.
