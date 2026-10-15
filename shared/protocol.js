@@ -46,7 +46,12 @@ export const WORLD_LIMIT = MAX_WORLD;
 // A page from before that would be refused every ticket and retry until it
 // gave up; told its version is stale, it asks the player to reload instead.
 // 11: the closing zone, behind FLAG_ZONE after the round block.
-export const PROTOCOL_VERSION = 11;
+//
+// 12: input acknowledgement and own-cell motion, for reconciliation. Aims and
+// actions carry a sequence number; the snapshot says which one its tick used
+// and how long before the tick it arrived, and carries the launch velocity and
+// steering state of the viewer's own cells. Time is an f64 (see the header).
+export const PROTOCOL_VERSION = 12;
 
 export const MSG = {
   JOIN: "join",        // text
@@ -91,7 +96,15 @@ const PELLET_MOVING = 1 << 2;
 export const KEYFRAME_TICKS = 100;  // 5s at 20Hz
 export const BOARD_TICKS = 10;      // leaderboard at 2Hz; it changes slowly
 
+// The viewer's own cells also carry their motion state, which is what lets the
+// client replay its unacknowledged input from the server's position instead of
+// guessing. Heading components are in [-1, 1]; speed is units per second.
+const STEER_SCALE = 32767;
+const SPEED_SCALE = 16;
+const NO_STEER = 0xffff;   // speed sentinel: the cell has not been steered yet
+
 // Byte costs per record, used by Reader.expect() to reject absurd counts.
+// A cell is 13 bytes, or 23 with motion; the smaller is the safe lower bound.
 const CELL_BYTES = 13;
 const PELLET_BYTES = 10;
 const REMOVE_BYTES = 4;
@@ -116,14 +129,23 @@ const readBox = r => ({ x0: r.u16(), y0: r.u16(), x1: r.u16(), y1: r.u16() });
 
 // ── client -> server ────────────────────────────────────────────────────────
 
-export function encodeAim(dx, dy) {
-  return new Writer(8).u8(MSG.AIM).i16(dx).i16(dy).bytes();
+// `seq` numbers each aim so the snapshot can say which one the server has
+// acted on. 16 bits wrap after half an hour at 30Hz; the client only ever
+// looks a second or so back, and 0 is reserved for "none yet".
+export function encodeAim(dx, dy, seq = 0) {
+  return new Writer(8).u8(MSG.AIM).i16(dx).i16(dy).u16(seq).bytes();
 }
 
-export function encodeAction(action) {
+// An action carries the aim it was made with, numbered like any other aim.
+// Splits go where that aim points, not wherever the last aim sent at 30Hz
+// happened to, and the action is acknowledged in the same breath as the aim:
+// once a snapshot has acted on the number, it has acted on the action. Sent
+// separately, a tick could fall between the two and the client would drop the
+// pieces it was showing before the server's arrived.
+export function encodeAction(action, dx = 0, dy = 0, seq = 0) {
   const idx = ACTIONS.indexOf(action);
   if (idx < 0) return null;
-  return new Writer(4).u8(MSG.ACTION).u8(idx).bytes();
+  return new Writer(8).u8(MSG.ACTION).u8(idx).i16(dx).i16(dy).u16(seq).bytes();
 }
 
 // Throws on anything malformed. The server treats a throw as "close the
@@ -136,16 +158,20 @@ export function decodeClientMessage(buffer) {
   if (type === MSG.AIM) {
     const x = r.i16();
     const y = r.i16();
+    const seq = r.u16();
     r.end();
-    return { type, x, y };
+    return { type, x, y, seq };
   }
 
   if (type === MSG.ACTION) {
     const idx = r.u8();
+    const x = r.i16();
+    const y = r.i16();
+    const seq = r.u16();
     r.end();
     const action = ACTIONS[idx];
     if (!action) throw new RangeError("unknown action");
-    return { type, action };
+    return { type, action, x, y, seq };
   }
 
   throw new RangeError(`unknown message type ${type}`);
@@ -174,7 +200,13 @@ export function createClientState(stagger = 0) {
 // to exist because area-of-interest culling keys off the viewer's position,
 // and a dead player has none — without an eye a spectator would be sent an
 // empty arena.
-export function encodeSnapshot(world, player, cs, round = null, eye = null) {
+//
+// `tickAt` is when this tick was stepped, on the same millisecond clock the
+// server stamped `player.inputAt` with when the aim arrived. The difference is
+// what lets the client place this snapshot on its own timeline without knowing
+// its ping. Omitted, the snapshot acknowledges nothing and the client falls
+// back to correcting onto the server's position as it stands.
+export function encodeSnapshot(world, player, cs, round = null, eye = null, tickAt = null) {
   const view = eye && eye.alive && eye.cells.length ? eye : player;
   const spectating = view !== player;
   const keyframe = cs.sinceKeyframe <= 0;
@@ -247,9 +279,20 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   w.u8(MSG.SNAPSHOT);
   w.u8((keyframe ? FLAG_KEYFRAME : 0) | (withBoard ? FLAG_BOARD : 0) | (zone ? FLAG_ZONE : 0));
   w.u32(world.tick);
-  w.f32(world.time);
+  // An f64, not an f32. world.time counts from the room's creation and a room
+  // lives as long as the process, so an f32 lost precision with uptime: a 16ms
+  // step after two days and 62ms after a week, longer than a tick. The client
+  // interpolates other players on this clock, so they got steadily jerkier the
+  // longer the server had been up.
+  w.f64(world.time);
   // Rooms differ in size, so the client is told rather than assuming.
   w.u16(world.size);
+
+  // Which aim this tick acted on, and how long before the tick it arrived.
+  // Always the viewer's own, even while spectating someone else.
+  const acked = tickAt !== null && player.inputSeq ? player.inputSeq : 0;
+  w.u16(acked);
+  w.u16(acked ? clampU16(Math.round(tickAt - player.inputAt)) : 0);
 
   // me. Alive is 1; dead is 0, or 2 when the closing zone drained them, so
   // the death card can say which on the same frame that shows the death.
@@ -292,15 +335,29 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null) {
   // cells
   w.u16(cells.length);
   for (const { c, p } of cells) {
+    const mine = p.id === view.id;
     w.u32(c.id);
     w.u16(Math.round(c.x));
     w.u16(Math.round(c.y));
     w.u16(clampU16(Math.round(c.mass)));
     w.u16(p.nid);
     w.u8(
-      (p.id === view.id ? CELL_MINE : 0) |
-      (p.id === view.id && world.time < c.mergeAt ? CELL_COOLDOWN : 0)
+      (mine ? CELL_MINE : 0) |
+      (mine && world.time < c.mergeAt ? CELL_COOLDOWN : 0)
     );
+    if (mine) {
+      // Launch velocity from a split or a burst. Without it a confirmed split
+      // piece was predicted as standing still while the server flew it, and
+      // was dragged along behind until the correction caught up.
+      w.i16(Math.round(c.vx || 0));
+      w.i16(Math.round(c.vy || 0));
+      // Steering state, so a replay resumes the turn the cell is part-way
+      // through rather than snapping to the new heading.
+      const steered = c.sp !== undefined;
+      w.i16(steered ? Math.round(c.hx * STEER_SCALE) : 0);
+      w.i16(steered ? Math.round(c.hy * STEER_SCALE) : 0);
+      w.u16(steered ? Math.min(NO_STEER - 1, Math.round(c.sp * SPEED_SCALE)) : NO_STEER);
+    }
   }
 
   // pellets added / removed
@@ -365,9 +422,11 @@ export function decodeSnapshot(buffer) {
 
   const flags = r.u8();
   const tick = r.u32();
-  const time = r.f32();
+  const time = r.f64();
   const world = r.u16();
   if (!Number.isFinite(time)) throw new RangeError("bad time");
+  const ack = r.u16();
+  const ackAge = r.u16();
 
   const life = r.u8();
   const me = {
@@ -408,7 +467,20 @@ export function decodeSnapshot(buffer) {
     const m = r.u16();
     const o = r.u16();
     const f = r.u8();
-    cells.push({ i: id, x, y, m, o, s: f & CELL_COOLDOWN ? 1 : 0, mine: !!(f & CELL_MINE) });
+    const cell = { i: id, x, y, m, o, s: f & CELL_COOLDOWN ? 1 : 0, mine: !!(f & CELL_MINE) };
+    if (cell.mine) {
+      cell.vx = r.i16();
+      cell.vy = r.i16();
+      const hx = r.i16(), hy = r.i16(), sp = r.u16();
+      // Left undefined when unsteered, which is what advanceCell reads as
+      // "adopt the target heading outright" — the same as the server will.
+      if (sp !== NO_STEER) {
+        cell.hx = hx / STEER_SCALE;
+        cell.hy = hy / STEER_SCALE;
+        cell.sp = sp / SPEED_SCALE;
+      }
+    }
+    cells.push(cell);
   }
 
   const added = [];
@@ -449,7 +521,7 @@ export function decodeSnapshot(buffer) {
 
   return {
     keyframe: !!(flags & FLAG_KEYFRAME),
-    tick, time, world, me, round, zone, spectating, eyeNid,
+    tick, time, world, ack, ackAge, me, round, zone, spectating, eyeNid,
     names, cells, added, removed, viruses, board
   };
 }

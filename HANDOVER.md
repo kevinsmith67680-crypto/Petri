@@ -153,6 +153,12 @@ it the game still plays and still settles — the stake is forfeit either way �
 such match record fails to write and logs `recordMatch:`, so it is missing from the
 player's history.
 
+**This branch: `PROTOCOL_VERSION` 11 → 12.** The netcode rework: aims and actions are
+numbered and acknowledged, actions carry their aim, own cells carry their motion,
+snapshot time is an f64 (README, "Reconciliation by input replay"). Same consequence as
+every bump: open tabs are told to reload. Deploy between rounds. Nothing needs
+configuring.
+
 **This branch: `PROTOCOL_VERSION` 10 → 11.** The snapshot carries the closing zone
 behind a new flag, and the player's `alive` byte says when the zone killed them. Same
 consequence as every bump: open tabs are told to reload. Deploy between rounds.
@@ -259,7 +265,7 @@ the tick keeps sending snapshots. The tick's countdown branch is guarded with
 |---|---|
 | Without `DATABASE_URL`, `/api/stats` returns each match's `accountId` and `killerId` — another player's account id. The Postgres backend lists its columns and does not | `server/db/memory.js`, `getMatches()` |
 | Shared links have no preview image. `og:image` must be an absolute URL and the game answers on two hosts, so it needs a decision on which | `index.html` head |
-| `test/control.test.js` failed once in about seventeen runs and never again. It is timing-based; the failure was not captured | `test/control.test.js` |
+| `test/control.test.js` failed once in about seventeen runs. A likely cause, now fixed: its early harness connections were never closed, and their stall watchdogs "reconnected" mid-way through later tests that count sockets once the file had run 2.5s. Watch for a recurrence | `test/control.test.js` |
 | Accounts created before the age gate have `date_of_birth` NULL and are not gated | `server/db/migrations/006_age_gate.sql` |
 | A compiled Python file was committed with the manual script | `scripts/__pycache__/` |
 | Two unreferenced images ship in the container, 868 KB | `assets/ChatGPT Image Sep 12…png`, `assets/image-1789204331359.png` |

@@ -326,6 +326,245 @@ check("but a reversal completes in about a third of a second",
 // From here on the tests count sockets and reconnections.
 for (const c of harnessed) c.close();
 
+console.log("\n-- over a real link --");
+
+// Everything above runs with no latency at all, where a client that ignores
+// the round trip and one that hides it look exactly alike. These run the real
+// client against the real simulation over a modelled link — a round trip,
+// jitter, and ordered delivery as over TCP — on a virtual clock.
+{
+  const { decodeClientMessage, MSG } = await import("../shared/protocol.js");
+  const { totalMass } = await import("../shared/sim.js");
+  const realNow = performance.now;
+
+  function link({ rtt, jitter = 0, hz = 30, mass = 40, worldTime = 0, stallAt = null, arena = {} }) {
+    let now = 0;
+    performance.now = () => now;
+    let seed = 9;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+    const extra = () => -Math.log(1 - rnd()) * jitter;
+
+    sockets.length = 0;
+    const world = createWorld(5, { ...MODES[0].world, ...arena });
+    world.time = worldTime;
+    const me = addPlayer(world, { id: "me", name: "Me" });
+    me.cells[0].x = 4400; me.cells[0].y = 4400; me.cells[0].mass = mass;
+    const cs = createClientState(0);
+    const conn = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
+    const sock = sockets[0];
+    sock.fire("open");
+    sock.fire("message", { data: JSON.stringify({ type: "welcome", nid: me.nid, tickHz: hz }) });
+
+    const up = [], down = [], afterTick = [];
+    let upAt = 0, downAt = 0, lastSent = -1, read = 0, tickAt = 0, nextTick = 0, nextFrame = 0;
+    // `before` runs ahead of each client frame, as input does; `after` sees
+    // what that frame drew.
+    function run(ms, before, after) {
+      const end = now + ms;
+      while (now < end) {
+        now = Math.min(nextTick, nextFrame, up.length ? up[0].at : Infinity, down.length ? down[0].at : Infinity);
+        if (up.length && up[0].at === now) {
+          // As server/index.js does with every binary message.
+          const msg = decodeClientMessage(up.shift().data);
+          setAim(world, "me", msg.x, msg.y);
+          me.inputSeq = msg.seq;
+          me.inputAt = now;
+          if (msg.type === MSG.ACTION) queueAction(world, "me", msg.action);
+        } else if (down.length && down[0].at === now) {
+          sock.fire("message", { data: down.shift().data });
+        } else if (now === nextTick) {
+          stepWorld(world, tickAt ? (now - tickAt) / 1000 : 1 / hz);
+          tickAt = now;
+          for (const fn of afterTick) fn();
+          downAt = Math.max(downAt, now + rtt / 2 + extra());
+          if (stallAt !== null && now >= stallAt && now < stallAt + 300) {
+            downAt = Math.max(downAt, stallAt + 300 + rtt / 2);
+          }
+          down.push({ at: downAt, data: encodeSnapshot(world, me, cs, null, null, now).slice().buffer });
+          nextTick += 1000 / hz;
+        } else {
+          before?.(now);
+          conn.update(1 / 60);
+          // Written in the same instant, so they leave and arrive together.
+          for (; read < sock.sent.length; read++) {
+            if (typeof sock.sent[read] === "string") continue;
+            if (now !== lastSent) upAt = Math.max(upAt, now + rtt / 2 + extra());
+            lastSent = now;
+            up.push({ at: upAt, data: sock.sent[read] });
+          }
+          after?.(now, conn.getView());
+          nextFrame += 1000 / 60;
+        }
+      }
+    }
+    const done = () => { conn.close(); performance.now = realNow; };
+    return { world, me, conn, run, done, afterTick };
+  }
+
+  // Prediction used to correct onto the server's position advanced only by
+  // the time since the packet arrived. That position already answered input
+  // from a round trip earlier, so in steady motion the cell was pulled back
+  // onto it: drawn a full round trip late, whatever prediction showed for a
+  // moment after each twitch.
+  {
+    const L = link({ rtt: 200 });
+    let drawn = null;
+    L.run(3000, () => L.conn.sendAim(600, 0), (t, v) => { drawn = v; });
+    const server = L.me.cells[0];
+    const speed = Math.hypot(server.hx * server.sp, server.hy * server.sp);
+    // The server is an uplink behind the player's input, so a cell drawn
+    // where the input puts it is ahead of the server by about that much.
+    const lead = drawn.me.x - server.x;
+    check("over a 200ms link your cell is drawn ahead of the server, not behind it",
+      lead > speed * 0.06 && lead < speed * 0.2,
+      `${lead.toFixed(0)} units ahead at ${speed.toFixed(0)} units/s (an uplink is ${(speed * 0.1).toFixed(0)})`);
+    L.done();
+  }
+
+  // A split showed a provisional piece at once, but the parent's mass was then
+  // eased back toward the server's, which had not split yet — so for a round
+  // trip the parent grew back to nearly full size beside its own half.
+  {
+    const L = link({ rtt: 200, mass: 400 });
+    L.run(1000, () => L.conn.sendAim(600, 0));
+    let split = false, maxRatio = 0, fewest = Infinity, handover = 0, prev = null;
+    let serverMass = totalMass(L.me);
+    L.afterTick.push(() => { serverMass = totalMass(L.me); });
+    L.run(1000, () => {
+      L.conn.sendAim(600, 0);
+      if (!split) { L.conn.sendAction("split"); split = true; }
+    }, (t, v) => {
+      const mine = v.cells.filter(c => c.mine);
+      maxRatio = Math.max(maxRatio, mine.reduce((s, c) => s + c.m, 0) / serverMass);
+      fewest = Math.min(fewest, mine.length);
+      // The moment the server's piece replaces the provisional one: it should
+      // take over where the provisional one was drawn.
+      const was = prev && prev.find(c => c.i < 0);
+      const now = mine.find(c => c.i >= 0 && !(prev || []).some(p => p.i === c.i));
+      if (was && now && !mine.some(c => c.i === was.i)) {
+        handover = Math.max(handover, Math.hypot(now.x - was.x, now.y - was.y));
+      }
+      prev = mine;
+    });
+    check("a split is never drawn with more mass than the server holds",
+      maxRatio < 1.05, `${(maxRatio * 100).toFixed(0)}% of the server's mass at most`);
+    check("both halves stay on screen until the server confirms them", fewest === 2, `${fewest} at fewest`);
+    check("the server's piece takes over where the provisional one was",
+      handover > 0 && handover < 30, `${handover.toFixed(1)} units`);
+    L.done();
+  }
+
+  // A split replayed from each snapshot used to re-decide which cells split
+  // from that snapshot's masses. After a burst the pieces are all much of a
+  // size, so an orb or two reordered them, and a provisional piece was handed
+  // to a different parent between one replay and the next — and jumped across
+  // the cluster to follow it.
+  {
+    // Nothing to eat, so the only mass that changes is the mass changed here.
+    const L = link({ rtt: 200, arena: { pellets: 0, viruses: 0 } });
+    // Ten pieces a unit apart in mass, with room for only six to split. The
+    // sixth and seventh heaviest sit on opposite sides of the ring, so a piece
+    // handed from one to the other has far to go.
+    const slot = [6, 1, 2, 3, 4, 5, 0, 7, 8, 9];
+    L.me.cells = [];
+    for (let i = 0; i < 10; i++) {
+      const a = (slot[i] / 10) * Math.PI * 2;
+      L.me.cells.push({
+        id: 9000 + i, x: 4400 + Math.cos(a) * 400, y: 4400 + Math.sin(a) * 400,
+        mass: 45 - i, ci: 0, vx: 0, vy: 0, mergeAt: L.world.time + 100
+      });
+    }
+    L.run(200, () => L.conn.sendAim(600, 0));
+    // The seventh — left out at the keypress — eats its way past the sixth
+    // while the split is on its way to the server.
+    const seventh = L.me.cells.find(c => c.id === 9006);
+    let pressed = false, worst = 0, prev = null;
+    L.afterTick.push(() => { if (pressed) seventh.mass += 1.5; });
+    L.run(400, () => {
+      L.conn.sendAim(600, 0);
+      if (!pressed) { L.conn.sendAction("split"); pressed = true; }
+    }, (t, v) => {
+      // Matched to the nearest unconfirmed piece of the frame before, not by
+      // id: a piece that changed parents can come back under a new one.
+      const pieces = v.cells.filter(c => c.mine && c.i < 0);
+      if (prev && prev.length) {
+        for (const c of pieces) {
+          let near = Infinity;
+          for (const p of prev) near = Math.min(near, Math.hypot(c.x - p.x, c.y - p.y));
+          worst = Math.max(worst, near);
+        }
+      }
+      prev = pieces;
+    });
+    check("an unconfirmed split piece stays with the cell it split from",
+      worst > 0 && worst < 40, `${worst.toFixed(0)} units in one frame at worst`);
+    L.done();
+  }
+
+  // Other players. The render clock used to be pinned to the latest-arriving
+  // packet of the last second, so it stepped backwards whenever one came in
+  // late, and everyone froze while waiting for a late packet. And it read
+  // time as an f32, which a week into a room's life has 62ms steps — longer
+  // than a tick.
+  const circling = L => {
+    const other = addPlayer(L.world, { id: "other", name: "Other" });
+    const at = t => ({ x: 4400 + Math.cos(t * 1.2) * 400, y: 4400 + Math.sin(t * 1.2) * 400 });
+    const place = () => {
+      const p = at(L.world.time);
+      other.cells[0].x = p.x; other.cells[0].y = p.y;
+      other.cells[0].mass = totalMass(L.me);   // equal mass: nobody eats anybody
+    };
+    place();
+    L.afterTick.push(place);
+    let freezes = 0, backwards = 0, frames = 0, last = null, lastStep = null, lurch = 0;
+    const watch = (t, v) => {
+      const c = v.cells.find(x => x.o === other.nid);
+      if (!c) { last = null; return; }
+      if (last) {
+        const step = { x: c.x - last.x, y: c.y - last.y };
+        frames++;
+        if (Math.hypot(step.x, step.y) < 0.05) freezes++;
+        else if (lastStep && step.x * lastStep.x + step.y * lastStep.y < 0) backwards++;
+        // The biggest change in movement from one frame to the next. The true
+        // path is a smooth circle, eight units a frame, turning a fraction of
+        // a unit per frame.
+        if (lastStep) lurch = Math.max(lurch, Math.hypot(step.x - lastStep.x, step.y - lastStep.y));
+        lastStep = step;
+      }
+      last = { x: c.x, y: c.y };
+    };
+    return { watch, result: () => ({ freezes, backwards, frames, lurch }) };
+  };
+
+  {
+    const L = link({ rtt: 120, jitter: 8, worldTime: 7 * 24 * 3600 });
+    const o = circling(L);
+    L.run(1000);
+    L.run(5000, null, o.watch);
+    const r = o.result();
+    check("a week into a room, other players never freeze under jitter",
+      r.frames > 250 && r.freezes === 0, `${r.freezes} frozen of ${r.frames}`);
+    check("and never step backwards", r.backwards === 0, `${r.backwards} backward steps`);
+    check("or lurch", r.lurch < 3, `${r.lurch.toFixed(1)} units change of step at worst`);
+    L.done();
+  }
+
+  // Over TCP one lost packet holds up everything behind it and then delivers
+  // the lot at once. Counted packet by packet, one such hiccup tripled the
+  // buffer — how far in the past everyone is drawn — for seconds after.
+  {
+    const L = link({ rtt: 100, jitter: 4, stallAt: 3000 });
+    const o = circling(L);
+    L.run(2900);
+    const before = L.conn.stats().interpMs;
+    L.run(1500);
+    const after = L.conn.stats().interpMs;
+    check("one stall does not leave everyone drawn further in the past",
+      after < before * 1.3, `buffer ${before}ms before, ${after}ms a second after`);
+    L.done();
+  }
+}
+
 console.log("\n-- a dropped connection recovers --");
 
 // There was no reconnection logic at all: one blip and the session was over

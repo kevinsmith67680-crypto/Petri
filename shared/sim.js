@@ -735,13 +735,42 @@ function resolveOwnCells(world, ent) {
         return resolveOwnCells(world, ent);
       }
 
-      if (!mergeable && d < ra + rb) {
-        const push = (ra + rb - d) / 2;
-        const nx = dx / d, ny = dy / d;
-        const wa = b.mass / (a.mass + b.mass), wb = a.mass / (a.mass + b.mass);
-        a.x -= nx * push * wa * 0.8; a.y -= ny * push * wa * 0.8;
-        b.x += nx * push * wb * 0.8; b.y += ny * push * wb * 0.8;
-      }
+      if (!mergeable && d < ra + rb) pushApart(a, b, dx, dy, d, ra, rb, SEPARATE_PER_TICK);
+    }
+  }
+}
+
+// Own cells that cannot merge yet are pushed apart, closing this share of the
+// overlap each tick.
+const SEPARATE_PER_TICK = 0.8;
+function pushApart(a, b, dx, dy, d, ra, rb, k) {
+  const push = (ra + rb - d) / 2;
+  const nx = dx / d, ny = dy / d;
+  const wa = b.mass / (a.mass + b.mass), wb = a.mass / (a.mass + b.mass);
+  a.x -= nx * push * wa * k; a.y -= ny * push * wa * k;
+  b.x += nx * push * wb * k; b.y += ny * push * wb * k;
+}
+
+// The same push for the client's prediction, which has to keep split pieces
+// apart exactly as the server will or it is corrected on every snapshot.
+// Merging is left to the server: it moves mass, and a wrong guess at that is
+// far more visible than a piece that overlaps for a frame.
+//
+// `steps` is how many server ticks `dt` spans. The push is a per-tick
+// relaxation, not a rate, so a client stepping at its frame rate scales it to
+// close the same share of the overlap per second as the server does.
+export function separateCells(cells, locked, steps = 1) {
+  const k = steps === 1
+    ? SEPARATE_PER_TICK
+    : 2 * (1 - Math.pow(1 - SEPARATE_PER_TICK / 2, steps));
+  for (let i = 0; i < cells.length; i++) {
+    for (let j = i + 1; j < cells.length; j++) {
+      const a = cells[i], b = cells[j];
+      if (!locked(a) && !locked(b)) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.hypot(dx, dy) || 0.01;
+      const ra = radiusOf(a.mass), rb = radiusOf(b.mass);
+      if (d < ra + rb) pushApart(a, b, dx, dy, d, ra, rb, k);
     }
   }
 }

@@ -46,6 +46,7 @@ export class Writer {
   u32(v) { this.ensure(4); this.view.setUint32(this.o, clampU32(v), true); this.o += 4; return this; }
   i16(v) { this.ensure(2); this.view.setInt16(this.o, Math.max(-32768, Math.min(32767, v | 0)), true); this.o += 2; return this; }
   f32(v) { this.ensure(4); this.view.setFloat32(this.o, v, true); this.o += 4; return this; }
+  f64(v) { this.ensure(8); this.view.setFloat64(this.o, v, true); this.o += 8; return this; }
 
   // Length-prefixed UTF-8, capped so a single string can never dominate a frame.
   str(s, maxBytes = 64) {
@@ -100,6 +101,7 @@ export class Reader {
   u32() { this.need(4); const v = this.view.getUint32(this.o, true); this.o += 4; return v; }
   i16() { this.need(2); const v = this.view.getInt16(this.o, true); this.o += 2; return v; }
   f32() { this.need(4); const v = this.view.getFloat32(this.o, true); this.o += 4; return v; }
+  f64() { this.need(8); const v = this.view.getFloat64(this.o, true); this.o += 8; return v; }
 
   str() {
     const n = this.u8();

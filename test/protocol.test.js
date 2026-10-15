@@ -36,11 +36,12 @@ function throws(label, fn) {
 console.log("\n-- codec --");
 
 const w = new Writer(8);
-w.u8(200).u16(60000).u32(4000000000).i16(-1234).f32(1.5).str("hello");
+w.u8(200).u16(60000).u32(4000000000).i16(-1234).f32(1.5).f64(612345.678901).str("hello");
 const r = new Reader(w.bytes());
 check("round-trips scalars",
   r.u8() === 200 && r.u16() === 60000 && r.u32() === 4000000000 &&
-  r.i16() === -1234 && Math.abs(r.f32() - 1.5) < 1e-6 && r.str() === "hello");
+  r.i16() === -1234 && Math.abs(r.f32() - 1.5) < 1e-6 && r.f64() === 612345.678901 &&
+  r.str() === "hello");
 check("consumes exactly", r.remaining === 0);
 
 throws("reading past the end throws", () => new Reader(new Uint8Array(2)).u32());
@@ -68,11 +69,18 @@ check("honest count accepted", (() => {
 
 console.log("\n-- client -> server --");
 
-const aim = decodeClientMessage(encodeAim(-3000, 2500));
-check("aim round-trips", aim.x === -3000 && aim.y === 2500);
-check("aim frame is 5 bytes", encodeAim(1, 1).length === 5, `${encodeAim(1,1).length}`);
+const aim = decodeClientMessage(encodeAim(-3000, 2500, 65535));
+check("aim round-trips with its number", aim.x === -3000 && aim.y === 2500 && aim.seq === 65535);
+check("aim frame is 7 bytes", encodeAim(1, 1, 1).length === 7, `${encodeAim(1, 1, 1).length}`);
 check("action round-trips", decodeClientMessage(encodeAction("split")).action === "split");
+// The action carries its aim and number, so it is acknowledged with them.
+const act = decodeClientMessage(encodeAction("eject", 120, -340, 41));
+check("an action carries the aim it was made with",
+  act.action === "eject" && act.x === 120 && act.y === -340 && act.seq === 41,
+  JSON.stringify(act));
+check("action frame is 8 bytes", encodeAction("split", 1, 1, 1).length === 8);
 check("unknown action not encodable", encodeAction("nuke") === null);
+throws("an action without its aim is rejected", () => decodeClientMessage(new Uint8Array([3, 0])));
 throws("unknown action index rejected", () => decodeClientMessage(new Uint8Array([3, 99])));
 throws("unknown message type rejected", () => decodeClientMessage(new Uint8Array([77, 0])));
 throws("truncated aim rejected", () => decodeClientMessage(new Uint8Array([2, 0])));
@@ -379,10 +387,10 @@ console.log("\n-- the closing zone --");
     closed.state === ZONE_CLOSED && closed.secs === 0 &&
     JSON.stringify(closed.now) === JSON.stringify(z.to));
 
-  // Byte 40 is the zone's state: past the header (12), the player block (23)
-  // and the round block (5).
+  // Byte 48 is the zone's state: past the header (16), the acknowledgement
+  // (4), the player block (23) and the round block (5).
   const bad = at(z.endAt + 1).bytes.slice();
-  bad[40] = 9;
+  bad[48] = 9;
   throws("an unknown zone state is refused", () => decodeSnapshot(bad));
   // How a death is reported: the zone's own, so the card can say so.
   zp.alive = false; zp.zoned = true;
@@ -397,6 +405,61 @@ console.log("\n-- the closing zone --");
 
   zw.zone = null;
   check("and gone once the round clears it", at(z.endAt + 2).snap.zone === null);
+}
+
+console.log("\n-- what reconciliation needs --");
+
+{
+  // A room lives as long as the process, and world.time counts from its
+  // creation. As an f32 the time lost precision with uptime — a 62ms step after
+  // a week, longer than a tick — and other players were interpolated on it.
+  const w = createWorld(31, { size: 8800, pellets: 0, viruses: 0 });
+  const me = addPlayer(w, { id: "me", name: "Me" });
+  w.time = 7 * 24 * 3600 + 0.0123;
+  const a = decodeSnapshot(encodeSnapshot(w, me, createClientState(0)));
+  stepWorld(w, 1 / 30);
+  const b = decodeSnapshot(encodeSnapshot(w, me, createClientState(0)));
+  check("time survives a week of uptime exactly", a.time === 7 * 24 * 3600 + 0.0123, `${a.time}`);
+  check("and consecutive ticks a week in are a tick apart",
+    Math.abs(b.time - a.time - 1 / 30) < 1e-9, `${((b.time - a.time) * 1000).toFixed(3)} ms`);
+
+  // Nothing to acknowledge until the server is told when the tick ran.
+  check("no tick time, nothing acknowledged", a.ack === 0 && a.ackAge === 0);
+  me.inputSeq = 513;
+  me.inputAt = 1000;
+  const acked = decodeSnapshot(encodeSnapshot(w, me, createClientState(0), null, null, 1042.4));
+  check("the snapshot names the aim its tick used", acked.ack === 513, `${acked.ack}`);
+  check("and how long before the tick it arrived", acked.ackAge === 42, `${acked.ackAge}`);
+
+  // Own cells carry their motion; nobody else's do.
+  const other = addPlayer(w, { id: "other", name: "Other" });
+  me.cells[0].x = 4000; me.cells[0].y = 4000; me.cells[0].mass = 200;
+  other.cells[0].x = 4300; other.cells[0].y = 4000;
+  // A cell dealt at the whistle has never been stepped. The server will
+  // give it the target heading outright, so the client must not ease it from
+  // a standstill instead.
+  const nw = createWorld(32, { size: 8800, pellets: 0, viruses: 0 });
+  const newcomer = addPlayer(nw, { id: "new", name: "New" });
+  const fresh = decodeSnapshot(encodeSnapshot(nw, newcomer, createClientState(0))).cells.find(c => c.mine);
+  check("an unsteered cell is sent as unsteered",
+    fresh && fresh.hx === undefined && fresh.sp === undefined, JSON.stringify(fresh));
+
+  setAim(w, "me", 600, 0);
+  queueAction(w, "me", "split");
+  stepWorld(w, 1 / 30);
+  const snap = decodeSnapshot(encodeSnapshot(w, me, createClientState(0)));
+  const mine = snap.cells.filter(c => c.mine);
+  const piece = me.cells.find(c => c.vx);
+  const sent = mine.find(c => c.i === piece.id);
+  check("a split piece arrives with its launch velocity",
+    sent && Math.abs(sent.vx - piece.vx) <= 0.5 && Math.abs(sent.vy - piece.vy) <= 0.5,
+    sent ? `${sent.vx},${sent.vy} vs ${piece.vx.toFixed(1)},${piece.vy.toFixed(1)}` : "missing");
+  check("and with the steering it is part-way through",
+    sent && Math.abs(sent.hx - piece.hx) < 1e-4 && Math.abs(sent.sp - piece.sp) < 0.1,
+    sent ? `hx ${sent.hx} vs ${piece.hx}, sp ${sent.sp} vs ${piece.sp}` : "missing");
+  const theirs = snap.cells.find(c => !c.mine);
+  check("other players' cells carry none of it",
+    theirs && theirs.vx === undefined && theirs.hx === undefined, JSON.stringify(theirs));
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

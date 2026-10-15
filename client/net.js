@@ -1,8 +1,10 @@
 // ---------------------------------------------------------------------------
 // Network connection.
 //
-// The client never simulates. It sends an aim vector plus discrete actions,
-// and renders what the server tells it.
+// The client never decides anything. It sends an aim vector plus discrete
+// actions, and renders what the server tells it — its own cells predicted
+// ahead by replaying the input the server has not yet acted on, everyone
+// else interpolated a little in the past.
 //
 // Pellets now arrive as deltas, so this file keeps a cache and folds each
 // snapshot into it. Two details matter:
@@ -18,35 +20,55 @@
 // ---------------------------------------------------------------------------
 
 import {
-  MSG, decodeSnapshot, encodeAim, encodeAction, KEYFRAME_TICKS, PROTOCOL_VERSION
+  MSG, decodeSnapshot, encodeAim, encodeAction, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import {
-  TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed,
+  TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed, separateCells,
   EJECT_MASS, EJECT_KEEP, MAX_CELLS, PELLET_MASS, ORB_RADIUS,
   EJECT_SPEED, EJECT_OWNER_COOLDOWN
 } from "../shared/sim.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
-// between ticks. Expressed in TICKS, not milliseconds, because the server's
-// rate is announced in the welcome — at 30Hz the same buffer is 50ms.
+// between ticks: one tick, plus however late snapshots actually arrive.
 //
-// ADAPTIVE. A fixed 1.5 ticks spends 75ms of lag insuring against jitter that
-// a good connection does not have. The buffer only needs to cover the spread
-// in arrival times, so it tracks measured jitter and sits near the floor on a
-// steady link, widening only when packets actually arrive unevenly.
-const INTERP_MIN = 1.2;   // a hair over one tick: one late packet no longer stalls
-const INTERP_MAX = 2.5;
+// The render clock used to be pinned to the latest-arriving snapshot of the
+// last second, and jumped whenever that changed — backwards when a packet came
+// in late, forwards a second later when it left the window. Every jump moved
+// every other player on screen at once. It is now a clock that runs smoothly
+// and is eased toward its target, never stepped, so a late packet costs a
+// slightly longer buffer for a while instead of a visible lurch.
+//
+// The target sits one tick, plus the lateness that LATE_QUANTILE of recent
+// snapshots stayed within, behind the least-delayed one. Lateness is
+// measured from the least-delayed packet rather than averaged, because the
+// buffer has to cover the late ones, not the typical ones.
+const PLAYOUT_WINDOW_MS = 2000;
+const LATE_QUANTILE = 0.9;
+const PLAYOUT_MARGIN = 0.003;   // seconds, for timer slop on either end
+// How much faster or slower than real time the render clock may run while it
+// converges. Eight percent is not visible as a change of speed.
+const PLAYOUT_SLEW = 0.08;
+const PLAYOUT_SNAP = 0.25;      // seconds off target before it jumps instead
+// A snapshot later than the buffer allows used to freeze everyone until it
+// arrived. They are carried forward along their last motion for up to this
+// long instead, which on a straight path is exactly right.
+const EXTRAPOLATE_MAX = 0.1;
 
-// Aim is 5 bytes. Sending it faster than the tick is not wasted — it means
-// the server acts on a fresher vector the moment its tick comes round, which
-// removes up to half a tick of input lag for 50 bytes a second.
+// Aim is 7 bytes. Sending it as fast as the tick, unsynchronised, means the
+// server acts on a vector at most a tick old when its tick comes round.
 const AIM_HZ = 30;
 
 const TOMBSTONE_SEC = 1.0;                 // keep eaten pellets this long past death
 
-// How hard a wrong prediction is pulled back toward the server. Too low and
-// the client drifts; too high and every correction is a visible twitch.
-const CORRECT_PER_SEC = 6;
+// A correction is drawn as an offset that fades at this rate per second, not
+// as a jump, and not as a pull on the simulated cell — pulling it fed the
+// correction back into the aim and the speed.
+const OFFSET_DECAY = 10;
+
+// Inputs kept for replay. A second and a half at 30Hz: past that the link is
+// too far gone for the replay to mean anything.
+const MAX_INPUTS = 48;
+const MAX_PENDING = 32;
 
 // How long a connection may carry nothing at all before we treat it as gone.
 //
@@ -70,9 +92,12 @@ const JOIN_STALL_MS = 8000;
 // Ours, and deliberately outside FINAL_CLOSE so the usual retry path runs.
 const STALL_CODE = 4002;
 
-// Past this the client is not wrong, it is out of date — a split, a virus
-// pop, or a teleport after respawn. Snap rather than slide across the arena.
+// Past this the client is not wrong, it is out of date — a virus pop, or a
+// teleport after respawn. Snap rather than slide across the arena.
 const SNAP_ERROR = 220;
+
+// Own cells the server says cannot merge yet are pushed apart, as it does.
+const isLocked = c => c.s === 1;
 
 // Refusals from the matchmaker that asking again will not change. Anything
 // else — it was unreachable, busy, or the player's server was mid-restart —
@@ -136,9 +161,32 @@ export function createSocketConnection({
   const names = new Map();        // nid -> display name
   const colours = new Map();      // nid -> palette slot, sent alongside the name
   let board = [];
-  let clockOffset = null;
   let lastAimSent = 0;
   const pendingAim = { x: 0, y: 0 };
+
+  // The render clock for other players: renderTime = now + playOffset, in
+  // seconds on the server's clock. playTarget is where it is being eased to.
+  const arrivals = [];            // { at, offset, best } over PLAYOUT_WINDOW_MS
+  let playOffset = null;
+  let playTarget = null;
+  let playBest = null;            // offset of the least-delayed recent snapshot
+
+  // Every aim sent, numbered, until the server says a tick has used it. The
+  // server's answer to an input arrives a round trip after it was given, so
+  // its position is always that far behind what the player has asked for.
+  // Replaying these from its position is what puts the cell where the server
+  // is about to have it, instead of where it was.
+  let aimSeq = 0;
+  const inputs = [];              // { seq, at, x, y }
+  // Splits and ejects the server may not have acted on yet, replayed the same
+  // way, so a split cell stays split instead of growing back for a round trip
+  // while the server catches up.
+  const pendingActions = [];      // { id, kind, at, seq, aim }
+  let nextActionId = 1;
+  // Orbs eaten by prediction that the server may not have counted yet.
+  const pendingEats = [];         // { at, key, gain }
+  let rebase = null;              // newest snapshot not yet folded into prediction
+  let simAt = null;               // the time, in ms, predicted state stands at
   let myNid = null;
   let decodeErrors = 0;
   let serverHz = TICK_HZ;          // corrected by the welcome message
@@ -164,17 +212,23 @@ export function createSocketConnection({
   let lastPingAt = 0;
   let lastArrival = 0;
 
-  // Locally predicted positions for our own cells, keyed by cell id. This is
-  // what removes the round trip from the feel of the controls: we move now,
-  // and reconcile against the server as its snapshots arrive.
+  // Our own cells, predicted. This is what removes the round trip from the
+  // feel of the controls: we move now, and reconcile as snapshots arrive.
+  //
+  // Keyed by server cell id, or for a piece of a split the server has not
+  // confirmed yet, by "a<action>:<n>". Each holds the simulated state (x, y,
+  // mass, steering, launch velocity, s for merge cooldown), the visual offset
+  // of a correction still fading out (ox, oy), and the mass as drawn (dm).
   const predicted = new Map();
+  // Provisional ids for unconfirmed split pieces, negative so they can never
+  // collide with a server id.
+  const provisionalIds = new Map();
+  let nextProvisional = -1;
 
-  // Locally predicted results of a split or an eject, shown the instant the
-  // key goes down. Without these the piece or the blob appears a full round
-  // trip after the press — 80 to 200ms on a real link — which is most of why
-  // the moves felt unnatural. They are provisional: dropped when the server's
-  // real cells arrive, or after a short deadline if it never confirms.
-  const ghostCells = [];      // { x, y, mass, vx, vy, age }
+  // Locally predicted blobs of an eject, shown the instant the key goes down.
+  // Without these the blob appeared a full round trip after the press — 80 to
+  // 200ms on a real link. They are provisional: dropped when the server's
+  // real blob arrives, or after a short deadline if it never confirms.
   const ghostBlobs = [];      // { x, y, vx, vy, age, ci }
   const GHOST_TTL = 0.45;     // seconds before an unconfirmed ghost is dropped
 
@@ -183,7 +237,6 @@ export function createSocketConnection({
   // this an eaten orb sat inside the cell for ~190ms on a normal link — the
   // one thing the client did not predict, and the most visible.
   const EAT_TTL = 0.8;
-  let authoritativeCount = 0; // cells the server last said were ours
 
   // Arena size for this room, learned from the first snapshot. Prediction has
   // to clamp to the same bounds the server does or cells drift through walls.
@@ -199,17 +252,51 @@ export function createSocketConnection({
     }
   }, 1000);
 
-  // How far behind the server to render, in seconds. One tick of buffer plus
-  // however much the arrivals are actually spreading.
-  function interpSeconds() {
-    const tickMs = 1000 / serverHz;
-    const ticks = Math.min(INTERP_MAX, Math.max(INTERP_MIN, 1 + diag.jitter / tickMs));
-    return (ticks * tickMs) / 1000;
+  // Where the render clock should be, from how late recent snapshots arrived.
+  // An offset is the snapshot's server time less its local arrival time, so
+  // the least-delayed packet has the largest one and lateness is the shortfall
+  // from it. Derived from the tick rate, which the server announces.
+  //
+  // Snapshots that arrive together count once. Over TCP one lost packet holds
+  // up everything behind it and then delivers the lot in a burst, and counted
+  // one by one, a single hiccup filled the window with late samples and
+  // tripled the buffer for seconds afterwards. Counted once, an isolated stall
+  // leaves the buffer alone, and only bunching that keeps happening widens it
+  // — by at most a few ticks per burst, so a long stall, which nothing could
+  // have buffered for, cannot leave everyone drawn seconds in the past.
+  const BURST_SPREAD_TICKS = 3;
+  function retarget(nowMs, offset) {
+    const last = arrivals[arrivals.length - 1];
+    if (last && nowMs - last.at < 250 / serverHz) {
+      last.at = nowMs;
+      last.offset = Math.min(last.offset, offset);
+      last.best = Math.max(last.best, offset);
+    } else {
+      arrivals.push({ at: nowMs, offset, best: offset });
+    }
+    while (arrivals.length && arrivals[0].at < nowMs - PLAYOUT_WINDOW_MS) arrivals.shift();
+    let best = -Infinity;
+    for (const a of arrivals) if (a.best > best) best = a.best;
+    const cap = BURST_SPREAD_TICKS / serverHz;
+    const late = arrivals
+      .map(a => Math.min(best - a.offset, best - a.best + cap))
+      .sort((x, y) => x - y);
+    const covered = late[Math.min(late.length - 1, Math.floor(late.length * LATE_QUANTILE))];
+    playBest = best;
+    playTarget = best - 1 / serverHz - covered - PLAYOUT_MARGIN;
+    if (playOffset === null) playOffset = playTarget;
   }
-  // Derived from the tick rate, and re-derived when the server announces its
-  // own. Referred to the old INTERP_MS name until an integration test caught
-  // it: every online connection threw here, which left the client silently on
-  // its guest connection.
+
+  // Ease the render clock toward its target: never a step, and never faster
+  // or slower than real time by more than PLAYOUT_SLEW. Far off — the tab was
+  // hidden, or the connection has just been made — it jumps.
+  function advancePlayout(dt) {
+    if (playTarget === null) return;
+    const err = playTarget - playOffset;
+    if (Math.abs(err) > PLAYOUT_SNAP) { playOffset = playTarget; return; }
+    const max = PLAYOUT_SLEW * dt;
+    playOffset += Math.max(-max, Math.min(max, err * Math.min(1, dt * 2)));
+  }
 
   let retryTimer = null;
 
@@ -340,9 +427,17 @@ export function createSocketConnection({
     names.clear();
     colours.clear();
     predicted.clear();
-    ghostCells.length = 0;
+    provisionalIds.clear();
     ghostBlobs.length = 0;
-    clockOffset = null;
+    // The next server holds none of these: its first snapshot acknowledges
+    // nothing, and is taken as it stands until an aim of ours comes back.
+    inputs.length = 0;
+    pendingActions.length = 0;
+    pendingEats.length = 0;
+    rebase = null;
+    simAt = null;
+    arrivals.length = 0;
+    playOffset = playTarget = playBest = null;
 
     const wait = backoffMs(attempt);
     attempt++;
@@ -426,7 +521,8 @@ export function createSocketConnection({
   open();
 
   function applySnapshot(snap) {
-    const localNow = performance.now() / 1000;
+    const arrivedMs = performance.now();
+    const localNow = arrivedMs / 1000;
     // Snapshots received per second. If this sits well below the server's
     // tick rate the server is overrunning its budget — that is a starved
     // instance, not a client or network problem.
@@ -436,15 +532,14 @@ export function createSocketConnection({
       diag.snaps = 0;
       diag.snapWindow = localNow;
     }
-    const offset = snap.time - localNow;
-    // Least-delayed packet in the RECENT window, not of all time. An all-time
-    // minimum is sticky: one unusually fast early packet, or a server clock
-    // that drifts, leaves renderTime pinned seconds behind — and then every
-    // removal, tombstone and other player renders seconds late with it.
-    snap._offset = offset;
-    let best = offset;
-    for (const f of frames) if (f._offset !== undefined && f._offset < best) best = f._offset;
-    clockOffset = best;
+    // Over the RECENT window, not all time. An all-time figure is sticky: one
+    // unusually fast early packet, or a server clock that drifts, leaves the
+    // render clock pinned seconds behind — and every removal, tombstone and
+    // other player renders seconds late with it.
+    retarget(arrivedMs, snap.time - localNow);
+    // Folded into prediction on the next frame, from wherever that frame is.
+    snap._arrived = arrivedMs;
+    rebase = snap;
 
     if (snap.world) worldSize = snap.world;
 
@@ -463,6 +558,14 @@ export function createSocketConnection({
       if (p.big && p.mine && ghostBlobs.length) ghostBlobs.shift();
     }
     for (const p of snap.added) {
+      // Our own thrown mass is placed where the server had it a round trip
+      // ago, while the ghost it replaces was drawn where it is now — a
+      // hundred units on at launch speed. Carried forward by that round trip,
+      // the real blob takes over where the ghost was instead of jumping back.
+      if (p.mine && (p.vx || p.vy)) {
+        const age = Math.min(1, Math.max(0, (arrivedMs - snapFrom(snap)) / 1000));
+        if (age > 0) advancePellet(p, age, snap.world || worldSize);
+      }
       pellets.set(p.id, {
         x: p.x, y: p.y, ci: p.ci,
         big: !!p.big, mine: !!p.mine,
@@ -502,85 +605,229 @@ export function createSocketConnection({
 
   const lerp = (a, b, k) => a + (b - a) * k;
 
-  // Reconcile against the NEWEST snapshot, not the interpolated one. Our own
-  // cells should track the freshest truth the server has sent; only other
-  // players are worth rendering in the past.
-  function predict(dt) {
+  // When, on our own clock, the server stood where this snapshot says: the
+  // moment the input its tick used was sent, plus how long that input waited
+  // for the tick. Exact without knowing the ping, as long as the trip up took
+  // as long as it did then. Without an acknowledgement — just connected, or
+  // just reconnected — a round trip before it arrived is the best guess.
+  function snapFrom(snap) {
+    if (snap.ack) {
+      for (let i = inputs.length - 1; i >= 0; i--) {
+        if (inputs[i].seq === snap.ack) return inputs[i].at + snap.ackAge;
+      }
+    }
+    const rtt = floorRtt();
+    return snap._arrived - (rtt > 0 ? rtt : 0);
+  }
+
+  // Has the server acted on this action? The action carries an aim number, so
+  // once a tick has used that number or a later one, it has had the action
+  // too. Without an acknowledgement, judge by time.
+  const actedOn = (act, snap, from) =>
+    snap.ack && inputs.some(e => e.seq === snap.ack)
+      ? ((snap.ack - act.seq) & 0xffff) < 0x8000
+      : act.at <= from;
+
+  // The aim a server tick at local time t would have used: the newest sent.
+  function aimAt(t) {
+    for (let i = inputs.length - 1; i >= 0; i--) if (inputs[i].at <= t) return inputs[i];
+    return inputs[0] || pendingAim;
+  }
+
+  // One step of our own cells, exactly as a server tick moves them: toward
+  // the centroid plus the aim, then the push that keeps unmergeable pieces
+  // apart. `steps` is how many server ticks dt spans, for the push.
+  function moveOwn(cells, aim, dt, steps) {
+    let sx = 0, sy = 0, sm = 0;
+    for (const p of cells) { sx += p.x * p.mass; sy += p.y * p.mass; sm += p.mass; }
+    if (!sm) return;
+    const tx = sx / sm + aim.x, ty = sy / sm + aim.y;
+    for (const p of cells) advanceCell(p, tx, ty, dt, worldSize);
+    separateCells(cells, isLocked, steps);
+  }
+
+  // Mirrors doSplit and doEject in shared/sim.js. The aim is the one sent
+  // with the action, which is the one the server's tick will use. `live` is
+  // the keypress itself, where the drawn mass changes too; in a replay only
+  // the simulated mass does, and what is drawn follows it smoothly.
+  function applyAction(cells, act, live) {
+    let cx = 0, cy = 0, cm = 0;
+    for (const p of cells) { cx += p.x * p.mass; cy += p.y * p.mass; cm += p.mass; }
+    if (!cm) return;
+    const tx = cx / cm + act.aim.x, ty = cy / cm + act.aim.y;
+    if (act.kind === "split") {
+      let room = MAX_CELLS - cells.length;
+      // Which cells split is decided once, at the keypress, and every replay
+      // splits those same cells. Re-decided from each snapshot's masses, a
+      // near-tie in the ranking — common after a burst, when the pieces are
+      // all much of a size — handed a piece to a different parent between one
+      // replay and the next, and it jumped across the cluster to follow it.
+      if (live) {
+        act.parents = cells.filter(p => p.mass >= 36)
+          .sort((a, b) => b.mass - a.mass)
+          .slice(0, Math.max(0, room))
+          .map(p => p.key);
+      }
+      const ready = (act.parents || [])
+        .map(key => cells.find(p => p.key === key))
+        .filter(p => p && p.mass >= 36);
+      for (const p of ready) {
+        if (room-- <= 0) break;
+        const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
+        const half = p.mass / 2;
+        p.mass -= half;
+        p.s = 1;
+        const speed = splitLaunchSpeed(half);
+        const piece = {
+          key: `a${act.id}:${p.key}`,
+          x: p.x + (dx / d) * radiusOf(p.mass) * 0.4,
+          y: p.y + (dy / d) * radiusOf(p.mass) * 0.4,
+          mass: half, vx: (dx / d) * speed, vy: (dy / d) * speed, s: 1
+        };
+        if (live) { p.dm -= half; piece.dm = half; piece.ox = 0; piece.oy = 0; }
+        cells.push(piece);
+      }
+    } else if (act.kind === "eject") {
+      for (const p of cells) {
+        if (p.mass < EJECT_MASS * 2) continue;
+        p.mass -= EJECT_MASS;
+        if (!live) continue;
+        p.dm -= EJECT_MASS;
+        const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
+        const gap = radiusOf(p.mass) + radiusOf(EJECT_KEEP) * 0.35;
+        const sx = p.x + p.ox, sy = p.y + p.oy;
+        ghostBlobs.push({
+          x: sx + (dx / d) * gap, y: sy + (dy / d) * gap,
+          vx: (dx / d) * EJECT_SPEED, vy: (dy / d) * EJECT_SPEED, age: 0, ci: -1
+        });
+      }
+    }
+  }
+
+  // Fold the newest snapshot into prediction. The server's cells are replayed
+  // from where it says they were, through every input and action it has not
+  // acted on yet, up to the moment prediction stands at. Whatever that differs
+  // from what is on screen becomes an offset that fades, so a correction is a
+  // slide rather than a jump.
+  function reconcile(snap) {
+    let from = snapFrom(snap);
+    if (snap.ack) {
+      const i = inputs.findIndex(e => e.seq === snap.ack);
+      if (i > 0) inputs.splice(0, i);   // keep the acknowledged one: it is in force at `from`
+    }
+    from = Math.min(from, simAt);
+    for (let i = pendingActions.length - 1; i >= 0; i--) {
+      if (actedOn(pendingActions[i], snap, from)) pendingActions.splice(i, 1);
+    }
+    while (pendingEats.length && pendingEats[0].at <= from) pendingEats.shift();
+
+    const cells = [];
+    for (const c of snap.cells) {
+      if (!c.mine) continue;
+      cells.push({
+        key: c.i, x: c.x, y: c.y, mass: c.m, s: c.s,
+        vx: c.vx || 0, vy: c.vy || 0, hx: c.hx, hy: c.hy, sp: c.sp
+      });
+    }
+
+    // Replay in steps of one server tick, each using the aim that tick
+    // would have had and taking any action that reached it first, as stepWorld
+    // does. Actions after the end happened since the last frame; they are
+    // already on screen, so they are taken at the end.
+    const tick = 1000 / serverHz;
+    let a = 0, t = from;
+    while (cells.length && simAt - t > 0.5) {
+      const h = Math.min(tick, simAt - t);
+      const end = t + h;
+      while (a < pendingActions.length && pendingActions[a].at <= end) applyAction(cells, pendingActions[a++], false);
+      moveOwn(cells, aimAt(end), h / 1000, h / tick);
+      t = end;
+    }
+    while (cells.length && a < pendingActions.length) applyAction(cells, pendingActions[a++], false);
+    for (const e of pendingEats) {
+      const c = cells.find(p => p.key === e.key);
+      if (c) c.mass += e.gain;
+    }
+
+    // Whatever is no longer there goes. An unconfirmed split piece that has
+    // gone was either confirmed — the server's piece takes over from where it
+    // was drawn — or refused, and is dropped.
+    const next = new Set(cells.map(c => c.key));
+    const orphans = [];
+    for (const [key, p] of predicted) {
+      if (next.has(key)) continue;
+      if (typeof key === "string") orphans.push(p);
+      predicted.delete(key);
+      provisionalIds.delete(key);
+    }
+    for (const c of cells) {
+      let shown = predicted.get(c.key);
+      if (!shown && orphans.length) {
+        let bestD = SNAP_ERROR;
+        for (const o of orphans) {
+          const d = Math.hypot(o.x + o.ox - c.x, o.y + o.oy - c.y);
+          if (d < bestD) { bestD = d; shown = o; }
+        }
+        if (shown) orphans.splice(orphans.indexOf(shown), 1);
+      }
+      c.ox = shown ? shown.x + shown.ox - c.x : 0;
+      c.oy = shown ? shown.y + shown.oy - c.y : 0;
+      c.dm = shown ? shown.dm : c.mass;
+      // Not a wrong guess but stale state — a virus pop, a respawn. Jump.
+      if (c.ox * c.ox + c.oy * c.oy > SNAP_ERROR * SNAP_ERROR) c.ox = c.oy = 0;
+      predicted.set(c.key, c);
+    }
+  }
+
+  // Our own cells are predicted from the NEWEST snapshot, not the
+  // interpolated one; only other players are worth rendering in the past.
+  function predict(dt, now) {
     const newest = frames[frames.length - 1];
     if (!newest) return;
 
     // Spectating means `mine` marks somebody else's cells. Predicting those
     // from our aim would send them wandering off on their own.
-    if (newest.spectating) { predicted.clear(); return; }
-
-    const authoritative = new Map();
-    for (const c of newest.cells) if (c.mine) authoritative.set(c.i, c);
-
-    for (const id of [...predicted.keys()]) {
-      if (!authoritative.has(id)) predicted.delete(id);
+    if (newest.spectating) {
+      predicted.clear();
+      provisionalIds.clear();
+      pendingActions.length = 0;
+      pendingEats.length = 0;
+      rebase = null;
+      simAt = now;
+      return;
     }
 
-    // A snapshot describes where we were when it was sent, not where we are.
-    // Correcting straight onto it would drag the cell back by the flight
-    // time and undo the prediction. So the server position is first replayed
-    // forward by the packet's age, and we correct onto THAT. Halves the
-    // steady-state error in testing.
-    const age = clockOffset === null
-      ? 0
-      : Math.max(0, Math.min(0.5, performance.now() / 1000 + clockOffset - newest.time));
+    // The replay runs to where the last frame left prediction, and this frame
+    // then moves everything on together, so the two cannot disagree about
+    // how much time has passed.
+    if (simAt === null) simAt = now - dt * 1000;
+    if (rebase) { reconcile(rebase); rebase = null; }
+    simAt = now;
 
-    let ax = 0, ay = 0, am = 0;
-    for (const c of authoritative.values()) { ax += c.x * c.m; ay += c.y * c.m; am += c.m; }
-    const atx = (am ? ax / am : 0) + pendingAim.x;
-    const aty = (am ? ay / am : 0) + pendingAim.y;
-
-    // New server cells mean a split or burst was confirmed: the ghosts have
-    // done their job.
-    if (authoritative.size > authoritativeCount) ghostCells.length = 0;
-    authoritativeCount = authoritative.size;
-
-    for (const [id, c] of authoritative) {
-      let p = predicted.get(id);
-      if (!p) {
-        predicted.set(id, { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 });
-        continue;
-      }
+    if (predicted.size) {
+      // The freshest aim, not the last one sent: it is on its way, and
+      // waiting for it would put up to a send interval back into the controls.
+      moveOwn([...predicted.values()], pendingAim, dt, dt * serverHz);
       // Mass is smoothed rather than stepped. Every orb eaten arrives as a
       // jump in radius at the tick rate, and because speed depends on mass
-      // the movement jerked with it — visible as a faint 20Hz stutter.
-      p.mass += (c.m - p.mass) * Math.min(1, dt * 12);
-
-      const ghost = { x: c.x, y: c.y, mass: c.m, vx: 0, vy: 0 };
-      if (age > 0) advanceCell(ghost, atx, aty, age, worldSize);
-
-      const ex = ghost.x - p.x, ey = ghost.y - p.y;
-      const err = Math.hypot(ex, ey);
-      if (err > SNAP_ERROR) {
-        // Not a wrong guess but stale state: a split, a virus pop, a respawn.
-        p.x = ghost.x; p.y = ghost.y; p.vx = 0; p.vy = 0;
-      } else if (err > 1.5) {
-        // Dead zone: positions travel as whole units, so a sub-unit error is
-        // quantisation noise, and correcting toward it wobbles the cell.
-        const k = Math.min(1, dt * CORRECT_PER_SEC);
-        p.x += ex * k;
-        p.y += ey * k;
+      // the movement jerked with it — visible as a faint stutter.
+      // Growth only, though: a cell that loses mass — a burst the client
+      // could not see coming, a refused guess — shrinks at once, or for a
+      // moment it would be drawn holding mass its new pieces hold too.
+      const fade = Math.exp(-OFFSET_DECAY * dt);
+      const grow = Math.min(1, dt * 12);
+      for (const p of predicted.values()) {
+        p.ox *= fade;
+        p.oy *= fade;
+        p.dm = p.mass < p.dm ? p.mass : p.dm + (p.mass - p.dm) * grow;
       }
     }
 
-    if (!predicted.size) return;
-
-    // Aim is an offset from our own centroid, exactly as the server reads it.
-    let sx = 0, sy = 0, sm = 0;
-    for (const p of predicted.values()) { sx += p.x * p.mass; sy += p.y * p.mass; sm += p.mass; }
-    const cx = sm ? sx / sm : 0, cy = sm ? sy / sm : 0;
-    const tx = cx + pendingAim.x, ty = cy + pendingAim.y;
-
-    for (const p of predicted.values()) advanceCell(p, tx, ty, dt, worldSize);
-
-    // Same test the server uses, so the client rarely guesses wrong.
-    for (const cell of predicted.values()) {
-      const r = radiusOf(cell.mass);
-      const reach = r + ORB_RADIUS * 0.6;
+    // Same test the server uses, so the client rarely guesses wrong. Against
+    // the cell as drawn: an orb disappears when it is visibly covered.
+    for (const [key, cell] of predicted) {
+      const cx = cell.x + cell.ox, cy = cell.y + cell.oy;
+      const reach = radiusOf(cell.dm) + ORB_RADIUS * 0.6;
       const reach2 = reach * reach;
       for (const o of pellets.values()) {
         if (o.gone !== null || o.eatenAt !== undefined) continue;
@@ -591,16 +838,23 @@ export function createSocketConnection({
         if (o.mine && o.age < EJECT_OWNER_COOLDOWN + 0.3) continue;
         // Nothing receding can have been swallowed, whoever threw it.
         if (o.vx || o.vy) {
-          if ((o.x - cell.x) * o.vx + (o.y - cell.y) * o.vy > 0) continue;
+          if ((o.x - cx) * o.vx + (o.y - cy) * o.vy > 0) continue;
         }
-        const dx = o.x - cell.x; if (dx > reach || dx < -reach) continue;
-        const dy = o.y - cell.y; if (dy > reach || dy < -reach) continue;
+        const dx = o.x - cx; if (dx > reach || dx < -reach) continue;
+        const dy = o.y - cy; if (dy > reach || dy < -reach) continue;
         if (dx * dx + dy * dy < reach2) {
           o.eatenAt = 0;                       // age counter, in simulated seconds
-          cell.mass += o.big ? EJECT_KEEP : PELLET_MASS;
+          const gain = o.big ? EJECT_KEEP : PELLET_MASS;
+          cell.mass += gain;
+          cell.dm += gain;
+          // Kept until the server has had time to count it, so the replay
+          // does not shrink the cell back in the meantime.
+          pendingEats.push({ at: now, key, gain });
         }
       }
     }
+    while (pendingEats.length > MAX_PENDING * 4) pendingEats.shift();
+
     // A locally eaten orb the server never removed was a wrong guess: bring
     // it back rather than leaving a hole in the field. But only once we have
     // actually moved off it — restoring an orb the cell is still sitting on
@@ -612,62 +866,18 @@ export function createSocketConnection({
       if (o.eatenAt <= EAT_TTL) continue;
       let covered = false;
       for (const cell of predicted.values()) {
-        const reach = radiusOf(cell.mass) + ORB_RADIUS * 0.6;
-        const dx = o.x - cell.x, dy = o.y - cell.y;
+        const reach = radiusOf(cell.dm) + ORB_RADIUS * 0.6;
+        const dx = o.x - cell.x - cell.ox, dy = o.y - cell.y - cell.oy;
         if (dx * dx + dy * dy < reach * reach) { covered = true; break; }
       }
       if (covered) o.eatenAt = EAT_TTL;     // hold, re-check next frame
       else o.eatenAt = undefined;           // genuinely a wrong guess
     }
 
-    for (let i = ghostCells.length - 1; i >= 0; i--) {
-      const g = ghostCells[i];
-      if ((g.age += dt) > GHOST_TTL) { ghostCells.splice(i, 1); continue; }
-      advanceCell(g, tx, ty, dt, worldSize);
-    }
     for (let i = ghostBlobs.length - 1; i >= 0; i--) {
       const g = ghostBlobs[i];
       if ((g.age += dt) > GHOST_TTL) { ghostBlobs.splice(i, 1); continue; }
       advancePellet(g, dt, worldSize);
-    }
-  }
-
-  // Mirror what the server will do so the response is on screen this frame.
-  // The server remains the authority: if it disagrees, its version replaces
-  // these within one snapshot.
-  function predictSplit() {
-    let room = MAX_CELLS - predicted.size - ghostCells.length;
-    const ready = [...predicted.values()].filter(p => p.mass >= 36).sort((a, b) => b.mass - a.mass);
-    let cx = 0, cy = 0, cm = 0;
-    for (const p of predicted.values()) { cx += p.x * p.mass; cy += p.y * p.mass; cm += p.mass; }
-    const tx = (cm ? cx / cm : 0) + pendingAim.x, ty = (cm ? cy / cm : 0) + pendingAim.y;
-    for (const p of ready) {
-      if (room-- <= 0) break;
-      const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
-      const half = p.mass / 2;
-      p.mass -= half;
-      const speed = splitLaunchSpeed(half);
-      ghostCells.push({
-        x: p.x + (dx / d) * radiusOf(p.mass) * 0.4,
-        y: p.y + (dy / d) * radiusOf(p.mass) * 0.4,
-        mass: half, vx: (dx / d) * speed, vy: (dy / d) * speed, age: 0
-      });
-    }
-  }
-
-  function predictEject(ci) {
-    let cx = 0, cy = 0, cm = 0;
-    for (const p of predicted.values()) { cx += p.x * p.mass; cy += p.y * p.mass; cm += p.mass; }
-    const tx = (cm ? cx / cm : 0) + pendingAim.x, ty = (cm ? cy / cm : 0) + pendingAim.y;
-    for (const p of predicted.values()) {
-      if (p.mass < EJECT_MASS * 2) continue;
-      const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
-      p.mass -= EJECT_MASS;
-      const gap = radiusOf(p.mass) + radiusOf(EJECT_KEEP) * 0.35;
-      ghostBlobs.push({
-        x: p.x + (dx / d) * gap, y: p.y + (dy / d) * gap,
-        vx: (dx / d) * EJECT_SPEED, vy: (dy / d) * EJECT_SPEED, age: 0, ci
-      });
     }
   }
 
@@ -676,50 +886,63 @@ export function createSocketConnection({
   // are eaten instantly rather than fading.
   function interpolate(renderTime) {
     if (!frames.length) return null;
-    if (frames.length === 1) return frames[0];
+    const newest = frames[frames.length - 1];
+    if (frames.length === 1) return newest;
+    if (renderTime <= frames[0].time) return frames[0];
 
-    let older = frames[0], newer = frames[frames.length - 1];
-    for (let i = 0; i < frames.length - 1; i++) {
-      if (frames[i].time <= renderTime && frames[i + 1].time >= renderTime) {
-        older = frames[i];
-        newer = frames[i + 1];
-        break;
-      }
+    // Past the newest snapshot, the next one is late. Carry the last two on
+    // rather than freezing everyone until it turns up.
+    let older = frames[frames.length - 2], newer = newest;
+    for (let i = frames.length - 2; i >= 0; i--) {
+      if (frames[i].time <= renderTime) { older = frames[i]; newer = frames[i + 1]; break; }
     }
-    if (renderTime >= newer.time) return newer;
-
     const span = newer.time - older.time;
-    const k = span > 0 ? (renderTime - older.time) / span : 0;
+    if (span <= 0) return newer;
+    const k = (Math.min(renderTime, newer.time + EXTRAPOLATE_MAX) - older.time) / span;
+    const km = Math.min(1, k);
     const prev = new Map(older.cells.map(c => [c.i, c]));
 
     const cells = newer.cells.map(c => {
       const p = prev.get(c.i);
       if (!p) return c;
-      return { ...c, x: lerp(p.x, c.x, k), y: lerp(p.y, c.y, k), m: lerp(p.m, c.m, k) };
+      return { ...c, x: lerp(p.x, c.x, k), y: lerp(p.y, c.y, k), m: lerp(p.m, c.m, km) };
     });
 
     // Viruses sat still until feeding one could shoot a new one out, and a
     // moving object taken straight from the newest frame jumps a radius at a
     // time at 20Hz. Matched on the id the snapshot carries, because their
-    // order in the list is a function of where the viewer is standing.
+    // order in the list is a function of where the viewer is standing. Not
+    // carried past the newest: a shot one is decelerating and would overshoot.
     const wasAt = new Map(older.viruses.map(v => [v[3], v]));
     const viruses = newer.viruses.map(v => {
       const q = wasAt.get(v[3]);
-      return q ? [lerp(q[0], v[0], k), lerp(q[1], v[1], k), v[2], v[3]] : v;
+      return q ? [lerp(q[0], v[0], km), lerp(q[1], v[1], km), v[2], v[3]] : v;
     });
 
     // The zone's edges move a few units a tick; taken straight from the
-    // newest frame they would step at 20Hz.
+    // newest frame they would step at 20Hz. Not carried past the newest
+    // either: they stop dead when the zone has closed.
     let zone = newer.zone;
     if (zone && older.zone) {
       const a = older.zone.now, b = zone.now;
       zone = { ...zone, now: {
-        x0: lerp(a.x0, b.x0, k), y0: lerp(a.y0, b.y0, k),
-        x1: lerp(a.x1, b.x1, k), y1: lerp(a.y1, b.y1, k)
+        x0: lerp(a.x0, b.x0, km), y0: lerp(a.y0, b.y0, km),
+        x1: lerp(a.x1, b.x1, km), y1: lerp(a.y1, b.y1, km)
       } };
     }
 
     return { ...newer, cells, viruses, zone };
+  }
+
+  // Number the current aim and remember it until a tick has used it. Every
+  // aim goes out this way, alone or carried by an action.
+  function nextInput(now) {
+    lastAimSent = now;
+    aimSeq = (aimSeq % 0xffff) + 1;   // 1..65535; 0 is "none"
+    const input = { seq: aimSeq, at: now, x: Math.round(pendingAim.x), y: Math.round(pendingAim.y) };
+    inputs.push(input);
+    if (inputs.length > MAX_INPUTS) inputs.shift();
+    return input;
   }
 
   return {
@@ -733,20 +956,32 @@ export function createSocketConnection({
 
     sendAction(action) {
       if (socket?.readyState !== WebSocket.OPEN) return;
-      const frame = encodeAction(action);
-      if (!frame) return;
-      socket.send(frame);
-      // Show it now; the server's version supersedes it on arrival.
-      if (action === "split") predictSplit();
-      else if (action === "eject") predictEject(-1);
+      if (!encodeAction(action)) return;
+      // The action carries the current aim, so a split goes where the player
+      // is pointing now rather than where the last aim sent pointed, up to a
+      // send interval ago.
+      const now = performance.now();
+      const input = nextInput(now);
+      socket.send(encodeAction(action, input.x, input.y, input.seq));
+      if (action !== "split" && action !== "eject") return;
+      // Show it now. It is replayed on every snapshot until the server has
+      // acted on it, and the server's version then takes over where it is.
+      const act = { id: nextActionId++, kind: action, at: now, seq: input.seq, aim: input };
+      pendingActions.push(act);
+      if (pendingActions.length > MAX_PENDING) pendingActions.shift();
+      const cells = [...predicted.values()];
+      const before = cells.length;
+      applyAction(cells, act, true);
+      for (let i = before; i < cells.length; i++) predicted.set(cells[i].key, cells[i]);
     },
 
     update(dt) {
       const now = performance.now();
       if (now - lastAimSent >= 1000 / AIM_HZ && socket?.readyState === WebSocket.OPEN) {
-        lastAimSent = now;
-        socket.send(encodeAim(Math.round(pendingAim.x), Math.round(pendingAim.y)));
+        const input = nextInput(now);
+        socket.send(encodeAim(input.x, input.y, input.seq));
       }
+      advancePlayout(dt);
       if (dt) {
         // Thrown mass is sent once, with its velocity, and never re-sent —
         // so the client has to carry it forward itself. This loop went
@@ -756,11 +991,9 @@ export function createSocketConnection({
         for (const p of pellets.values()) {
           if (p.vx || p.vy) advancePellet(p, dt, worldSize);
         }
-        predict(dt);
+        predict(dt, now);
         diag.fps = diag.fps ? diag.fps * 0.9 + (1 / dt) * 0.1 : 1 / dt;
       }
-
-
     },
 
     // A method, not a getter: main.js calls conn.stats(). The two disagreed,
@@ -773,16 +1006,16 @@ export function createSocketConnection({
         hz: serverHz,
         budgetMs: serverHz ? +(1000 / serverHz).toFixed(1) : 0,
         jitter: Math.round(diag.jitter),
-        interpMs: Math.round(interpSeconds() * 1000),
+        // How far behind the least-delayed snapshot other players are drawn.
+        interpMs: playOffset === null ? null : Math.round((playBest - playOffset) * 1000),
         snapsPerSec: diag.snapsPerSec,
         buffered: diag.buffered
       };
     },
 
     getView() {
-      if (clockOffset === null) return null;
-      const renderTime =
-        performance.now() / 1000 + clockOffset - interpSeconds();
+      if (playOffset === null) return null;
+      const renderTime = performance.now() / 1000 + playOffset;
       const snap = interpolate(renderTime);
       if (!snap) return null;
 
@@ -796,29 +1029,46 @@ export function createSocketConnection({
       }
       for (const g of ghostBlobs) visible.push([g.x, g.y, 0, 1, 1]);
 
-      // Our own cells come from prediction; everyone else from interpolation.
-      const cells = snap.cells.map(c => {
-        const p = c.mine ? predicted.get(c.i) : null;
-        const slot = colours.get(c.o);
-        return p
-          ? { ...c, x: p.x, y: p.y, m: p.mass, n: names.get(c.o) || "", ci: slot }
-          : { ...c, n: names.get(c.o) || "", ci: slot };
-      });
-      // Provisional split pieces, drawn as ours until the server confirms.
-      for (let i = 0; i < ghostCells.length; i++) {
-        const g = ghostCells[i];
-        cells.push({ i: -1 - i, x: g.x, y: g.y, m: g.mass, o: myNid, mine: true, s: 1, n: "" });
+      // Who we are, whether we are spectating, our figures and the round come
+      // from the NEWEST snapshot: they are about us, and our own cells are
+      // drawn from it too. Only other players and viruses are drawn in the
+      // past. Read from the interpolated frame instead, the death card would
+      // wait out the buffer after the cells it is about had already gone.
+      const latest = frames[frames.length - 1];
+      const watching = latest.spectating;
+
+      // Our own cells come from prediction, all of them, unconfirmed split
+      // pieces included; everyone else from interpolation.
+      const own = predicted.size > 0 && !watching;
+      const cells = [];
+      let sx = 0, sy = 0, sm = 0;
+      for (const c of snap.cells) {
+        if (c.mine) {
+          if (own) continue;
+          // Whoever we are watching, as drawn, so the camera centres on them.
+          sx += c.x * c.m; sy += c.y * c.m; sm += c.m;
+        }
+        cells.push({ ...c, n: names.get(c.o) || "", ci: colours.get(c.o) });
       }
 
       // The camera must follow the predicted centroid, not the server's. This
       // is the single biggest part of the feel: a camera lagging behind your
       // input makes everything else seem sluggish too.
-      let mx = snap.me.x, my = snap.me.y;
-      if (predicted.size && !snap.spectating) {
-        let sx = 0, sy = 0, sm = 0;
-        for (const p of predicted.values()) { sx += p.x * p.mass; sy += p.y * p.mass; sm += p.mass; }
-        if (sm) { mx = sx / sm; my = sy / sm; }
+      if (own) {
+        const n = names.get(myNid) || "", slot = colours.get(myNid);
+        sx = sy = sm = 0;
+        for (const [key, p] of predicted) {
+          let id = key;
+          if (typeof key === "string") {
+            id = provisionalIds.get(key);
+            if (id === undefined) provisionalIds.set(key, id = nextProvisional--);
+          }
+          const x = p.x + p.ox, y = p.y + p.oy;
+          cells.push({ i: id, x, y, m: p.dm, o: myNid, mine: true, s: p.s ? 1 : 0, n, ci: slot });
+          sx += x * p.dm; sy += y * p.dm; sm += p.dm;
+        }
       }
+      const mx = sm ? sx / sm : latest.me.x, my = sm ? sy / sm : latest.me.y;
 
       return {
         time: snap.time,
@@ -827,23 +1077,25 @@ export function createSocketConnection({
         pellets: visible,
         viruses: snap.viruses,
         me: {
-          ...snap.me, x: mx, y: my, id: snap.spectating ? snap.eyeNid : myNid,
+          ...latest.me, x: mx, y: my, id: watching ? latest.eyeNid : myNid,
           // The colour "mine" is drawn in: whoever is being watched while
           // spectating, and otherwise what the server says we are — falling
           // back to our own pick until our name record has arrived.
-          ci: snap.spectating ? colours.get(snap.eyeNid) : (colours.get(myNid) ?? ci)
+          ci: watching ? colours.get(latest.eyeNid) : (colours.get(myNid) ?? ci)
         },
-        round: snap.round,
+        round: latest.round,
+        // The edges move a few units a tick, so they are drawn where the rest
+        // of the arena is: interpolated, in the past.
         zone: snap.zone || null,
-        spectating: snap.spectating,
+        spectating: watching,
         // Resolved from the name cache the snapshot already maintains.
-        eyeName: snap.spectating ? (names.get(snap.eyeNid) || "") : "",
+        eyeName: watching ? (names.get(latest.eyeNid) || "") : "",
         board: board.map((r, i) => ({ id: r.you ? myNid : `x${i}`, name: r.name, mass: r.mass }))
       };
     },
 
     // Money actions travel as text frames: they are rare, and keeping them off
-    // the 20Hz binary path means the hot loop stays 5 bytes per message.
+    // the binary path means the hot loop stays 7 bytes per message.
     sendSpectate(dir) {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "spectate", dir }));

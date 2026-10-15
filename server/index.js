@@ -1872,6 +1872,9 @@ wss.on("connection", (ws, req) => {
           addPlayer(room.world, { id, name: displayName, ci: cleanColour(msg.ci) });
         // A rename can land while the socket is down.
         if (resumed) player.name = displayName;
+        // A resumed body still holds the old socket's last input number, which
+        // means nothing to this one: acknowledge nothing until it aims.
+        player.inputSeq = 0;
         meta.state = createClientState(nextClientId);   // staggers keyframes
         // The run never stopped, so the player is already in it rather than
         // waiting to be let in.
@@ -1948,9 +1951,14 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
-    if (msg.type === MSG.AIM) {
-      setAim(meta.room.world, id, msg.x, msg.y);
-    } else if (msg.type === MSG.ACTION) {
+    // Aims, and the aim every action carries. Echoed in the snapshot, with how
+    // long before the tick it arrived, so the client knows which of its inputs
+    // — and so which of its actions — this tick has already used.
+    setAim(meta.room.world, id, msg.x, msg.y);
+    const self = meta.room.world.players.get(id);
+    if (self) { self.inputSeq = msg.seq; self.inputAt = performance.now(); }
+
+    if (msg.type === MSG.ACTION) {
       if (!allow(meta.actBucket)) return;
       // Nobody joins a round under way, and a respawn would be a way in: a
       // body is dealt at the whistle and nowhere else. Someone eaten, or
@@ -2017,6 +2025,9 @@ const tickCost = { avgMs: 0, worstMs: 0, behind: 0 };
 
 function tickRoom(room, dt) {
   const { world, round } = room;
+  // When this room's tick acted on its input, on the clock aims are stamped
+  // with. Taken per room: with several rooms, each steps a little later.
+  const tickAt = performance.now();
   const events = stepWorld(world, dt);
 
   if (round.phase === PHASE_LIVE && world.time >= round.endsAt) {
@@ -2073,7 +2084,7 @@ function tickRoom(room, dt) {
 
     refreshSpectate(room, meta);
     const eye = meta.spectateId ? world.players.get(meta.spectateId) : null;
-    ws.send(encodeSnapshot(world, player, meta.state, view, eye));
+    ws.send(encodeSnapshot(world, player, meta.state, view, eye, tickAt));
   }
 }
 
