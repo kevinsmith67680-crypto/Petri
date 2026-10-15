@@ -1,0 +1,8 @@
+{
+  "frames": 1200,
+  "stepMsPerFrame": 0.5192515883333324,
+  "getViewMsPerFrame": 0.18514468583333382,
+  "pelletsHandedToRendererPerFrame": 4100,
+  "pelletsOnScreenPerFrame": 30.995,
+  "pctOnScreen": 0.7559756097560976
+}
