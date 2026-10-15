@@ -216,7 +216,7 @@ If it ever matters enough, the standard next step is accounts — a login requir
 
 ## Wire protocol
 
-Gameplay travels as binary frames; control messages (join, welcome) stay as JSON text because they are rare and easier to debug. An aim message is **5 bytes**.
+Gameplay travels as binary frames; control messages (join, welcome) stay as JSON text because they are rare and easier to debug. An aim message is **7 bytes**: the offset, and a number the snapshot acknowledges (see *Reconciliation by input replay*).
 
 Pellets are sent as **deltas against a server-held known-set**, not re-sent every tick. Measured with 100 players at a realistic mass spread (20 to 2,000):
 
@@ -252,7 +252,6 @@ The server treats any decode failure as "close the socket", since a client that 
 
 - Cells are still sent in full each tick. They move constantly so there is less to win, but quantising positions relative to the view origin would save a few bytes each.
 - The 100-player figures assume one world. Rooms open on demand within a process (see *Rooms on demand*), but a process is one thread: past one CPU core, run several game servers and let the matchmaker route between them (see *Matchmaking*).
-- Client-side prediction of your own cells, so movement does not wait a round trip. `moveCells` is pure, so it can be re-run locally against unacknowledged input.
 - WebTransport instead of WebSocket, with WebSocket as fallback. It reached Baseline in March 2026, and its unreliable datagrams suit positional updates you would discard on arrival anyway. Keyframes already exist, which is what makes lossy transport survivable.
 
 ## Accounts
@@ -510,17 +509,7 @@ But `BASE_SPEED` was tuned when the arena was 3,400 units across, and nobody rev
 
 The smoothing is also solved exponentially rather than as `rate * dt`. The linear form drifts with frame rate, so a 30fps client was chased at a different speed from a 144fps one.
 
-**The interpolation buffer is now adaptive.** Other players are rendered slightly in the past so their motion is smooth between ticks, and that delay was a flat 1.5 ticks — 75ms of deliberate lag, sized for jitter that a good connection does not have. It now tracks measured jitter and sits near a one-tick floor on a steady link:
-
-| Measured jitter | Buffer |
-|---|---|
-| 0–2 ms | 50–52 ms |
-| 5 ms | 55 ms |
-| 12 ms | 62 ms |
-| 25 ms | 75 ms (the old fixed value) |
-| 60 ms | 110 ms, widening to cover it |
-
-On a clean connection that is 23ms of lag removed for free, and on a bad one the buffer widens rather than stuttering. The performance overlay shows the live figure as "ms buffer" next to ping and fps.
+**The interpolation buffer is measured, and the render clock never steps.** Other players are rendered slightly in the past so their motion is smooth between ticks: one tick, plus the lateness 90% of recent snapshots stayed within. The clock that decides "how far in the past" is eased toward that target rather than set to it, so a late packet never moves everyone on screen at once. See *Reconciliation by input replay*. The performance overlay shows the live figure as "ms buffer" next to ping and fps.
 
 **If you want more, raise the tick rate.** `TICK_HZ=30` halves the wait for the next server update and shrinks the buffer proportionally, at 1.5x the CPU. Measured at 2.97ms/tick for both rooms with 25 bots each, that is comfortable on a Standard instance and too tight on the free 0.1 CPU one — check `avgMs` against `budgetMs` in the overlay before committing.
 
@@ -552,15 +541,13 @@ With the simulation providing the softness, the camera went back to a tight 45ms
 
 ### Why the moves felt late, and why the motion had a faint stutter
 
-**Split and eject are now predicted locally.** Pressing Space or W used to send the action and then show nothing until the server's snapshot came back — a full round trip, 80 to 200ms on a real link. The physics were fine; the *response* was late, and that lateness is what "unnatural" meant. The client now mirrors what the server will do on the same frame the key goes down: a provisional split piece with the right launch velocity, or a provisional blob. These are ghosts — dropped the moment the server's real cells arrive, or after 0.45s of simulated time if it never confirms. The server remains the only authority.
+**Split and eject are now predicted locally.** Pressing Space or W used to send the action and then show nothing until the server's snapshot came back — a full round trip, 80 to 200ms on a real link. The physics were fine; the *response* was late, and that lateness is what "unnatural" meant. The client now mirrors what the server will do on the same frame the key goes down: a provisional split piece with the right launch velocity, or a provisional blob. A provisional split is replayed with the rest of your unacknowledged input until the server has acted on it, and the server's piece then takes over from where the provisional one is drawn; a provisional blob is dropped when the real one arrives, or after 0.45s if it never does. The server remains the only authority.
 
 **Splits coast instead of popping.** The old per-frame friction of 0.86 shed 90% of a split's travel in 255ms; agar.io pieces visibly coast for half a second or more. Friction is now 0.935, with launch speed retuned so a mass-100 split travels 274 units and finishes 90% of it at 567ms. The velocity decay is integrated exactly, the same way ejected mass already was, so the client's ghost and the server's real piece follow the same path at any frame rate.
 
 **Mass is smoothed, not stepped.** Every orb eaten arrived as a jump in radius at the tick rate, and because speed depends on mass the movement jerked with it — a faint 20Hz stutter under everything. Predicted mass now eases toward the server's value.
 
-**Prediction has a dead zone.** Positions travel as whole units, so a sub-unit disagreement with the server is quantisation noise. Correcting toward it wobbled the cell by a pixel every snapshot. Errors under 1.5 units are now left alone.
-
-The interpolation floor for other players rose from 1.0 to 1.2 ticks, so a single late packet no longer stalls their motion.
+**Corrections fade rather than pull.** A disagreement with the server is drawn as an offset that fades out over about a tenth of a second; the simulated cell itself is set straight to the server's replayed position. Pulling the simulated cell instead fed the correction back into the aim and the speed.
 
 ### Ping is distance, and Render's region cannot be changed
 
@@ -612,13 +599,53 @@ Without prediction, every movement waits for a full round trip and is then rende
 
 The server still decides everything. Prediction only removes the wait before you see your own input; if the server disagrees, the server wins.
 
-**Reconciliation is age-compensated.** A snapshot describes where you were when it was sent, not where you are. Correcting straight onto it would drag your cell backwards by the flight time and undo the prediction entirely. So the server position is first replayed forward by the packet's age, and the correction targets that. In a 20-second test at 120ms RTT with the aim changing constantly, this halved the steady-state error from 28 world units to 13 — under half a cell radius, which is invisible.
+**Reconciliation replays your unacknowledged input** — see the next section, which replaced the "age-compensated" correction that used to be described here and was the largest remaining source of lag.
 
-Errors beyond 220 units snap rather than slide. That size of gap is not a wrong guess but stale state — a split, a virus pop, a respawn — and sliding across the arena to catch up would look far worse than a jump.
+Errors beyond 220 units snap rather than slide. That size of gap is not a wrong guess but stale state — a virus pop, a respawn — and sliding across the arena to catch up would look far worse than a jump.
 
-Also changed: aim now sends at 30Hz rather than 20 (5 bytes a message, so ~50 B/s for up to half a tick less lag), and the interpolation buffer for *other* players dropped from 2 ticks to 1.5. **The camera follows the predicted centroid**, which matters more than it sounds — a camera lagging your input makes everything else feel sluggish too.
+Also changed: aim sends at 30Hz, and **the camera follows the predicted centroid**, which matters more than it sounds — a camera lagging your input makes everything else feel sluggish too.
 
 Prediction is disabled while spectating, where `mine` marks somebody else's cells and predicting them from your aim would send them wandering off.
+
+### Reconciliation by input replay
+
+**The cell was drawn a full round trip late, and nothing measured it.** Prediction moved the cell the instant the pointer did, then corrected it toward the server's last position, carried forward only by the time since that packet *arrived*. But the server's position already answered input from a round trip earlier, so in steady motion the correction pulled the cell back onto the server's lagged path: an instant response to every twitch, then a rubber band back to where the server was. The "steady-state error" quoted for the old scheme was measured against the very target it corrected toward, so it could only look small.
+
+Protocol 12 gives the client what it needs to do this properly, without needing to know its ping:
+
+- **Every aim is numbered**, and every snapshot says which number its tick used and how long before the tick it arrived. The send time of that aim plus that wait is when, on the client's own clock, the server stood where the snapshot says.
+- **Your own cells carry their motion** — launch velocity and steering — so the client can resume the server's state exactly. Without the launch velocity, a confirmed split piece was predicted as standing still while the server flew it.
+- **The client replays every aim and action the server has not acted on yet** from the server's position, in tick-sized steps, with the same push the server uses to keep split pieces apart (`separateCells` in `shared/sim.js`, one copy of the maths). The result is where the server is *about to* have your cell. Any difference from what is on screen becomes an offset that fades.
+- **An action carries its own aim and number** (8 bytes). It is acknowledged with the aim, so the client knows exactly when the server has acted on a split. Sent separately, a tick could fall between them and the provisional pieces were dropped before the server's arrived. It also means a split goes where you are pointing now, not where the last aim sent pointed.
+- **Pending splits, ejects and eaten orbs are replayed too**, so a split cell stays split. Before, the parent's mass eased back toward the server's un-split value and visibly regrew for a round trip, then shrank when the server caught up. Which cells split is decided once, at the keypress, and every replay splits those same cells: re-decided from each snapshot's masses, a near-tie after a burst handed a provisional piece to a different parent between replays, and it jumped across the cluster.
+
+**Other players**, separately:
+
+- **The render clock is eased, never stepped.** It used to be pinned to the latest-arriving snapshot of the last second, so it jumped backwards whenever a packet came in late and forwards a second later. It now runs at real speed, ±8% while converging, toward one tick plus the 90th-percentile lateness of the last two seconds.
+- **Snapshots that arrive together count once.** Over TCP one lost packet holds up everything behind it and delivers the lot in a burst. Counted one by one, a single 300ms hiccup tripled the buffer, 50ms to 145ms, for three seconds afterwards.
+- **A late snapshot no longer freezes everyone.** Other players are carried forward along their last motion for up to 100ms.
+- **Snapshot time is an f64.** `world.time` counts from the room's creation and a room lives as long as the process; as an f32 it had a 16ms step after two days of uptime and 62ms after a week — longer than a tick. Other players got steadily jerkier the longer the server had been up.
+
+And the aim is taken *before* the frame's prediction step rather than after it (`client/main.js`), which is one frame less from pointer to cell.
+
+Measured by driving the real client against the real simulation over a modelled link — 30Hz, round trip as shown with exponential jitter, ordered delivery, 1% spikes. The same harness is in `test/control.test.js` ("over a real link"); its checks on your cell's lead, a split's mass and handover, and other players' backward steps and lurches all fail against the previous client:
+
+| | 40ms RTT | 100ms RTT | 180ms RTT |
+|---|---|---|---|
+| Your cell drawn behind where your input puts it | 49 → **15 ms** | 111 → **13 ms** | 199 → **9 ms** |
+| Other players drawn in the past | 102 → **65 ms** | 140 → **103 ms** | 193 → **155 ms** |
+| Other players: frozen frames in 14s | 13 → **0** | 13 → **0** | 8 → **0** |
+| Other players: steps backwards in 14s | 4 → **0** | 4 → **0** | 6 → **0** |
+
+| Splitting, at 200ms RTT | Before | After |
+|---|---|---|
+| Most mass drawn, against what the server holds | 148% | **101%** |
+| Jump when the server's piece replaces the provisional one | 162 units | **13 units** (one frame's travel) |
+| Worst frame-to-frame lurch of another player, a week into the room's life | 18.3 units | **1.4 units** |
+
+Checked end to end too: the real page in Chromium against the real server through a proxy adding 75ms each way. Every snapshot acknowledged an aim the page had sent, the split was on screen 50ms after the keypress — before the server could have heard of it — and the console stayed clean.
+
+**Cost.** 8 bytes a snapshot (f64 time, the acknowledgement) plus 10 per own cell: 18–48 bytes for ordinary play, about 4–9% on a 509-byte snapshot. Aims are 2 bytes longer at the same 30Hz. The motion goes only to the cell's owner, or to someone spectating them, who is dead and cannot act on it.
 
 ### Is it the netcode or the server?
 

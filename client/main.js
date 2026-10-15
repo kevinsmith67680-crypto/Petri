@@ -718,6 +718,8 @@ window.addEventListener("resize", () => renderer.resize());
 // ── loop ────────────────────────────────────────────────────────────────────
 
 let last = 0;
+// Where our cell was drawn last frame, while playing, on this connection.
+const aimOrigin = { conn: null, x: 0, y: 0 };
 
 function frame(now) {
   requestAnimationFrame(frame);
@@ -743,6 +745,17 @@ function frame(now) {
     // getView allocates a fresh cell list and pellet array, so it is built
     // ONCE per frame. It used to be called twice — for aim and for render —
     // which doubled the per-frame garbage for no benefit.
+    //
+    // Aim is taken BEFORE the update, so this frame's movement already
+    // answers wherever the pointer is now. Taken after it, as it was, a
+    // pointer move only reached the cell on the following frame. It is
+    // measured from where the cell was drawn last frame, which is where the
+    // player saw it when they moved.
+    if (!running) aimOrigin.conn = null;
+    if (aimOrigin.conn === conn) {
+      const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
+      conn.sendAim(target.x - aimOrigin.x, target.y - aimOrigin.y);
+    }
     if (running || conn.mode === "online") conn.update(dt);
 
     const fresh = conn.getView();
@@ -752,6 +765,9 @@ function frame(now) {
     if (fresh && running) {
       const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
       conn.sendAim(target.x - fresh.me.x, target.y - fresh.me.y);
+      aimOrigin.conn = conn;
+      aimOrigin.x = fresh.me.x;
+      aimOrigin.y = fresh.me.y;
     }
 
     if (fresh) {
