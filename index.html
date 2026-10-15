@@ -215,6 +215,32 @@
     .zone-call, .zone-call.danger b{ animation:none; }
   }
 
+  /* ── the hold at the start of a round ──
+     Over the arena, not a veil: the point of the hold is to see the field.
+     Above the centre, where the player's own cell sits, so it never covers
+     it. The halo keeps the number legible over cells of any colour. */
+  .hold{
+    position:fixed; left:50%; top:26%; transform:translate(-50%, -50%);
+    z-index:6; pointer-events:none;
+    display:grid; justify-items:center; gap:6px; text-align:center;
+  }
+  .hold[hidden]{ display:none; }
+  .hold b{
+    font-size:120px; line-height:1; font-weight:700; letter-spacing:-.03em;
+    font-variant-numeric:tabular-nums; color:var(--accent);
+    text-shadow:0 0 3px var(--bg), 0 0 22px var(--bg), 0 0 42px var(--bg);
+  }
+  .hold span{
+    font-size:16px; font-weight:600; color:var(--text);
+    background:var(--veil); border:1px solid var(--line);
+    border-radius:6px; padding:5px 12px;
+  }
+  .hold.go b{ animation:go .8s ease-out both; }
+  .hold.go span{ animation:fade .8s ease-in both; }
+  @keyframes go{ 0%{ transform:scale(.8); opacity:0 } 25%{ transform:scale(1.08); opacity:1 } 100%{ transform:scale(1); opacity:0 } }
+  @keyframes fade{ 0%, 40%{ opacity:1 } 100%{ opacity:0 } }
+  @media (prefers-reduced-motion: reduce){ .hold.go b, .hold.go span{ animation:none; } }
+
   /* ── lobby: the pregame menu's layout, two cards under the shared header ──
      Everything below is scoped to the lobby, at the menu's type scale, so
      the two screens read as one set and the menu's own cards are untouched. */
@@ -1022,6 +1048,7 @@
     .lobby-bal div + div{ padding-left:10px; }
     .lobby-bal b{ font-size:17px; }
     .clock b{ font-size:22px; }
+    .hold b{ font-size:88px; }
     /* In the column under the readout, not over it at the top centre. */
     .pot{ position:static; transform:none; padding:7px 12px; gap:10px; }
     .pot-note{ padding-left:10px; }
@@ -1090,6 +1117,12 @@
       <i>Mass value</i><b id="statValue">0.00</b><span class="unit">USDC</span>
     </span>
   </div>
+</div>
+
+<!-- The start of a round: the field is on its starting ring, held still,
+     and this counts down to the moment everyone is let go. -->
+<div class="hold" id="holdCount" hidden aria-live="polite">
+  <b id="holdNum">3</b><span id="holdNote">Get ready</span>
 </div>
 
 <div class="board" id="board">

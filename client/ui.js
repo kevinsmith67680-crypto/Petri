@@ -6,7 +6,9 @@
 import { formatUsdc, valueOfMass, MICRO_PER_MASS, PRACTICE, STAKE_1_USDC, STAKE_2_USDC }
   from "../shared/wager.js";
 import { MODES, modeById } from "../shared/modes.js";
-import { PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN, ZONE_WARNING, ZONE_CLOSING }
+import {
+  PHASE_LIVE, PHASE_LOBBY, PHASE_INTERMISSION, PHASE_COUNTDOWN, PHASE_HOLD, ZONE_WARNING, ZONE_CLOSING
+}
   from "../shared/protocol.js";
 import { MIN_AGE, latestEligibleDob } from "../shared/age.js";
 import { THEMES, STAIN_NAMES, colourOf } from "./render.js";
@@ -56,6 +58,9 @@ export function createUI({
     winVeil: $("winVeil"),
     lobbyVeil: $("lobbyVeil"),
     lobbyCount: $("lobbyCount"),
+    hold: $("holdCount"),
+    holdNum: $("holdNum"),
+    holdNote: $("holdNote"),
     statValue: $("statValue"),
     specBar: $("specBar"),
     specName: $("specName"),
@@ -268,7 +273,7 @@ export function createUI({
     // Opened during a round: this player arrived while it was being played
     // and is held out of it. The meter would read the round's own players
     // as a lobby that is ready to go, so it gives way to how long is left.
-    lobbyWaiting = phase === PHASE_LIVE || phase === PHASE_INTERMISSION;
+    lobbyWaiting = phase === PHASE_LIVE || phase === PHASE_HOLD || phase === PHASE_INTERMISSION;
     el.lobbyCount.hidden = !counting;
     $("lobbyMeter").hidden = counting || lobbyWaiting;
     // Written here as well as from the snapshot clock, because the card is
@@ -309,10 +314,14 @@ export function createUI({
     btn.setAttribute("aria-pressed", String(iAmReady));
   }
 
+  // During the hold the seconds on the snapshot are the hold's, not the
+  // round's, so they are not read as time left in it.
   const waitingLine = (phase, remaining) =>
     phase === PHASE_INTERMISSION
       ? "That round has just finished. The lobby opens in a moment."
-      : typeof remaining === "number"
+      : phase === PHASE_HOLD
+        ? "A round is just starting."
+        : typeof remaining === "number"
         ? `A round is in progress: ${mmss(Math.max(0, Math.ceil(remaining)))} left.`
         : "A round is in progress.";
 
@@ -322,7 +331,8 @@ export function createUI({
   function renderCountdown(round) {
     if (!el.lobbyVeil || el.lobbyVeil.hidden) return;
     // A waiting player watches the round they are held out of run down.
-    if (lobbyWaiting && round && (round.phase === PHASE_LIVE || round.phase === PHASE_INTERMISSION)) {
+    if (lobbyWaiting && round &&
+        (round.phase === PHASE_LIVE || round.phase === PHASE_HOLD || round.phase === PHASE_INTERMISSION)) {
       setText($("lobbyLine"), waitingLine(round.phase, round.remaining));
       return;
     }
@@ -331,6 +341,42 @@ export function createUI({
   }
 
   function hideLobby() { setLobbyShown(false); }
+
+  // ── the hold at the start of a round ─────────────────────────────────────
+
+  // The field is on its starting ring and nobody can move. The count is the
+  // server's, off the snapshot clock like the lobby's, so it runs out on the
+  // tick the room is let go, and "Go" stays up a moment once the snapshots
+  // say the round is live. Only for a player in the round: one waiting it
+  // out has the lobby card, which says so in words.
+  const GO_MS = 800;
+  let holding = false;
+  let goUntil = 0;
+
+  function renderHold(view, now) {
+    const round = view && view.round;
+    const mine = !!view && view.me.alive && !view.spectating;
+    if (mine && round && round.phase === PHASE_HOLD) {
+      holding = true;
+      goUntil = 0;
+      el.hold.hidden = false;
+      setClass(el.hold, "go", false);
+      setText(el.holdNum, Math.max(1, Math.ceil(round.remaining)));
+      setText(el.holdNote, "Get ready");
+      return;
+    }
+    if (holding && mine && round && round.phase === PHASE_LIVE) {
+      goUntil = now + GO_MS;
+      setClass(el.hold, "go", true);
+      setText(el.holdNum, "Go");
+      setText(el.holdNote, "The round has started");
+    }
+    holding = false;
+    if (!mine || !(now < goUntil)) {
+      goUntil = 0;
+      el.hold.hidden = true;
+    }
+  }
 
   // ── standings ─────────────────────────────────────────────────────────────
 
@@ -470,6 +516,7 @@ export function createUI({
 
   function update(view, elapsed, now) {
     if (!view) return;
+    renderHold(view, now);
     renderClock(view.round);
     renderZone(view, now);
     renderIntermission(view.round);
@@ -480,7 +527,8 @@ export function createUI({
 
     // Live rounds only. In practice against bots there is no money involved,
     // so a cash figure there would be actively misleading.
-    const live = view.round && view.round.phase === PHASE_LIVE;
+    // The hold at the start counts: the stake is already riding on the round.
+    const live = view.round && (view.round.phase === PHASE_LIVE || view.round.phase === PHASE_HOLD);
     // Lives in the pot bar now, which is only shown when something is at
     // stake — so a practice run never displays a cash figure at all.
     if (live) {
@@ -499,7 +547,7 @@ export function createUI({
       // Skip it when the rendered string has not changed.
       // Mark the paid places and rule a line under fifth, so the boundary
       // that decides who gets anything is visible at a glance.
-      const paidTo = view.round && view.round.phase === PHASE_LIVE ? 5 : 0;
+      const paidTo = live ? 5 : 0;
       const html = view.board.map((r, i) => {
         const cls = [
           r.id === view.me.id ? "you" : "",
@@ -1289,7 +1337,7 @@ export function createUI({
     setAccount, setRampNote, setWagerAvailable, renderAuth, renderCareer,
     renderProgress, showProgressGain,
     setAuthAvailable, showGoogle, setAuthError, showError, setErrorText, hideError, showStart,
-    renderIntermission, renderCountdown, showWin, hideWin,
+    renderIntermission, renderCountdown, renderHold, showWin, hideWin,
     showReconnecting, showConnecting, hideReconnecting,
     showRoundEnd, hideRoundEnd, showLobby, hideLobby,
     showSpectator, hideSpectator, setTestMode, renderPerf, renderDiagnostics,

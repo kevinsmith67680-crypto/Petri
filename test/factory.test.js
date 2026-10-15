@@ -57,6 +57,7 @@ process.env.MAX_ROOMS = "3";
 // A long round, so nothing here races a settlement.
 process.env.ROUND_SECONDS = "60";
 process.env.COUNTDOWN_SECONDS = "1";
+process.env.HOLD_SECONDS = "1";
 process.env.STANDINGS_SECONDS = "1";
 // Short enough to watch a room wait out its lingering bodies.
 process.env.LINGER_SEC = "2";
@@ -183,7 +184,7 @@ console.log("\n-- the process stops at MAX_ROOMS --");
 console.log("\n-- a room between rounds is preferred to one mid-round --");
 
 await ada.deliver({ type: "ready", ready: true });
-await settle(1500);                       // the count, plus margin
+await settle(2500);                       // the count and the hold, plus margin
 check("standard-1 is live", (await roomById("standard-1"))?.phase === "live",
   (await roomById("standard-1"))?.phase);
 

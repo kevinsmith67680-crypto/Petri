@@ -20,7 +20,7 @@
 // ---------------------------------------------------------------------------
 
 import {
-  MSG, decodeSnapshot, encodeAim, encodeAction, PROTOCOL_VERSION
+  MSG, decodeSnapshot, encodeAim, encodeAction, PROTOCOL_VERSION, PHASE_HOLD
 } from "../shared/protocol.js";
 import {
   TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed, separateCells,
@@ -710,6 +710,10 @@ export function createSocketConnection({
   // from what is on screen becomes an offset that fades, so a correction is a
   // slide rather than a jump.
   function reconcile(snap) {
+    // Held on the starting ring, the server moves nobody and drops every
+    // action: its cells are exactly where it says, with nothing to replay.
+    const still = snap.round?.phase === PHASE_HOLD;
+    if (still) { pendingActions.length = 0; pendingEats.length = 0; }
     let from = snapFrom(snap);
     if (snap.ack) {
       const i = inputs.findIndex(e => e.seq === snap.ack);
@@ -736,7 +740,7 @@ export function createSocketConnection({
     // already on screen, so they are taken at the end.
     const tick = 1000 / serverHz;
     let a = 0, t = from;
-    while (cells.length && simAt - t > 0.5) {
+    while (!still && cells.length && simAt - t > 0.5) {
       const h = Math.min(tick, simAt - t);
       const end = t + h;
       while (a < pendingActions.length && pendingActions[a].at <= end) applyAction(cells, pendingActions[a++], false);
@@ -779,6 +783,9 @@ export function createSocketConnection({
     }
   }
 
+  // The newest snapshot says the round is in its starting hold.
+  const held = () => frames[frames.length - 1]?.round?.phase === PHASE_HOLD;
+
   // Our own cells are predicted from the NEWEST snapshot, not the
   // interpolated one; only other players are worth rendering in the past.
   function predict(dt, now) {
@@ -804,10 +811,15 @@ export function createSocketConnection({
     if (rebase) { reconcile(rebase); rebase = null; }
     simAt = now;
 
+    // Held on the starting ring: the server moves nobody and eats nothing,
+    // so neither does prediction. Moving from the aim here walks the cell
+    // off its spot and drags it back, which reads as the controls fighting.
+    const still = held();
+
     if (predicted.size) {
       // The freshest aim, not the last one sent: it is on its way, and
       // waiting for it would put up to a send interval back into the controls.
-      moveOwn([...predicted.values()], pendingAim, dt, dt * serverHz);
+      if (!still) moveOwn([...predicted.values()], pendingAim, dt, dt * serverHz);
       // Mass is smoothed rather than stepped. Every orb eaten arrives as a
       // jump in radius at the tick rate, and because speed depends on mass
       // the movement jerked with it — visible as a faint stutter.
@@ -826,6 +838,7 @@ export function createSocketConnection({
     // Same test the server uses, so the client rarely guesses wrong. Against
     // the cell as drawn: an orb disappears when it is visibly covered.
     for (const [key, cell] of predicted) {
+      if (still) break;
       const cx = cell.x + cell.ox, cy = cell.y + cell.oy;
       const reach = radiusOf(cell.dm) + ORB_RADIUS * 0.6;
       const reach2 = reach * reach;
@@ -964,6 +977,9 @@ export function createSocketConnection({
       const input = nextInput(now);
       socket.send(encodeAction(action, input.x, input.y, input.seq));
       if (action !== "split" && action !== "eject") return;
+      // Still sent during the hold, since the server decides whether it is
+      // over, but not shown: a held server drops it.
+      if (held()) return;
       // Show it now. It is replayed on every snapshot until the server has
       // acted on it, and the server's version then takes over where it is.
       const act = { id: nextActionId++, kind: action, at: now, seq: input.seq, aim: input };

@@ -17,7 +17,7 @@ import { SERVER_URL, MATCHMAKER_URL } from "./config.js";
 import { requestTicket } from "./match.js";
 import { PRACTICE } from "../shared/wager.js";
 import { MODES } from "../shared/modes.js";
-import { PHASE_LOBBY, PHASE_COUNTDOWN, PHASE_LIVE } from "../shared/protocol.js";
+import { PHASE_LOBBY, PHASE_COUNTDOWN, PHASE_HOLD } from "../shared/protocol.js";
 import { STAIN_COUNT } from "../shared/sim.js";
 import { createAccountClient } from "./account.js";
 
@@ -502,7 +502,7 @@ function onRound(msg) {
     if (!ready) {
       waitingForRound = true;
       running = false;
-      ui.showLobby({ ...lastLobby, phase: PHASE_LIVE });
+      ui.showLobby({ ...lastLobby, phase: PHASE_HOLD });
       return;
     }
     waitingForRound = false;
@@ -771,6 +771,9 @@ function frame(now) {
     }
 
     if (fresh) {
+      // The hold on the starting ring is not time played: the run's clock
+      // starts when the field is let go, as the server's does.
+      if (running && fresh.round?.phase === PHASE_HOLD) startedAt = now;
       if (running) elapsed = (now - startedAt) / 1000;
       renderer.follow(camera, fresh, dt);
       // Captured while alive: once you are eaten the snapshot has no standing.

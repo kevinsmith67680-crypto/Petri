@@ -83,6 +83,12 @@ export const PHASE_LOBBY = 3;
 // than a flag on the lobby, so the count reaches the client on the snapshot
 // clock every other timer already rides on.
 export const PHASE_COUNTDOWN = 4;
+// The whistle has gone and everyone is on the starting ring, but nobody can
+// move yet. A few seconds to see where every opponent stands before the
+// round begins, the same seconds for everyone. A new value in a byte that
+// was already there, so the frame layout and PROTOCOL_VERSION are unchanged:
+// a page from before it sees a still field for a moment, then plays as usual.
+export const PHASE_HOLD = 5;
 
 const CELL_MINE = 1 << 0;
 const CELL_COOLDOWN = 1 << 1;
