@@ -57,7 +57,7 @@ def read_constants():
     import * as W from './shared/wager.js';
     const names = ['WORLD','PELLETS','VIRUSES','START_MASS','PELLET_MASS','EJECT_MASS',
       'EJECT_KEEP','VIRUS_MASS','VIRUS_EAT_RATIO','VIRUS_PIECES','MAX_CELLS','EAT_RATIO',
-      'EAT_BONUS','MERGE_DELAY','DECAY_ABOVE','BASE_SPEED','EJECT_SPEED',
+      'EAT_BONUS','MERGE_DELAY','DECAY_ABOVE','DECAY_RATE','BASE_SPEED','EJECT_SPEED',
       'EJECT_OWNER_COOLDOWN','VIRUS_FEED_HITS','VIRUS_SPLIT_SPEED','VIRUS_MAX_RATIO',
       'SPAWN_GAP','TICK_HZ','ZONE_AT_REMAINING','ZONE_WARN_SECONDS',
       'ZONE_SHRINK_SECONDS','ZONE_SHRINK_TO','ZONE_DRAIN','ZONE_DRAIN_FLAT','ZONE_MIN_MASS'];
@@ -254,6 +254,9 @@ POP_MASS = K["VIRUS_MASS"] * K["VIRUS_EAT_RATIO"]       # 126.5
 EJECT_LOSS = (K["EJECT_MASS"] - K["EJECT_KEEP"]) / K["EJECT_MASS"] * 100
 MASS_PER_USDC = K["UNIT"] / K["MICRO_PER_MASS"]         # 200
 ORBS_TO_100 = -(-(100 - K["START_MASS"]) // K["PELLET_MASS"])
+DECAY_PCT = K["DECAY_RATE"] * 100                       # 0.5
+# What eating a rival pays, in words: exactly their mass, or a multiple.
+EATS = "all of their mass" if K["EAT_BONUS"] == 1 else f"{K['EAT_BONUS']:g}x their mass"
 
 def zone_seconds(start, end):
     """How long a cell outside the zone takes to drain from one mass to
@@ -442,10 +445,10 @@ def dia_eat_rule():
     cell_shape(d, 285, y, 33, STAINS[2], "110")
     d.add(String(285, 16, "you at 110 - eats it", fontName="Helvetica", fontSize=7.5,
                  fillColor=MUTED, textAnchor="middle"))
-    d.add(String(285, 100, "eats, and gains 132", fontName="Helvetica-Bold",
+    d.add(String(285, 100, f"eats, and gains {100 * K['EAT_BONUS']:g}", fontName="Helvetica-Bold",
                  fontSize=7.5, fillColor=VIRUS_EDGE, textAnchor="middle"))
     arrow(d, 320, y, 366, y, ACCENT, 1.2, 5)
-    d.add(String(430, y - 3, f"{K['EAT_BONUS']}x their mass", fontName="Helvetica-Bold",
+    d.add(String(430, y - 3, EATS.replace("of their ", "their "), fontName="Helvetica-Bold",
                  fontSize=8, fillColor=ACCENT, textAnchor="middle"))
     d.add(String(430, y - 15, "is what you collect", fontName="Helvetica", fontSize=7.5,
                  fillColor=MUTED, textAnchor="middle"))
@@ -1036,10 +1039,10 @@ def story():
 
     s.append(P(f"1. The {EAT_PCT:.1f}% rule", S_H2))
     s.append(dia_eat_rule())
-    s.append(P(f"Eating pays a bonus: you collect {K['EAT_BONUS']}x the mass you "
-               "swallowed, so players are worth far more than orbs. An orb is "
-               f"{K['PELLET_MASS']} mass, and it takes about {int(ORBS_TO_100)} of them "
-               f"to go from your opening {K['START_MASS']} to 100.", S_CAPTION))
+    s.append(P(f"Eating a player pays {EATS}, so players are worth far more than "
+               f"orbs. An orb is {K['PELLET_MASS']:g} mass, and it takes about "
+               f"{int(ORBS_TO_100)} of them to go from your opening {K['START_MASS']} "
+               "to 100.", S_CAPTION))
 
     s.append(P("2. Mass costs speed", S_H2))
     s.append(two_col(
@@ -1062,10 +1065,10 @@ def story():
 
     s.append(P("3. Size above a point is a leak", S_H2))
     s.append(P(f"Any cell over <b>{K['DECAY_ABOVE']}</b> mass shrinks continuously, at "
-               "about 0.22% a second. At 400 that is under a mass a second and barely "
-               "noticeable. At 1,600 you are losing more than three a second, and "
-               "standing still is going backwards. Big players have to keep eating "
-               "purely to stand still.", S_BODY))
+               f"{DECAY_PCT:g}% a second. At 400 that is {400 * K['DECAY_RATE']:g} mass a "
+               f"second; at 1,600 it is {1600 * K['DECAY_RATE']:g}, and standing still is "
+               "going backwards. Big players have to keep eating purely to stay big, "
+               "which is what gives the pack behind them a chance.", S_BODY))
 
     s.append(PageBreak())
 
@@ -1581,7 +1584,7 @@ def story():
          "nothing but feeding viruses, to learn the range and lead of a throw."),
 
         (4, "Orb economy", "Growth",
-         [f"Orbs are {K['PELLET_MASS']} mass each and there are {STD['world']['pellets']:,} "
+         [f"Orbs are {K['PELLET_MASS']:g} mass each and there are {STD['world']['pellets']:,} "
           "of them. Early on, they are the whole game: you need roughly "
           f"{int(ORBS_TO_100)} to reach 100 from your opening {K['START_MASS']}.",
           "The skill is pathing. Orbs are evenly spaced, so the ground worth "
@@ -1742,7 +1745,7 @@ def story():
                           f"{EJECT_LOSS:.0f}% of it lost outright",
           "A hazard placed where you choose"],
          ["Preserve", f"Nothing below {K['DECAY_ABOVE']} mass; above it you leak "
-                      "0.22% a second", "Speed, and the ability to run"]],
+                      f"{DECAY_PCT:g}% a second", "Speed, and the ability to run"]],
         [26 * mm, 52 * mm, None]))
     s.append(P("The non-obvious one is <b>preserve</b>. Because speed falls with mass "
                f"and everything above {K['DECAY_ABOVE']} decays, there is a size past "
@@ -1760,7 +1763,7 @@ def story():
                        "Deciding when a target is worth pursuing versus when to retreat."))
     s.append(P("Price the attempt before you start it. A pursuit costs time, position "
                "and usually a split; what it returns is "
-               f"{K['EAT_BONUS']}x the target's mass, plus - in a wagered round - "
+               f"{EATS.replace('their', 'the target' + chr(39) + 's')}, plus - in a wagered round - "
                "their entire pot.", S_BODY))
     s.append(bullets([
         "<b>Worth it:</b> a staked player carrying pots, cornered, with nothing "
@@ -1949,10 +1952,11 @@ def story():
     ref_a = [P("Eating and growing", S_H3), datatable(
         ["", ""],
         [["Starting mass", f"{K['START_MASS']}"],
-         ["Orb value", f"{K['PELLET_MASS']} mass"],
+         ["Orb value", f"{K['PELLET_MASS']:g} mass"],
          ["To eat a rival", f"you must be {K['EAT_RATIO']}x their mass ({EAT_PCT:.1f}% bigger)"],
-         ["Reward for eating", f"{K['EAT_BONUS']}x the mass you swallowed"],
-         ["Decay", f"above {K['DECAY_ABOVE']} mass, 0.22% per second"],
+         ["Reward for eating", EATS.replace("their", "the") + " you swallow"
+                               if K["EAT_BONUS"] != 1 else "exactly the mass you swallow"],
+         ["Decay", f"above {K['DECAY_ABOVE']} mass, {DECAY_PCT:g}% per second"],
          ["Speed", "falls as mass<super>-0.24</super>"]],
         [30 * mm, None]),
         P("Splitting and ejecting", S_H3), datatable(

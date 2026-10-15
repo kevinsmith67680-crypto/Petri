@@ -87,7 +87,11 @@ for (let i = 0; i < TICK_HZ * 120; i++) {   // two simulated minutes
 check("orb counter matches emitted events", me.orbs === orbEvents, `${me.orbs} / ${orbEvents}`);
 check("player gained mass", totalMass(me) > 0);
 check("pellet count held constant", world.pellets.length >= PELLETS, `${world.pellets.length}`);
-check("virus count held constant", world.viruses.length === VIRUSES, `${world.viruses.length}`);
+// Feeding can split a virus, up to VIRUS_MAX_RATIO times the seeded count;
+// eating one only tops the population back up to the seeded count.
+check("virus count stays between the seeded count and its ceiling",
+  world.viruses.length >= VIRUSES && world.viruses.length <= Math.round(VIRUSES * VIRUS_MAX_RATIO),
+  `${world.viruses.length}`);
 check("cell cap respected", maxCells <= MAX_CELLS, `peak ${maxCells}`);
 check("deaths were observed", deaths > 0, `${deaths}`);
 
@@ -654,11 +658,11 @@ function watchBot({ w, bot }, seconds) {
   check("with company in sight, hard does not leave to hunt", hunt("hard", true) > 1000,
     hunt("hard", true).toFixed(0));
 
-  // Grazing by value: thrown mass (13) 300 off on one side, a plain orb (3.4)
+  // Grazing by value: thrown mass (13) 300 off on one side, a plain orb
   // 150 off on the other. Hard goes for the bigger meal first.
   const w = createWorld(3, { size: 3000, pellets: 0, viruses: 0, botLevel: "hard" });
   w.pellets.push({ id: 9001, x: 1800, y: 1500, mass: EJECT_KEEP, vx: 0, vy: 0, ci: 0 });
-  w.pellets.push({ id: 9002, x: 1350, y: 1500, mass: 3.375, vx: 0, vy: 0, ci: 0 });
+  w.pellets.push({ id: 9002, x: 1350, y: 1500, mass: PELLET_MASS, vx: 0, vy: 0, ci: 0 });
   buildPelletGrid(w);
   fillBots(w, 1);
   const grazer = [...w.players.values()].find(p => p.bot);

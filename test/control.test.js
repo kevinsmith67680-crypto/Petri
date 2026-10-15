@@ -41,6 +41,12 @@ const dropped = [];
 const warn = console.warn;
 console.warn = (...a) => dropped.push(a.join(" "));
 
+// Every connection harness() opens, so they can be closed before the tests
+// that count sockets. Left open, each one's stall watchdog fires 2.5 seconds
+// after its last frame and it starts reconnecting — pushing sockets into the
+// shared list in the middle of whichever test is running then.
+const harnessed = [];
+
 function harness(mode = MODES[0]) {
   sockets.length = 0;
   const world = createWorld(5, mode.world);
@@ -50,6 +56,7 @@ function harness(mode = MODES[0]) {
   const cs = createClientState(0);
 
   const conn = createSocketConnection({ getTicket: () => ({ url: "ws://x", ticket: "t" }) });
+  harnessed.push(conn);
   const sock = sockets[0];
   sock.fire("open");
   sock.fire("message", { data: JSON.stringify({ type: "welcome", nid: me.nid, tickHz: TICK_HZ }) });
@@ -315,6 +322,9 @@ let t = 0;
 while (st.hx > -0.95 && t < 1) { advanceCell(st, st.x - 600, st.y, 1 / 60, 8800); t += 1 / 60; }
 check("but a reversal completes in about a third of a second",
   t > 0.15 && t < 0.5, `${(t * 1000).toFixed(0)} ms`);
+
+// From here on the tests count sockets and reconnections.
+for (const c of harnessed) c.close();
 
 console.log("\n-- a dropped connection recovers --");
 
