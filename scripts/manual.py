@@ -234,6 +234,7 @@ def read_timings():
     out = {}
     for key, pattern in (
         ("countdown", r'envInt\("COUNTDOWN_SECONDS", (\d+)\)'),
+        ("hold", r'envInt\("HOLD_SECONDS", (\d+)\)'),
         ("standings", r'envInt\("STANDINGS_SECONDS", (\d+)\)'),
         ("linger", r'envInt\("LINGER_SEC", (\d+)\)'),
         ("skillWindow", r'envInt\("SKILL_WINDOW", (\d+)\)'),
@@ -459,11 +460,12 @@ def dia_timeline():
     d = Drawing(CONTENT_W, 74)
     w = CONTENT_W
     segs = [
-        ("Lobby", "until enough are ready", 0.20, colors.HexColor("#e6e5e1")),
+        ("Lobby", "until enough are ready", 0.17, colors.HexColor("#e6e5e1")),
         (f"Count {T['countdown']}s", "everyone ready", 0.10, ACCENT),
-        (f"Round {STD['roundSeconds'] // 60} min", "the only part that pays", 0.44, colors.HexColor("#2f2f2d")),
-        (f"Standings {T['standings']}s", "who finished where", 0.13, colors.HexColor("#b9b7b1")),
-        ("Lobby", "ready up again", 0.13, colors.HexColor("#e6e5e1")),
+        (f"Hold {T['hold']}s", "on the ring, still", 0.11, colors.HexColor("#d9cdee")),
+        (f"Round {STD['roundSeconds'] // 60} min", "the only part that pays", 0.38, colors.HexColor("#2f2f2d")),
+        (f"Standings {T['standings']}s", "who finished where", 0.12, colors.HexColor("#b9b7b1")),
+        ("Lobby", "ready up again", 0.12, colors.HexColor("#e6e5e1")),
     ]
     x = 0
     for label, sub, frac, col in segs:
@@ -910,7 +912,11 @@ def story():
 
     s.append(P("How a round runs", S_H2))
     s.append(dia_timeline())
-    s.append(P(f"At the whistle the finishing positions go up for {T['standings']} "
+    s.append(P(f"When the count runs out, everyone is dealt onto the starting ring and held "
+               f"there for {T['hold']} seconds, counted down on screen: nobody can move, so "
+               f"everyone sees the whole opening first, and everyone is let go on the same "
+               f"tick. "
+               f"At the whistle the finishing positions go up for {T['standings']} "
                f"seconds, then everyone goes back to the lobby and nobody is ready: each "
                f"round, and each stake, is a fresh choice. Finish in the top "
                f"{STD['paidPositions']} and a congratulations card shows what the round "
@@ -946,8 +952,7 @@ def story():
         "number: who you chase, who you run from, and how close you dare sit."))
 
     s.append(Spacer(1, 6 * mm))
-    s.append(P("What is in here", S_H2))
-    s.append(two_col(
+    s.append(KeepTogether([P("What is in here", S_H2), two_col(
         datatable(["", ""],
                   [["Controls", "Four inputs, and the HUD"],
                    ["The rules", "Eating, speed, decay"],
@@ -962,7 +967,7 @@ def story():
                    ["Technique", "How the work is actually done"],
                    ["Playbook", "A shape for ten minutes"],
                    ["Reference", "Every number on one page"]],
-                  [24 * mm, None])))
+                  [24 * mm, None]))]))
 
     s.append(PageBreak())
 
@@ -1117,7 +1122,11 @@ def story():
          ["Clear of the wall", f"{STDB['wallClear']:.0f}", f"{HIB['wallClear']:.0f}"]],
         [50 * mm, None, None]))
 
-    s.append(P("Two details worth knowing. The ring is <b>turned by a fresh angle "
+    s.append(P(f"Three details worth knowing. The field is <b>held on the ring for "
+               f"{T['hold']} seconds</b> before the round begins: aim all you like, but nobody "
+               "moves, splits or throws until the count runs out, and then everyone "
+               "goes at once, towards wherever they were pointing. The ring is "
+               "<b>turned by a fresh angle "
                "every round</b>, so there is no memorised opening. And the ring is "
                "<b>the only way onto the board</b>: nobody joins a round once it has "
                "started, and nobody respawns in one. Arrive late, or get eaten, and "
@@ -1992,6 +2001,7 @@ def story():
           f"{round(HIGH['world']['size'] * K['ZONE_SHRINK_TO']):,}"],
          ["Paid places", str(STD["paidPositions"]), str(HIGH["paidPositions"])],
          ["Countdown", f"{T['countdown']}s", f"{T['countdown']}s"],
+         ["Hold on the ring", f"{T['hold']}s", f"{T['hold']}s"],
          ["Standings", f"{T['standings']}s", f"{T['standings']}s"]],
         [30 * mm, 14 * mm, None])]
 

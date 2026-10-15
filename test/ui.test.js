@@ -463,6 +463,56 @@ check("and no longer ticks a round it is not waiting on",
   /Waiting for 1 more/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
 ui.setReady(false);
 
+console.log("\n-- the hold on the starting ring --");
+
+// At the whistle the field is dealt onto the ring and held there for a few
+// seconds. The count over the arena is the server's, off the snapshot clock,
+// and says Go for a moment once the snapshots say the round is live.
+// PHASE_HOLD is 5, PHASE_LIVE 1.
+{
+  const view = (phase, remaining, alive = true) => ({
+    round: { phase, remaining, number: 7 },
+    me: { alive, orbs: 0, eaten: 0, mass: 20, peak: 20, rank: 1, of: 9, id: 1 },
+    spectating: false, board: []
+  });
+  let now = 10_000;
+  ui.update(view(5, 3), 0, now);
+  check("held, the count is up over the arena", $("holdCount").hidden === false);
+  check("showing the seconds the server sent", $("holdNum").textContent === "3", $("holdNum").textContent);
+  check("and the round's clock waits for the release", $("roundClock").hidden === true);
+  ui.update(view(5, 1), 0, now += 1000);
+  check("it counts down", $("holdNum").textContent === "1", $("holdNum").textContent);
+  ui.update(view(1, 120), 0, now += 50);
+  check("let go, it says Go", $("holdCount").hidden === false && $("holdNum").textContent === "Go",
+    $("holdNum").textContent);
+  check("and the round's clock starts", $("roundClock").hidden === false);
+  ui.update(view(1, 119), 0, now += 300);
+  check("Go stays up a moment", $("holdCount").hidden === false);
+  ui.update(view(1, 118), 0, now += 1000);
+  check("then clears off the arena", $("holdCount").hidden === true);
+  ui.update(view(1, 117), 0, now += 1000);
+  check("and a live round alone never brings it back", $("holdCount").hidden === true);
+
+  // Someone held out of the round watches it from the lobby card, which
+  // covers the arena; the count is for the players in it.
+  ui.update(view(5, 2, false), 0, now += 1000);
+  check("a player with no body in the round is not shown it", $("holdCount").hidden === true);
+  ui.update(view(1, 120, false), 0, now += 1000);
+  check("nor told Go", $("holdCount").hidden === true);
+
+  ui.setReady(false);
+  ui.showLobby({ ready: 3, connected: 4, min: 1, max: 150, phase: 5 });
+  check("waiting it out, the lobby card says a round is starting",
+    /round is just starting/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
+  check("with no ready meter claiming the room is about to start",
+    $("lobbyMeter").hidden === true && $("lobbyCount").hidden === true);
+  ui.renderCountdown({ phase: 5, remaining: 2, number: 7 });
+  check("and does not read the hold's seconds as the round's",
+    !/left/.test($("lobbyLine").textContent), $("lobbyLine").textContent);
+  ui.showLobby({ ready: 1, connected: 4, min: 2, max: 150, phase: 3 });
+  $("lobbyVeil").hidden = true;
+}
+
 console.log("\n-- your cell, on the lobby card --");
 
 const swatches = $("swatches").children;

@@ -71,7 +71,7 @@ function start(name, script, env, ready) {
 const game = (id, region, port) => start(id, "server/index.js", {
   PORT: String(port), MATCHMAKER: "external", SERVER_ID: id, REGION: region,
   PUBLIC_URL: `ws://localhost:${port}`, MATCH_SECRET: SECRET, DATABASE_URL: DB,
-  TEST_MODE: "1", BOTS: "0", ROUND_SECONDS: "60", COUNTDOWN_SECONDS: "1",
+  TEST_MODE: "1", BOTS: "0", ROUND_SECONDS: "60", COUNTDOWN_SECONDS: "1", HOLD_SECONDS: "1",
   LINGER_SEC: "2", SEAT_TTL_SECONDS: String(SEAT_TTL), ALLOWED_ORIGINS: ""
 }, "Petri server on port");
 
@@ -202,7 +202,7 @@ console.log("\n-- a reconnect finds its own body --");
 
 {
   adaIn.ws.send(JSON.stringify({ type: "ready", ready: true }));
-  await sleep(1600);                            // the count, plus margin
+  await sleep(2600);                            // the count and the hold, plus margin
   const live = (await (await fetch(`http://localhost:${EU}/health`)).json())
     .rooms.find(r => r.id === adaTicket.room);
   check("ada's round is live on eu-1", live?.phase === "live", live?.phase);

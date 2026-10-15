@@ -42,7 +42,7 @@ import {
 } from "../shared/sim.js";
 import {
   encodeSnapshot, decodeClientMessage, createClientState, MSG,
-  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PROTOCOL_VERSION
+  PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PHASE_HOLD, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import { PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
   from "../shared/wager.js";
@@ -129,6 +129,14 @@ const HZ = Math.max(10, Math.min(60, envInt("TICK_HZ", TICK_HZ)));
 // pressed a button are not looking at the arena; dropping them straight into
 // it costs them the opening seconds of a round they have paid for.
 const COUNTDOWN_SECONDS = envInt("COUNTDOWN_SECONDS", 5);
+
+// At the whistle everyone is dealt onto the starting ring and held there,
+// unable to move, for this long. Every player sees the whole opening — their
+// own spot and their neighbours' — before anyone can act on it, and the
+// release is one tick for the whole room, so a quicker connection or a
+// quicker reaction to the whistle is not a head start. The round's own clock
+// starts when the hold ends. Like the count, not shortened in test mode.
+const HOLD_SECONDS = Math.max(0, envInt("HOLD_SECONDS", 3));
 
 // How long the finishing positions stay on screen at the whistle before
 // everyone is taken to the lobby.
@@ -386,7 +394,7 @@ const server = http.createServer(async (req, res) => {
         cap: r.lobbyMax,
         // Seats promised to tickets that have not joined yet.
         reserved: r.reserved.size,
-        phase: ["", "live", "intermission", "lobby", "countdown"][r.round.phase] || r.round.phase,
+        phase: ["", "live", "intermission", "lobby", "countdown", "hold"][r.round.phase] || r.round.phase,
         round: r.round.number,
         arena: r.world.size,
         botTarget: r.bots,
@@ -629,7 +637,9 @@ const hasSeat = room => seatsTaken(room) < room.lobbyMax;
 // a live room only watches the lobby card until the whistle. After that the
 // fuller room, so one lobby reaches its minimum rather than several getting
 // halfway there and none starting.
-const betweenRounds = room => room.round.phase !== PHASE_LIVE;
+// The hold at the start of a round is part of it: everyone in it has a body.
+const inRound = room => room.round.phase === PHASE_LIVE || room.round.phase === PHASE_HOLD;
+const betweenRounds = room => !inRound(room);
 const betterSeat = (a, b) =>
   betweenRounds(a) !== betweenRounds(b) ? betweenRounds(a) : seatsTaken(a) > seatsTaken(b);
 
@@ -659,7 +669,7 @@ function roomSkill(room, now = Date.now()) {
     if (held.rating != null) { sum += held.rating; n++; }
   }
   if (!n) return { rating: null, window: null };
-  const waited = room.round.phase === PHASE_LIVE ? 0 : Math.max(0, now - room.waitingSince) / 1000;
+  const waited = inRound(room) ? 0 : Math.max(0, now - room.waitingSince) / 1000;
   return { rating: sum / n, window: SKILL_WINDOW + SKILL_WIDEN * waited };
 }
 
@@ -931,7 +941,7 @@ function claimLingering(accountId) {
 // Is there still a run to come back to? A round that has moved on, or a body
 // that was eaten while its owner was away, leaves nothing to resume.
 const canResume = ({ room, player }) =>
-  room.round.phase === PHASE_LIVE && !!player && player.alive && player.cells.length > 0;
+  inRound(room) && !!player && player.alive && player.cells.length > 0;
 
 // The room holding this account's body, if the player can step back into it.
 // A mode has several rooms now, so "the room for this stake" is no longer
@@ -1031,7 +1041,7 @@ const roundView = room => ({
   phase: room.round.phase,
   remaining: room.round.endsAt === Infinity
     ? 0
-    : room.round.phase === PHASE_COUNTDOWN
+    : room.round.phase === PHASE_COUNTDOWN || room.round.phase === PHASE_HOLD
       ? countdownLeft(room)
       : Math.max(0, room.round.endsAt - room.world.time),
   number: room.round.number
@@ -1557,11 +1567,10 @@ async function startRound(room) {
   }
 
   round.number++;
-  round.phase = PHASE_LIVE;
-  round.endsAt = world.time + room.roundSeconds;
+  // Held on the ring first; releaseRound starts the round's own clock.
+  round.phase = PHASE_HOLD;
+  round.endsAt = world.time + HOLD_SECONDS;
   resetArena(world);
-  // The closing zone: announced when the clock reads 1:40, closing from 1:30.
-  planZone(world, round.endsAt);
 
   // Bots first: the roster has to be final before anyone is placed, or the
   // ring is spaced for a field that is about to change size.
@@ -1586,9 +1595,26 @@ async function startRound(room) {
   room.lastEater.clear();
   broadcast(room, {
     type: "round_start", mode: room.mode.id,
-    number: round.number, seconds: room.roundSeconds
+    number: round.number, seconds: room.roundSeconds, hold: HOLD_SECONDS
   });
   console.log(`[${room.id}] round ${round.number} started with ${readyCount(room)} player(s)`);
+  // With no hold configured, straight off the ring. The same path as a hold
+  // that has run out, so there is one way into a live round, not two.
+  if (!(HOLD_SECONDS > 0)) releaseRound(room);
+}
+
+// The hold is over: everyone is let off the ring on the same tick, and the
+// round's clock starts. Survival time is counted from here too, so a run's
+// length is time spent playing, not time spent held still.
+function releaseRound(room) {
+  const { world, round } = room;
+  round.phase = PHASE_LIVE;
+  round.endsAt = world.time + room.roundSeconds;
+  for (const p of world.players.values()) if (p.alive) p.spawnedAt = world.time;
+  // The closing zone: announced when the clock reads 1:40, closing from 1:30.
+  // Planned here, against the end the round actually has. Planned at the
+  // deal, it was timed off the end of the hold and never came at all.
+  planZone(world, round.endsAt);
 }
 
 // Bring the bot population to whatever this room should currently have,
@@ -1655,11 +1681,11 @@ wss.on("connection", (ws, req) => {
         } else if (msg.type === "ready") {
           // During a live round, only from someone without a body in it: a
           // player waiting for the next round opts in from the lobby card.
-          if (room.round.phase === PHASE_LIVE && room.world.players.get(id)?.alive) return;
+          if (inRound(room) && room.world.players.get(id)?.alive) return;
           meta.ready = msg.ready !== false;
           // Chosen during a round by someone sitting it out, which makes it a
           // choice about the next one: the whistle keeps it (toLobby).
-          meta.readyForNext = meta.ready && room.round.phase === PHASE_LIVE;
+          meta.readyForNext = meta.ready && inRound(room);
           pushLobby(room);
           maybeStartRound(room);
         } else if (msg.type === "rename") {
@@ -2028,9 +2054,11 @@ function tickRoom(room, dt) {
   // When this room's tick acted on its input, on the clock aims are stamped
   // with. Taken per room: with several rooms, each steps a little later.
   const tickAt = performance.now();
-  const events = stepWorld(world, dt);
+  const events = stepWorld(world, dt, round.phase === PHASE_HOLD);
 
-  if (round.phase === PHASE_LIVE && world.time >= round.endsAt) {
+  if (round.phase === PHASE_HOLD && world.time >= round.endsAt) {
+    releaseRound(room);
+  } else if (round.phase === PHASE_LIVE && world.time >= round.endsAt) {
     // Not awaited: settlement talks to the database and the tick must not
     // block on it. The phase flips synchronously, so this cannot run twice.
     endRound(room).catch(err => console.error("endRound:", err.message));

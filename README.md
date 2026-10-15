@@ -70,6 +70,7 @@ You can also test without editing config, using `?mode=online&server=wss://your-
 | `BOT_DIFFICULTY` | `normal` | `easy`, `normal` or `hard`: the level of the test-mode rooms a server opens by default. Players who pick another are seated in rooms at their own level — see [Bot difficulty](#bot-difficulty). An unknown value logs a warning and uses `normal` |
 | `ROUND_SECONDS` | 600 | Length of a live round |
 | `COUNTDOWN_SECONDS` | 5 | Count between the lobby filling and the whistle |
+| `HOLD_SECONDS` | 3 | How long the field is held still on the starting ring after the whistle, before anyone can move. 0 skips it |
 | `STANDINGS_SECONDS` | 5 | How long the finishing positions stay up before everyone goes to the lobby |
 | `LOBBY_MIN` | 100 | Ready players needed to start. **Set to 2 for testing** |
 | `LOBBY_MAX` | 150 | Seats per room. When every room of a mode is full, another opens |
@@ -875,9 +876,11 @@ Against a scripted player grazing at mass 200, in a 4,000-unit arena with 20 bot
 
 The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
 
-A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and a room holds at most **`LOBBY_MAX`** (default 150). Past that the arrival is seated in another room of the same mode, opened if need be; only when the process cannot open one does it refuse with a "full" close (see *Rooms on demand*). The cycle is lobby → **5s countdown** → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
+A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and a room holds at most **`LOBBY_MAX`** (default 150). Past that the arrival is seated in another room of the same mode, opened if need be; only when the process cannot open one does it refuse with a "full" close (see *Rooms on demand*). The cycle is lobby → **5s countdown** → **3s hold on the starting ring** → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
 
 **The countdown is its own round phase** (`PHASE_COUNTDOWN`), not a flag on the lobby. That puts it on the snapshot clock every other timer already rides on, so the number on the card is the server's and cannot drift away from when the round actually starts. The lobby card stays up and swaps its ready meter for the count. If anyone un-readies or drops their connection during it the count is abandoned and the room goes back to waiting — checked every tick rather than only where readiness changes, so a dropped socket aborts it the same as a released button. `COUNTDOWN_SECONDS` overrides the length.
+
+**So is the hold at the start of the round** (`PHASE_HOLD`). When the count runs out `startRound` deals everyone onto the equally spaced starting ring and the room holds there for `HOLD_SECONDS` (default 3): `stepWorld(world, dt, held)` advances the clock but moves nobody, eats nothing and resolves no combat, bots included, and drops any split or eject sent meanwhile rather than banking it. Aim is still taken. When the hold runs out `releaseRound` flips the phase to live and starts the round's own clock, so everyone leaves the ring on the same tick, heading wherever they were pointing. The closing zone is planned there too, against the end the round actually has: planned at the deal, it would be timed off the end of the hold and never come at all. That is the fairness point: every player sees every opening before anyone can use theirs, and neither a lower ping nor a faster reaction to the whistle is a head start. The client stops predicting its own movement while held, shows a 3-2-1 over the arena off the snapshot clock, then "Go". For everything else the hold is part of the round: a body is in it, so arrivals wait for the next one, a dropped socket lingers and can resume, and readying is for the next round. `PHASE_HOLD` is a new value in the existing phase byte, so the frame layout and `PROTOCOL_VERSION` are unchanged; a tab on an older build just sees a still field for three seconds.
 
 The `lobby` message carries `starts`, the seconds left on the count, because that message is what opens the card. Leaving the number to the next snapshot meant the card opened on whatever the *previous* count ended on — a "1" flashing where a "5" belongs — and showed a player joining mid-count nothing at all. During the count the Ready, Connected and Needed figures stay on the card — only the meter, which could only read full, gives way — and a line above the title names the room and its stake, taken from the `mode` the message already carries.
 
@@ -994,7 +997,7 @@ The clock sits top left, above the orbs counter: the time left in the round, wit
 
 Round timing runs off `world.time`, the same clock the simulation uses, so a slow tick stretches the round rather than desynchronising it from play. The phase flips synchronously before settlement is dispatched, so the end-of-round payout cannot fire twice.
 
-Tune with `ROUND_SECONDS`, `COUNTDOWN_SECONDS` and `STANDINGS_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
+Tune with `ROUND_SECONDS`, `COUNTDOWN_SECONDS`, `HOLD_SECONDS` and `STANDINGS_SECONDS`. Setting `BOTS` to a number pads the live arena, which is useful for testing an empty server but is off by default.
 
 **Requires migration 004.** The `survived` outcome is new and the original check constraint rejects it, so run `server/db/migrations/004_survived_outcome.sql` before deploying or every end-of-round write fails.
 
@@ -1102,6 +1105,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
 | `ROUND_SECONDS` | 600 | **120** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
+| `HOLD_SECONDS` | 3 | 3 — nor is the hold |
 | `STANDINGS_SECONDS` | 5 | 5 |
 
 Every one of these is still an override, so `TEST_MODE=1 ROUND_SECONDS=30 BOTS=100 npm start` works.

@@ -905,5 +905,52 @@ const run = (w, seconds, each) => {
     w.pellets.filter(p => outsideZone(z.to, p.x, p.y)).length > 50);
 }
 
+// ── the hold at the start of a round ────────────────────────────────────────
+
+// The server deals the field onto its starting ring and holds it there for a
+// few seconds before anyone may move, so every opening is seen before it can
+// be used. A held step has to leave everyone exactly where the ring put them,
+// whatever they are pressing, bots included, and the first free step lets
+// them all go at once.
+{
+  const w = createWorld(21);
+  const field = [];
+  for (let i = 0; i < 6; i++) field.push(addPlayer(w, { id: `h${i}`, name: `H${i}` }));
+  fillBots(w, 6);
+  const everyone = [...w.players.values()];
+  spawnRing(w, everyone);
+
+  // Two laid on top of each other, one large enough to eat the other: a
+  // single free tick would settle it, so a held one plainly must not.
+  const [big, small] = field;
+  big.cells[0].mass = 200;
+  small.cells[0].x = big.cells[0].x;
+  small.cells[0].y = big.cells[0].y;
+  for (const p of field) setAim(w, p.id, 600, 0);
+  queueAction(w, big.id, "split");
+
+  const at = () => everyone.map(p => p.cells.map(c => `${c.x},${c.y},${c.mass}`).join("|")).join(";");
+  const start = at();
+  const t0 = w.time;
+  let deaths = 0;
+  for (let i = 0; i < TICK_HZ * 3; i++) {
+    deaths += stepWorld(w, 1 / TICK_HZ, true).filter(e => e.t === "death").length;
+    if (i === 0) queueAction(w, big.id, "split");   // pressed again mid-hold
+  }
+  check("held, nobody moves, splits or grows", at() === start);
+  check("and nobody is eaten, even lying on top of someone", deaths === 0 && small.alive);
+  check("the clock still runs while held", Math.abs(w.time - t0 - 3) < 1e-6, (w.time - t0).toFixed(3));
+  check("a split pressed during the hold is dropped, not banked", big.actions.length === 0);
+
+  const third = field[2];
+  const heldX = centroid(third).x;
+  stepWorld(w, 1 / TICK_HZ);
+  check("let go, the field moves on the very first free tick", at() !== start);
+  check("with no split saved up to fire on it", big.cells.length === 1, `${big.cells.length} cells`);
+  for (let i = 0; i < TICK_HZ; i++) stepWorld(w, 1 / TICK_HZ);
+  check("and everyone heads where they were aiming during the hold",
+    centroid(third).x > heldX + 20, `${heldX.toFixed(0)} -> ${centroid(third).x.toFixed(0)}`);
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -671,13 +671,17 @@ console.log("\n-- nobody is dropped into a round they are not in --");
   deliver(welcome({}));
   deliver(lobby(PHASE_LOBBY));
   check("an unready player is in the lobby", $("lobbyVeil").hidden === false);
-  deliver({ type: "round_start", mode: "standard", number: 2, seconds: 120 });
+  deliver({ type: "round_start", mode: "standard", number: 2, seconds: 120, hold: 3 });
   check("and stays there when the round starts without them", $("lobbyVeil").hidden === false);
-  check("told a round is in progress", /round is in progress/.test($("lobbyLine").textContent),
+  // The whistle opens the hold on the starting ring, whose seconds are not
+  // the round's, so the card says it is starting rather than how long is left.
+  check("told a round is just starting", /round is just starting/.test($("lobbyLine").textContent),
     $("lobbyLine").textContent);
   deliver(lobby(PHASE_LIVE, { connected: 3 }));
   check("and kept up to date while they wait", String($("lobbyConnected").textContent) === "3",
     $("lobbyConnected").textContent);
+  check("told a round is in progress once it is", /round is in progress/.test($("lobbyLine").textContent),
+    $("lobbyLine").textContent);
 }
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);

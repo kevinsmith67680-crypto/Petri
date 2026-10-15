@@ -50,6 +50,9 @@ delete process.env.BOTS;
 // from the one that ships.
 process.env.ROUND_SECONDS = "3";
 process.env.COUNTDOWN_SECONDS = "1";
+// The hold on the starting ring, shortened and not switched off for the
+// same reason as the count.
+process.env.HOLD_SECONDS = "1";
 process.env.STANDINGS_SECONDS = "1";
 // An allowlist that names somewhere else entirely. This is the production
 // shape of the bug: the list is correct for the domain and wrong for every
@@ -95,7 +98,8 @@ async function matched(token, stake, extra = {}, bots = null) {
   return { type: "join", ticket: got.ticket, protocol: PROTOCOL_VERSION, ...extra };
 }
 
-const { PROTOCOL_VERSION, PHASE_COUNTDOWN, PHASE_LOBBY, decodeSnapshot } = await import("../shared/protocol.js");
+const { PROTOCOL_VERSION, PHASE_COUNTDOWN, PHASE_LOBBY, PHASE_HOLD, PHASE_LIVE, decodeSnapshot, encodeAim } =
+  await import("../shared/protocol.js");
 
 async function join(username, stake, protocol = PROTOCOL_VERSION, bots = null) {
   const token = await (await fetch(`http://localhost:${PORT}/api/signup`, {
@@ -371,11 +375,67 @@ check("and the lobby is told so",
 check("nothing has started yet",
   !counting.some(m => m.type === "round_start"));
 
-await settle(1200);
+const waitFor = async (cond, ms = 4000) => {
+  for (let t = 0; t < ms && !(await cond()); t += 25) await settle(25);
+  return cond();
+};
+await waitFor(() => bob.out.slice(before).some(m => m.includes("round_start")));
 const msgs = bob.out.slice(before).filter(m => m !== "<binary>");
 check("the count runs out and the round starts",
   msgs.some(m => m.includes("round_start")), msgs.join(" ").slice(0, 120) || "nothing");
-check("the room reports itself live", (await room("highstakes")).phase === "live");
+
+console.log("\n-- the round opens held on the starting ring --");
+
+// Everyone is dealt onto the ring and held there before anybody can move:
+// the same look at the whole opening for every player, and one release tick
+// for the room, so a faster connection is not a head start.
+{
+  const start = msgs.map(JSON.parse).find(m => m.type === "round_start");
+  check("the whistle says how long the hold is", start?.hold === 1, String(start?.hold));
+  check("the room reports the hold, not a live round", (await room("highstakes")).phase === "hold",
+    (await room("highstakes")).phase);
+
+  // Snapshots tagged with whether the whistle had gone when each was sent.
+  const timeline = () => {
+    let bin = 0, started = false;
+    const out = [];
+    for (const m of bob.out) {
+      if (m === "<binary>") out.push({ started, snap: decodeSnapshot(bob.bin[bin++]) });
+      else if (m.includes("round_start")) started = true;
+    }
+    return out;
+  };
+  // Pushing hard to one side the whole time. Aim taken before the deal is
+  // wiped by it, so it is sent once the hold has begun, as a client's is.
+  const aim = async () => { for (const fn of bob.h.message) await fn(Buffer.from(encodeAim(900, 0)), true); };
+  await aim();
+  check("the hold runs out and the round goes live",
+    await waitFor(async () => { await aim(); return (await room("highstakes")).phase === "live"; }));
+  await settle(300);
+
+  const after = timeline().filter(t => t.started);
+  const held = after.filter(t => t.snap.round.phase === PHASE_HOLD);
+  const live = after.filter(t => t.snap.round.phase === PHASE_LIVE);
+  check("the hold is on the snapshot clock", held.length > 5, `${held.length} held snapshots`);
+  check("and counts down to the release", held[0]?.snap.round.remaining === 1 &&
+    held.every(t => t.snap.round.remaining >= 1), held.map(t => t.snap.round.remaining).join(","));
+  check("dealt in and alive for it", held.length > 0 && held.every(t => t.snap.me.alive));
+  const spot = t => `${t.snap.me.x},${t.snap.me.y}`;
+  check("held, the player stays on their spot whatever they press",
+    held.length > 0 && held.every(t => spot(t) === spot(held[0])), [...new Set(held.map(spot))].join(" "));
+  // Every cell in view, bots included, keyed by id, at one position throughout.
+  const where = new Map();
+  let moved = 0;
+  for (const t of held) for (const c of t.snap.cells) {
+    const k = `${c.x},${c.y}`;
+    if (!where.has(c.i)) where.set(c.i, k);
+    else if (where.get(c.i) !== k) moved++;
+  }
+  check("and so does everyone around them", where.size > 0 && moved === 0,
+    `${where.size} cells in view, ${moved} moves`);
+  check("let go, the player moves off it", live.length > 0 && live.at(-1).snap.me.x > held[0].snap.me.x,
+    `${held[0]?.snap.me.x} -> ${live.at(-1)?.snap.me.x}`);
+}
 
 console.log("\n-- the whistle sends everyone back to the lobby --");
 
@@ -539,7 +599,8 @@ console.log("\n-- leaving the lobby for the menu --");
 
   // Rounds are rolling here. Anyone who joins outside a live round waits in
   // the lobby, and stays there for the round if they never ready up.
-  const quiet = await until(async () => (await room("highstakes")).phase !== "live");
+  const between = async id => !["live", "hold"].includes((await room(id)).phase);
+  const quiet = await until(() => between("highstakes"));
   check("the room is between rounds", quiet, (await room("highstakes")).phase);
 
   const tok = await signup("Leaver");
@@ -569,7 +630,7 @@ console.log("\n-- leaving the lobby for the menu --");
   // In a round, with a body on the board: not let off early. The player
   // readies and plays rather than relying on anyone else's rounds rolling.
   const tok2 = await signup("Stayer");
-  await until(async () => (await room("standard")).phase !== "live");
+  await until(() => between("standard"));
   const ws2 = await enter(tok2, "Stayer", 1_000_000);
   await ws2.deliver({ type: "ready", ready: true });
   const started = await until(() => texts(ws2).some(m => m.type === "round_start"));
@@ -696,7 +757,7 @@ console.log("\n-- nobody joins a round under way --");
 // the next one: no body until the whistle, and no respawn to get one sooner.
 // They can ready up while they wait, and the next round deals them in.
 {
-  const { encodeAction, PHASE_LIVE } = await import("../shared/protocol.js");
+  const { encodeAction } = await import("../shared/protocol.js");
   const signup = async name => (await (await fetch(`http://localhost:${PORT}/api/signup`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: name.toLowerCase(), password: "password123", displayName: name, dateOfBirth: "1990-01-01" })
@@ -726,11 +787,25 @@ console.log("\n-- nobody joins a round under way --");
 
   // Signed up first, so the join itself is quick once a round is under way.
   const lateTok = await signup("Latecomer");
+  const holdTok = await signup("Holdcomer");
   const opener = await enter(await signup("Opener"));
   await opener.deliver({ type: "ready", ready: true });
   const begun = await until(() => texts(opener).some(m => m.type === "round_start"));
-  check("a round is being played", begun && (await room("highstakes")).phase === "live",
+
+  // The hold at the start is part of the round: a body is dealt at the
+  // whistle and not after, so an arrival during it waits like any other.
+  check("the round opens on its hold", begun && (await room("highstakes")).phase === "hold",
     (await room("highstakes")).phase);
+  const holder = await enter(holdTok);
+  check("a player arriving during the hold is told they are waiting",
+    texts(holder).find(m => m.type === "welcome")?.waiting === true);
+  check("and is given no body in it",
+    (holder.bin || []).every(b => !decodeSnapshot(b).me.alive));
+
+  const live = await until(async () => (await room("highstakes")).phase === "live");
+  check("a round is being played", begun && live, (await room("highstakes")).phase);
+  check("still without a body for the one who arrived during the hold",
+    (holder.bin || []).every(b => !decodeSnapshot(b).me.alive));
 
   const late = await enter(lateTok);
   const welcome = texts(late).find(m => m.type === "welcome");

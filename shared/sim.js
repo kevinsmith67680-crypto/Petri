@@ -1444,7 +1444,13 @@ function drainOutside(world, ent, safe, dt) {
 
 // ── the tick ────────────────────────────────────────────────────────────────
 
-export function stepWorld(world, dt) {
+// `held` freezes every player where they stand: the start of a round, with
+// the field on its starting ring. Nobody steers, splits, throws, eats or is
+// eaten, bots included, and actions sent meanwhile are dropped rather than
+// kept, so nobody banks a split to fire on the first free tick. Aim is still
+// taken, so everyone leaves the ring on the same tick, heading wherever they
+// were pointing. Time and the orb index still advance as usual.
+export function stepWorld(world, dt, held = false) {
   world.tick++;
   world.time += dt;
   world.events.length = 0;
@@ -1459,6 +1465,7 @@ export function stepWorld(world, dt) {
   feedViruses(world);
 
   for (const ent of world.players.values()) {
+    if (held) { ent.actions.length = 0; continue; }
     if (!ent.alive) {
       if (ent.bot && world.time >= ent.respawnAt) {
         spawnPlayer(world, ent, rand(world, 18, 34));
@@ -1523,7 +1530,7 @@ export function stepWorld(world, dt) {
     }
   }
 
-  cellCombat(world);
+  if (!held) cellCombat(world);
 
   for (const ent of world.players.values()) {
     if (ent.alive && ent.cells.length === 0) {

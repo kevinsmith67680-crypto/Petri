@@ -178,6 +178,17 @@ Deploy between rounds.
 shortened in test mode: a round that starts without passing through `PHASE_COUNTDOWN`
 is a different code path from the one that ships.
 
+**Every round now opens with a 3-second hold** (`PHASE_HOLD`, `HOLD_SECONDS`). The
+field is dealt onto the starting ring at the whistle and nobody can move until the hold
+runs out, counted down over the arena; the round's clock starts at the release. No
+migration and no `PROTOCOL_VERSION` bump: it is a new value in the phase byte. A tab
+on an older build sees a still field for three seconds and then plays normally. Any
+new check for "a round is in progress" should use `inRound()` in `server/index.js`,
+which counts the hold, not `phase === PHASE_LIVE`. Anything timed off the round's end
+belongs in `releaseRound`, not `startRound`: during the hold `round.endsAt` is the
+hold's end. The closing zone is planned there for exactly that reason. The server-backed suites set
+`HOLD_SECONDS=1` the way they set the count, and wait it out before asserting "live".
+
 **New client→server messages:** `colour` (a palette slot, accepted only while the
 player has no body) and `leave` (Return to menu). The welcome message now carries `ci`
 (the colour in use) and `ready`. Nothing needs a migration: the colour pick lives in
@@ -364,6 +375,7 @@ Environment that matters:
 | `REAL_MONEY=1` | Deliberately a hard startup error until a real ramp exists |
 | `TEST_MODE=1` | Never set in production: one ready player starts a round |
 | `COUNTDOWN_SECONDS` | Length of the pre-round count, default 5 |
+| `HOLD_SECONDS` | How long the field is held still on the starting ring after the whistle, default 3. 0 skips it |
 | `MATCHMAKER` | `embedded` (default) matches in-process at `/api/match`; `external` for a fleet, which also needs `SERVER_ID`, `REGION`, `PUBLIC_URL`, `MATCH_SECRET` |
 
 Diagnosing a refused connection: `/health` reports whether a socket from a given
