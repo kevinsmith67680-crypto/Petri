@@ -1,0 +1,3 @@
+{"allPellets": 4100, "onScreen": 24, "msAll": 9.080999999996274, "msCulled": 4.755499999998137}
+{"allPellets": 4100, "onScreen": 24, "msAll": 10.144499999997207, "msCulled": 5.502000000001862}
+{"allPellets": 4100, "onScreen": 24, "msAll": 9.407000000001863, "msCulled": 5.1875}
