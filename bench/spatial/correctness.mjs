@@ -2,15 +2,18 @@
 // Spatial-index correctness checks, seeded and deterministic.
 //
 //   node bench/spatial/correctness.mjs [--quick] [--json out.json]
+//   SPATIAL_REV=working node bench/spatial/correctness.mjs     (working tree)
 //
 // Every check states what CORRECT behaviour is. A FAIL on the `current` build
-// is a reproduced bug in shared/sim.js; the same check is then run on the
-// `fresh` variant (see build.mjs) to show the proposed fix closes it. The
-// game code itself is never modified.
+// is a reproduced bug in shared/sim.js at the revision under test (build.mjs
+// REV, d93f567 by default); the same check is then run on the `fresh` variant
+// to show the proposed fix closes it. Variants a revision cannot build (csr
+// once orbs are indexed incrementally) are reported as SKIP. The game code
+// itself is never modified.
 // ---------------------------------------------------------------------------
 
 import fs from "node:fs";
-import { loadVariant, VARIANTS } from "./build.mjs";
+import { loadVariant, VARIANTS, REV } from "./build.mjs";
 import { setupScenario, hashWorld, mulberry32 } from "./scenarios.mjs";
 
 const args = process.argv.slice(2);
@@ -24,16 +27,33 @@ function check(id, label, build, ok, detail = {}) {
   console.log(`${ok ? "  PASS" : "  FAIL"}  [${build}] ${id} ${label}${d}`);
 }
 
-const B = {};
+console.log(`revision under test: ${REV}`);
+const B = {}, unavailable = {};
+async function tryLoad(name, opts) {
+  try { B[name] = await loadVariant(opts); }
+  catch (e) { unavailable[name] = e.message; }
+}
 for (const [k, v] of Object.entries(VARIANTS)) {
-  B[k] = await loadVariant(v);
-  B[k + "C"] = await loadVariant({ ...v, counted: true });
+  await tryLoad(k, v);
+  await tryLoad(k + "C", { ...v, counted: true });
 }
 // Second, independent instances for lockstep pairs.
-B.freshC2 = await loadVariant({ ...VARIANTS.fresh, counted: true, tag: "twin" });
-B.currentC2 = await loadVariant({ ...VARIANTS.current, counted: true, tag: "twin" });
+await tryLoad("freshC2", { ...VARIANTS.fresh, counted: true, tag: "twin" });
+await tryLoad("currentC2", { ...VARIANTS.current, counted: true, tag: "twin" });
+
+// Run fn only if every build it needs exists at this revision.
+const skipped = [];
+function need(...names) {
+  const gone = names.filter(n => !B[n]);
+  if (!gone.length) return true;
+  skipped.push(names.join("+"));
+  console.log(`  SKIP  [${names.join(", ")}] ${unavailable[gone[0]] || "not built"}`);
+  return false;
+}
 
 const DT = 1 / 20;
+const PLAIN = B.current.sim.PELLET_MASS;
+const DECAY = B.current.sim.DECAY_RATE ?? 0.0022;   // per second, above DECAY_ABOVE
 
 // A bare world for hand-built fixtures: no orbs, no viruses, no top-ups.
 function bare(sim, seed = 1, size = 8800) {
@@ -47,7 +67,9 @@ function human(sim, w, id, x, y, mass) {
   return p;
 }
 function pellet(w, x, y, extra = {}) {
-  const p = { id: w.nextId++, x, y, mass: 3.375, vx: 0, vy: 0, ci: 0, ...extra };
+  // A plain orb at whatever mass this revision gives one (3.375 at d93f567,
+  // 2 from a074d7d), so it is drawn and eaten at ORB_RADIUS everywhere.
+  const p = { id: w.nextId++, x, y, mass: PLAIN, vx: 0, vy: 0, ci: 0, ...extra };
   w.pellets.push(p);
   return p;
 }
@@ -221,7 +243,7 @@ function c6(build) {
     sim.stepWorld(w, DT);
     const gained = sim.totalMass(P) + sim.totalMass(Q) - before;
     check("C6b", "an orb under two cells at once is eaten once", build,
-      P.orbs + Q.orbs === 1 && Math.abs(gained - 3.375) < 1e-9, { orbs: P.orbs + Q.orbs, gained });
+      P.orbs + Q.orbs === 1 && Math.abs(gained - PLAIN) < 1e-9, { orbs: P.orbs + Q.orbs, gained });
   }
 }
 
@@ -254,8 +276,8 @@ function c7(build) {
   const { sim } = B[build];
   const w = bare(sim, 31);
   const G = human(sim, w, "giant", 4000, 4000, 40000);
-  const m1 = 40000 - 40000 * 0.0022 * DT;          // after this tick's decay
-  const reach = sim.radiusOf(m1) + 6 * 0.6;
+  const m1 = 40000 - 40000 * DECAY * DT;           // after this tick's decay
+  const reach = sim.radiusOf(m1) + sim.pelletRadius({ mass: PLAIN }) * 0.6;
   const inside = [], outside = [];
   for (let k = 0; k < 360; k++) {
     const a = (k / 360) * Math.PI * 2;
@@ -410,7 +432,7 @@ function c11(build) {
 // ── run ─────────────────────────────────────────────────────────────────────
 
 console.log("\nC1  grid query superset");
-c1("current"); c1("csr");
+c1("current"); need("csr") && c1("csr");
 console.log("\nC2  index after resetArena");
 c2("current"); c2("fresh");
 console.log("\nC3  moving pellet, stale bucket");
@@ -446,7 +468,7 @@ c6long("currentC", "eject", QUICK ? 300 : 1200);
 console.log("\nC7  very large cells");
 c7("current"); c7("gcombat");
 console.log("\nC8  walls and bucket corners");
-c8("current"); c8("csr");
+c8("current"); need("csr") && c8("csr");
 console.log("\nC9  snapshot area of interest");
 c9("current", "full", QUICK ? 60 : 200);
 c9("current", "splits", QUICK ? 60 : 200);
@@ -459,12 +481,14 @@ c11("current");
 console.log("\nE   alternatives produce bit-identical games (lockstep state hash)");
 for (const key of ["full", "dense", "giants", "splits", "eject", "churn"]) {
   for (const [a, b] of [["current", "csr"], ["current", "gcombat"], ["fresh", "all"]]) {
+    if (!need(a, b)) continue;
     const d = lockstep(a, b, key, LT, { seed: 23 });
     check(`E.${key}`, `${b} plays identically to ${a} for ${LT} ticks`, b, d < 0, { firstDivergentTick: d });
   }
 }
 
 const failed = results.filter(r => !r.ok);
-console.log(`\n${results.length - failed.length} passed, ${failed.length} failed`);
-if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify({ quick: QUICK, results, shadow }, null, 2));
+console.log(`\n${results.length - failed.length} passed, ${failed.length} failed` +
+  (skipped.length ? `, ${skipped.length} skipped` : "") + ` (revision ${REV})`);
+if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify({ revision: REV, quick: QUICK, results, shadow, skipped }, null, 2));
 process.exitCode = failed.length ? 1 : 0;

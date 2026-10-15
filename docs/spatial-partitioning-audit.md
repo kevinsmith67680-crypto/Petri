@@ -7,6 +7,34 @@ The benchmarks and correctness checks behind every figure here are in
 branch moved on during the audit; what still holds at the head is in the next
 section.
 
+## Update: B1 fixed
+
+`stepWorld` now re-files each pellet in flight as it moves, before anyone eats
+(`gridMove` in `shared/sim.js`). A pellet's bucket is the one its position was
+in before this tick's move, because nothing moves pellets between the
+end-of-tick rebuild and the advance loop. So the fix adds no new field and no
+second rebuild, and costs one key comparison per moving pellet. Only pellets
+that cross a bucket line are touched: 0 a tick in the live Standard config,
+9.7 of 169 in flight in an ejected-mass storm, and 12.7 of 195 in split play.
+
+- **Brute force agrees:** with the fixed code, every brute-force check in
+  `bench/spatial/correctness.mjs` that concerns the index passes. C3, C4 (0
+  skipped eats in every scenario, at 50 ms and 250 ms ticks) and C5 (tick for
+  tick against the reference simulation) all pass, and C1, C2 and C6–C9 still
+  do (`results/correctness-b1-fix.txt`). C10 and C11 still fail; they are R1,
+  the narrow-phase stepping, which this does not touch.
+- **New project test:** `test/grid.test.js` is now part of `npm test`. It
+  covers blobs crossing bucket lines in five directions, a field of still
+  cells under fire checked eat-for-eat against a brute-force scan, real
+  ejected mass, a still board, spawning, consumption and `resetArena`. It
+  fails on the pre-fix code (53 of 320 throws pass through; the field
+  diverges at tick 14) and passes on the fix.
+- **B2 stays fixed:** the `resetArena` checks pass on both.
+- **Cost (`results/b1-fix-perf.md`):** within run-to-run noise. Sim time moves
+  −0.08 to +0.31 ms and the end-of-tick rebuild is unchanged. Rebuilding the
+  whole grid after pellets move, as C-1 below first proposed, would add
+  0.48–0.58 ms a tick.
+
 ## Status at the branch head (`a8319cc`)
 
 Thirteen commits landed while the audit ran: Poisson-disc orb sowing, a
@@ -329,8 +357,9 @@ every tick for 1,200 ticks in six scenarios and found no difference.
 
 ### Critical: correctness
 
-**C-1. Rebuild the pellet index after pellets move, before anyone eats.** This
-fixes B1. Add one call after the advance loops in `stepWorld`, before
+**C-1. Rebuild the pellet index after pellets move, before anyone eats.**
+*Done, without the second rebuild: moving pellets are re-filed individually.
+See "Update: B1 fixed" at the top.* This fixes B1. Add one call after the advance loops in `stepWorld`, before
 `feedViruses` at `sim.js:1233`:
 
 ```js

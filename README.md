@@ -910,7 +910,9 @@ In test mode each room fills to the size its mode is built for — **100 bots fo
 
 Egress actually fell to 0.43 MB/s, because a bigger arena spreads players out and puts fewer cells in each view.
 
-The grid is rebuilt at the **end** of each tick, not the start. Pellets are created mid-tick (ejected mass, respawns) and ejected ones drift between buckets, so an index built at the start is already stale by the time snapshots are encoded — which showed up as orbs flickering in and out of view, and as the scoping test reporting phantom adds.
+The grid is rebuilt at the **end** of each tick, not the start. Pellets are created mid-tick (ejected mass) and eaten ones are swept, so an index built at the start is already stale by the time snapshots are encoded — which showed up as orbs flickering in and out of view, and as the scoping test reporting phantom adds.
+
+That leaves one gap, closed separately. Thrown mass moves at the **start** of the next tick, after the rebuild and before anyone eats, so each blob in flight is re-filed into its new bucket as it moves (`gridMove`). Without that it was looked up a tick behind — 57 units at 20Hz, three times the eat query's padding — and a cell could have a blob it was touching pass straight through it. Only pellets that cross a bucket line are touched: none at all in an ordinary round, about ten a tick when everyone is throwing mass, against 4,100 for a second rebuild. `test/grid.test.js` checks each tick's eats against a brute-force scan.
 
 **Hardware.** At 100 players this needs roughly 13 ms/tick on one core. Render's free instance (0.1 CPU) fails outright at 260% of the tick budget; Starter (0.5 CPU) runs at 52%, which works but is tight; Standard (1 CPU, $25/mo) sits at 26% and is the realistic floor for a full lobby. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
 

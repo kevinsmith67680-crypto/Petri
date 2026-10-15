@@ -43,7 +43,7 @@ function human(w, id, x, y, mass) {
   return p;
 }
 const pellet = (w, x, y, extra = {}) => {
-  const p = { id: w.nextId++, x, y, mass: 3.375, vx: 0, vy: 0, ci: 0, ...extra };
+  const p = { id: w.nextId++, x, y, mass: sim.PELLET_MASS, vx: 0, vy: 0, ci: 0, ...extra };
   w.pellets.push(p);
   return p;
 };

@@ -58,6 +58,15 @@ function once(src, anchor, replacement, label) {
   return src.slice(0, at) + replacement + src.slice(at + anchor.length);
 }
 
+// The same patch for different revisions of the source: the first
+// [anchor, replacement] pair whose anchor is present is applied, exactly once.
+function oneOf(src, label, pairs) {
+  for (const [anchor, replacement] of pairs) {
+    if (src.includes(anchor)) return once(src, anchor, replacement, label);
+  }
+  throw new Error(`patch "${label}": no known anchor in this revision`);
+}
+
 // Replace everything from `start` (inclusive) up to `end` (exclusive).
 function between(src, start, end, replacement, label, mustContain) {
   const a = src.indexOf(start);
@@ -83,6 +92,8 @@ export const COUNTER_NAMES = [
   "combatPairs", "combatIter", "combatMassPass", "combatNarrow", "combatEats",
   "combatQueries", "combatGridVisits",
   "virusTests", "feedTests", "ownTests", "botScan",
+  // gridMove (the B1 fix): pellets checked after moving, and re-filed
+  "gridMoves", "gridRefiles",
   // shadow check
   "shadowEligible", "missSameTick", "missStaleMoving", "missOther",
   "ghostVisits", "ghostEats"
@@ -116,10 +127,14 @@ function __spawn(world, kind) {
 
 function knobs(src) {
   src = HEADER + src;
-  src = once(src,
-    "function makePellet(world, x, y, mass, vx, vy, ci) {\n  const p = x === undefined ? spawnPoint(world) : { x, y };",
-    "function makePellet(world, x, y, mass, vx, vy, ci) {\n  const p = x === undefined ? __spawn(world, \"pellet\") : { x, y };",
-    "spawn pellet");
+  src = oneOf(src, "spawn pellet", [
+    // d93f567: makePellet picks its own point.
+    ["function makePellet(world, x, y, mass, vx, vy, ci) {\n  const p = x === undefined ? spawnPoint(world) : { x, y };",
+     "function makePellet(world, x, y, mass, vx, vy, ci) {\n  const p = x === undefined ? __spawn(world, \"pellet\") : { x, y };"],
+    // From adb6295: sowOrbs throws darts at spawnPoint.
+    ["      const p = spawnPoint(world);\n      const room = underCell(",
+     "      const p = __spawn(world, \"pellet\");\n      const room = underCell("]
+  ]);
   src = once(src,
     "export function spawnPlayer(world, player, mass = START_MASS) {\n  const p = spawnPoint(world);",
     "export function spawnPlayer(world, player, mass = START_MASS) {\n  const p = __spawn(world, \"player\");",
@@ -132,19 +147,25 @@ function knobs(src) {
     "    eatPellets(world, ent);",
     "    { const __te = __S.now(); eatPellets(world, ent); __S.t.eat += __S.now() - __te; }",
     "time eat");
+  src = oneOf(src, "time combat", [
+    ["  if (!held) cellCombat(world);",
+     "  if (!held) { const __tc = __S.now(); cellCombat(world); __S.t.combat += __S.now() - __tc; }"],
+    ["  cellCombat(world);",
+     "  { const __tc = __S.now(); cellCombat(world); __S.t.combat += __S.now() - __tc; }"]
+  ]);
+  src = oneOf(src, "time grid", [
+    ["  buildPelletGrid(world);\n\n  return world.events;",
+     "  { const __tg = __S.now(); buildPelletGrid(world); __S.t.grid += __S.now() - __tg; }\n\n  return world.events;"],
+    ["  buildPelletGrid(world);\n\n  // Then the arena is topped back up",
+     "  { const __tg = __S.now(); buildPelletGrid(world); __S.t.grid += __S.now() - __tg; }\n\n  // Then the arena is topped back up"]
+  ]);
+  // Before anything moves. Pellets with an id at or past tickStartId were
+  // created during this tick.
   src = once(src,
-    "  cellCombat(world);",
-    "  { const __tc = __S.now(); cellCombat(world); __S.t.combat += __S.now() - __tc; }",
-    "time combat");
-  src = once(src,
-    "  buildPelletGrid(world);\n\n  return world.events;",
-    "  { const __tg = __S.now(); buildPelletGrid(world); __S.t.grid += __S.now() - __tg; }\n\n  return world.events;",
-    "time grid");
-  src = once(src,
-    "  for (const p of world.pellets) advancePellet(p, dt, world.size);",
+    "  world.time += dt;\n  world.events.length = 0;\n",
+    "  world.time += dt;\n  world.events.length = 0;\n" +
     "  __S.tickStartId = world.nextId;\n" +
-    "  if (__S.shadow) __S.live = new Set(world.pellets);\n" +
-    "  for (const p of world.pellets) advancePellet(p, dt, world.size);",
+    "  if (__S.shadow) __S.live = new Set(world.pellets);\n",
     "tick start");
   return src;
 }
@@ -173,26 +194,27 @@ function __eatOne(world, ent, c, p) {
   if (__S.eatLog) __S.eatLog.push(p.id);
 }
 
-// Grid bucket order: what a freshly built grid would visit. Used by the
-// reference mode so its float additions happen in the same order.
-const __bucketOf = p => [(p.x / GRID) | 0, (p.y / GRID) | 0];
-
 function eatPellets(world, ent) {
   for (const c of ent.cells) {
     const r = radiusOf(c.mass);
 
     if (__S.ref) {
-      // Brute-force reference: every pellet in the world, same rule. Pellets
-      // created this tick are exempt, as they are in every grid variant.
-      const hit = [];
-      for (let i = 0; i < world.pellets.length; i++) {
-        const p = world.pellets[i];
+      // Brute-force reference. WHAT is eaten comes from a scan of every
+      // pellet in the world under the same rule (pellets created this tick
+      // are exempt, as they are in every grid variant). The grid is consulted
+      // only for the ORDER, so the float additions match production exactly
+      // whenever the grid is complete; anything it failed to return is eaten
+      // after the rest, and the two worlds diverge.
+      const hit = new Set();
+      for (const p of world.pellets) {
         if (p.id >= __S.tickStartId) continue;
         __S.c.eatNarrow++;
-        if (__eligible(world, ent, c, r, p)) hit.push([...__bucketOf(p), i, p]);
+        if (__eligible(world, ent, c, r, p)) hit.add(p);
       }
-      hit.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
-      for (const h of hit) __eatOne(world, ent, c, h[3]);
+      const order = [];
+      forEachPelletNear(world, c.x, c.y, r + ORB_RADIUS * 3, p => { if (hit.delete(p)) order.push(p); });
+      for (const p of hit) order.push(p);
+      for (const p of order) __eatOne(world, ent, c, p);
       continue;
     }
 
@@ -245,9 +267,8 @@ function counted(src) {
     "  p.__moved = true;\n  if (Math.abs(p.vx) < 1 && Math.abs(p.vy) < 1) { p.vx = 0; p.vy = 0; }\n}",
     "pellet moved flag");
   src = once(src,
-    "  for (const p of world.pellets) advancePellet(p, dt, world.size);",
-    "  for (const p of world.pellets) p.__moved = false;\n" +
-    "  for (const p of world.pellets) advancePellet(p, dt, world.size);",
+    "  __S.tickStartId = world.nextId;\n",
+    "  __S.tickStartId = world.nextId;\n  for (const p of world.pellets) p.__moved = false;\n",
     "clear moved flag");
   // Original cellCombat, counted. Skipped automatically if gcombat replaced it.
   if (src.includes("      const A = ents[i], B = ents[j];")) {
@@ -264,10 +285,14 @@ function counted(src) {
     "      const v = world.viruses[i]; __S.c.virusTests++;\n      if (Math.hypot(", "virus tests");
   src = once(src, "    for (const v of world.viruses) {\n      const dx = p.x - v.x, dy = p.y - v.y;",
     "    for (const v of world.viruses) { __S.c.feedTests++;\n      const dx = p.x - v.x, dy = p.y - v.y;", "feed tests");
-  src = once(src, "      const a = cells[i], b = cells[j];",
-    "      const a = cells[i], b = cells[j]; __S.c.ownTests++;", "own tests");
+  // Every own-cell pair loop (one at d93f567; merge and separation later).
+  if (!src.includes("      const a = cells[i], b = cells[j];")) throw new Error('patch "own tests": anchor not found');
+  src = src.split("      const a = cells[i], b = cells[j];").join("      const a = cells[i], b = cells[j]; __S.c.ownTests++;");
   src = once(src, "    for (const c of o.cells) {\n      // Cheap rejects first",
     "    for (const c of o.cells) { __S.c.botScan++;\n      // Cheap rejects first", "bot scan");
+  if (src.includes("function gridMove(")) {
+    src = once(src, "  if (keyOf(p) === was) return;\n", "  __S.c.gridMoves++;\n  if (keyOf(p) === was) return;\n  __S.c.gridRefiles++;\n", "grid moves");
+  }
   if (src.includes("      const bucket = world.grid.get(key(gx, gy));")) {
     src = once(src, "      const bucket = world.grid.get(key(gx, gy));",
       "      const bucket = world.grid.get(key(gx, gy)); __S.c.buckets++;", "buckets");
@@ -355,6 +380,9 @@ export function forEachPelletNear(world, x, y, r, fn) {
 `;
 
 function csr(src, on) {
+  // sowOrbs (adb6295 onward) inserts into the grid one orb at a time, which a
+  // counting-sort layout cannot do between rebuilds.
+  if (src.includes("function gridInsert(")) throw new Error("variant csr: this revision indexes orbs incrementally (gridInsert); csr predates it");
   return between(src, "export function buildPelletGrid(world) {", "const clamp = (v, a, b) =>",
     counters(CSR_GRID, on), "csr grid", ["forEachPelletNear", "world.grid"]);
 }

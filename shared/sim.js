@@ -283,9 +283,15 @@ export function advancePellet(p, dt, size = WORLD) {
 // cell per tick dominates the frame. A uniform grid turns "which orbs are near
 // this cell" into a handful of bucket lookups.
 //
-// Rebuilt wholesale each tick rather than maintained incrementally: 4,100
-// inserts costs a fraction of a millisecond and removes an entire class of
-// stale-index bug.
+// Rebuilt wholesale once a tick, at the end, rather than maintained
+// incrementally: it removes an entire class of stale-index bug. The one
+// exception is movement. Pellets in flight move at the START of the next tick,
+// after that rebuild, so stepWorld re-files each one that crosses into another
+// bucket (gridMove) before anyone eats. Without it a thrown blob is looked up
+// where it was a tick ago — up to 57 units off at 20Hz, three times the eat
+// query's padding — and a cell can be passed straight through by mass it is
+// touching. Only moving pellets are touched, a handful a tick, so this costs
+// nothing like a second rebuild.
 
 const GRID = 220;                       // ~half the view radius of a small cell
 const key = (gx, gy) => gx * 100003 + gy;   // prime stride, coords are >= 0
@@ -301,11 +307,24 @@ export function buildPelletGrid(world) {
 
 // Also used by sowOrbs, which indexes each orb the moment it is placed so the
 // next one can keep its distance from it.
+const keyOf = p => key((p.x / GRID) | 0, (p.y / GRID) | 0);
+
 function gridInsert(g, p) {
-  const k = key((p.x / GRID) | 0, (p.y / GRID) | 0);
+  const k = keyOf(p);
   const bucket = g.get(k);
   if (bucket) bucket.push(p);
   else g.set(k, [p]);
+}
+
+// Re-files a pellet after it has moved, given the bucket it was filed under.
+// Most moves stay inside the bucket and cost one key comparison; one that
+// crosses a line leaves its old bucket and joins the new one.
+function gridMove(g, p, was) {
+  if (keyOf(p) === was) return;
+  const from = g.get(was);
+  const i = from ? from.indexOf(p) : -1;
+  if (i >= 0) from.splice(i, 1);
+  gridInsert(g, p);
 }
 
 // Visits every pellet in the buckets overlapping the box around (x, y, r).
@@ -1458,7 +1477,17 @@ export function stepWorld(world, dt, held = false) {
   world.safe = world.zone && world.time >= world.zone.startAt
     ? zoneBounds(world.zone, world.time) : null;
 
-  for (const p of world.pellets) advancePellet(p, dt, world.size);
+  // Pellets in flight move, and are re-filed in the grid as they go: it was
+  // built at the end of last tick, and everything below queries it. Nothing
+  // moves a pellet between that rebuild and here, so where a pellet is now is
+  // the bucket it is filed under.
+  const grid = world.grid;
+  for (const p of world.pellets) {
+    if (!p.vx && !p.vy) continue;
+    const was = keyOf(p);
+    advancePellet(p, dt, world.size);
+    if (grid) gridMove(grid, p, was);
+  }
   for (const v of world.viruses) advanceVirus(v, dt, world.size);
   // After both have moved, so a blob and a virus travelling toward each other
   // are tested where they actually are this tick.
@@ -1560,9 +1589,11 @@ export function stepWorld(world, dt, held = false) {
   }
 
   // Rebuilt at the END of the tick, not the start. Pellets are created during
-  // a tick (ejected mass, respawns) and ejected ones drift between buckets, so
-  // an index built at the start is already wrong by the time snapshots are
-  // encoded — which showed up as orbs flickering in and out of view.
+  // a tick (ejected mass) and eaten ones are swept above, so an index built at
+  // the start is already wrong by the time snapshots are encoded — which
+  // showed up as orbs flickering in and out of view. Mass thrown this tick
+  // joins here, so it is first edible next tick, by everyone alike. Movement
+  // is the part this cannot cover; gridMove at the top of the tick does.
   buildPelletGrid(world);
 
   // Then the arena is topped back up against it, so each replacement keeps
