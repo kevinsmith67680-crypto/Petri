@@ -399,7 +399,7 @@ During a live round the stake bar at the top centre shows what your mass is "wor
 | | at 0.005/point |
 |---|---|
 | Spawning (mass 20) | 0.10 USDC |
-| One orb (3.375 mass) | 0.015 USDC |
+| One orb (2 mass) | 0.010 USDC |
 | Mid-game (mass 500) | 2.50 USDC |
 | Large player (mass 2,000) | 10.00 USDC |
 | Round leader (mass 6,000) | 30.00 USDC |
@@ -409,6 +409,27 @@ The rate gives the payout a natural break-even: **mass 200 is worth exactly a 1.
 **The house funds the difference, and the difference is not bounded.** Payouts are no longer limited to what was staked. In a full 100-player round the top five finishing between them on 15,000 mass are paid 75 USDC against 100 USDC staked, and the house keeps the rest; but five winners on 6,000 mass each are paid 150 USDC against the same 100, and the house pays the 50. A round with few players and large winners can cost the house far more than it took. The ledger allows for it (`Ledger.payOut`, `petri.pay_out`; the house balance has no floor since migration 009), and every movement is still conservative: value only moves. **This must be settled before real money**: either a bounded rate derived from the round's pot (your share of the real prize pool, proportional to your mass, which keeps total payouts equal to total stakes by construction), or a cap, or an operator who means to fund it.
 
 `MICRO_PER_MASS` in `shared/wager.js` sets the rate for the HUD and the payout together, so the two cannot drift apart.
+
+### How fast you grow
+
+Three numbers in `shared/sim.js` set how quickly mass comes, and they were retuned together because each alone left the end of a round to a runaway:
+
+| | Was | Now |
+|---|---|---|
+| `PELLET_MASS`, an orb | 3.375 | 2 |
+| `EAT_BONUS`, what a kill pays | 1.2x the victim's mass | exactly the victim's mass |
+| `DECAY_RATE`, above `DECAY_ABOVE` (260) | 0.22% a second | 0.5% a second |
+
+Measured in the real simulation over ten-minute Standard rounds with the closing zone. "Farmer" is a scripted player taking the best orb in reach, alone, with nobody to fight; the rest is a room of 100 Normal bots.
+
+| | Farmer at 1:00 | Farmer at the whistle | Leader at 1:30 left | Mass on the board at 1:30 left | Leader at the whistle |
+|---|---|---|---|---|---|
+| Before | 551 | 3,525 | 225,093 | 774,527 | 613,522 |
+| Now | 349 | 921 | 5,565 | 89,622 | 18,241 |
+
+The kill bonus was the runaway. At 1.2 every kill made a fifth of the victim out of nothing, so a crowded board compounded, and the closing zone then pushed everyone into one square for the biggest to eat. Each change alone cut the leader at 1:30 left by seven to nine times, but only the three together kept the finish contested (the next four on 7,400 to 8,700). Bots respawn when eaten and live players do not, so a live room inflates less than these figures; the ordering held across seeds.
+
+Since paid places are paid their mass (see "The mass readout"), this is also the single biggest cut to what the house can be asked to fund: a farmer's whistle used to be worth 17.60 USDC on a 1.00 stake, and is now 4.60.
 
 ### Ejecting mass
 

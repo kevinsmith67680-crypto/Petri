@@ -26,7 +26,11 @@ export const MAX_WORLD = 65535;
 export const DEFAULT_BOTS = 14;     // guests only; the live arena runs botless
 
 export const START_MASS = 20;
-export const PELLET_MASS = 3.375;   // mass gained per orb
+// Mass gained per orb. Was 3.375, at which a player farming orbs alone, with
+// nobody to fight, reached 550 mass in the first minute and 3,500 by the
+// whistle: past the 200 that breaks even on a stake in seconds, and paid as
+// if it had been won. Growth is meant to come mostly from other players.
+export const PELLET_MASS = 2;
 export const EJECT_MASS = 16;       // mass spent ejecting
 export const EJECT_KEEP = 13;       // mass the ejected blob carries
 export const ORB_RADIUS = 6;        // a plain orb, fixed size regardless of mass
@@ -71,9 +75,18 @@ export const MAX_CELLS = 16;
 // leader snowballs sooner. Worth playing a full round before deciding it is
 // right.
 export const EAT_RATIO = 1.098;
-export const EAT_BONUS = 1.20;       // mass multiplier when absorbing a rival
+// What absorbing a rival pays, as a multiple of its mass. Exactly its mass:
+// at 1.2 every kill made a fifth of the victim out of nothing, and in a full
+// room that compounded — a simulated 100-player round went from 2,000 mass on
+// the board to 774,000 by 1:30 left, and the closing zone fed one player the
+// lot.
+export const EAT_BONUS = 1.0;
 export const MERGE_DELAY = 1.75;     // multiplier on the rejoin cooldown
-export const DECAY_ABOVE = 260;      // mass above which cells slowly shrink
+// Above DECAY_ABOVE a cell loses DECAY_RATE of its mass a second, so staying
+// big means going on eating: 2 a second at 400, 8 at 1,600. Was 0.22%, which
+// let a leader sit on a lead.
+export const DECAY_ABOVE = 260;
+export const DECAY_RATE = 0.005;
 
 // Base movement rate. This was tuned when the arena was 3,400 units across and
 // never revisited when it grew to 8,800 for a 100-player lobby — so crossing
@@ -698,7 +711,7 @@ function moveCells(world, ent, tx, ty, dt) {
     advanceCell(c, tx, ty, dt, world.size);
     // Decay stays server-side: it is a rule, not motion, and predicting it
     // would have the client quietly disagreeing about mass.
-    if (c.mass > DECAY_ABOVE) c.mass -= c.mass * 0.0022 * dt;
+    if (c.mass > DECAY_ABOVE) c.mass -= c.mass * DECAY_RATE * dt;
   }
 }
 

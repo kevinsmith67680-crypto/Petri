@@ -95,6 +95,10 @@ mass each are paid 150 USDC out of a 100-player, 100 USDC round, and a round wit
 few players and large winners costs the house far more. It also makes item 4
 worse: mass fed from one account to another is now paid for by the house.
 
+Slower growth (README, "How fast you grow") cut the sizes this pays out on by
+roughly four times for a lone farmer and far more for a round's leader, but it bounds
+nothing: a big enough round still costs the house whatever its winners weigh.
+
 The fix is a decision before it is code: a rate derived from the round's pot
 (each place's share of the real prize pool, by mass), a cap, or an operator who
 means to fund it. `README.md`, "The mass readout", has the numbers.
