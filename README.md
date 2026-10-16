@@ -943,7 +943,13 @@ Each test (eating orbs, eating cells, popping on viruses, feeding them) is now m
 
 **Cells against cells.** `cellCombat` used to test every cell of every player against every cell of every other: in a full lobby, ten thousand player pairs and 50,000–230,000 cell pairs a tick, nearly all on opposite sides of the map. It now files the cells in a 256-unit grid as combat starts and tests each attacker cell only against the cells filed near it, 8–17 candidates a tick. Each cell is filed by the path its centre took this tick, and each attacker searches its own path widened by its radius, which covers the test along the way and cells of any size. The grid is rebuilt every time rather than kept up to date: nearly every cell moves every tick, and the rebuild costs 0.02–0.04 ms. The bites, their order and every number are the same as the all-pairs loop's. `test/combat.test.js` plays the two side by side, and the lockstep runs in `bench/spatial` agree for 1,200 ticks in six scenarios. Measured on one machine, `cellCombat` fell from 1.05 to 0.08 ms a tick in the Standard config and from 3.45 to 0.14 ms in heavy split play. The whole tick fell from 6.95 to 5.41 ms and from 14.8 to 11.1 ms, with p99 from 14.4 to 10.8 ms and from 34.1 to 21.0 ms.
 
-**Hardware.** At 100 players this needs roughly 13 ms/tick on one core. Render's free instance (0.1 CPU) fails outright at 260% of the tick budget; Starter (0.5 CPU) runs at 52%, which works but is tight; Standard (1 CPU, $25/mo) sits at 26% and is the realistic floor for a full lobby. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
+**Hardware.** On one core of a 2.8 GHz Xeon, the load test (`bench/stress/`: 100 real clients on the real server, sends included) measured 4.7 ms a tick, 11.6 at p99, and 14.5% of the core's time. At 150 players it was 6.8 ms, 16.2 at p99. Before the work in `docs/performance-report.md` the same test measured 7.6 and 12.3 ms. The instance guidance here was worked out from an older estimate of about 13 ms a tick at 100 players:
+
+- Render's free instance (0.1 CPU) failed at 260% of the tick budget.
+- Starter (0.5 CPU) ran at 52%, which worked but was tight.
+- Standard (1 CPU, $25/mo) sat at 26%, the realistic floor for a full lobby.
+
+Re-measure on the instance before relying on any of those. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
 
 ### How orbs are placed
 
