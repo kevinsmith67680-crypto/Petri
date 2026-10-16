@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "rev": "working",
+    "node": "v22.22.0",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cores": 4,
+    "warm": 10,
+    "seconds": 40,
+    "seed": 1,
+    "date": "2026-10-16T14:10:45.874Z"
+  },
+  "results": [
+    {
+      "scenario": "network",
+      "label": "100 players, 80 ± 30 ms latency, 1% loss",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 7.5,
+      "clients": 100,
+      "live": 100,
+      "aliveAtEnd": 40,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.175,
+          "p50": 0,
+          "p95": 1,
+          "p99": 1,
+          "max": 6
+        },
+        "simMs": {
+          "avg": 1.226,
+          "p50": 1.116,
+          "p95": 1.942,
+          "p99": 4.05,
+          "max": 8.815
+        },
+        "snapMs": {
+          "avg": 3.998,
+          "p50": 3.533,
+          "p95": 6.889,
+          "p99": 10.398,
+          "max": 16.444
+        },
+        "totalMs": {
+          "avg": 5.281,
+          "p50": 4.767,
+          "p95": 8.646,
+          "p99": 12.896,
+          "max": 22.337
+        },
+        "bytesPerTick": 19371,
+        "bytesPerSec": 387420,
+        "gc": {
+          "count": 74,
+          "ms": 71.8,
+          "maxMs": 4.43
+        },
+        "cpuPercent": 18.7,
+        "rssMB": {
+          "end": 199.5,
+          "peak": 199.5
+        },
+        "heapUsedMB": {
+          "end": 26.8,
+          "peak": 29.5
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 3.78,
+        "snapshotsPerSec": 20,
+        "gapMs": {
+          "p50": 48.9,
+          "p95": 92.7,
+          "p99": 199.3,
+          "max": 306.4
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": {
+        "latency": 80,
+        "jitter": 30,
+        "loss": 0.01,
+        "rto": 200
+      }
+    }
+  ]
+}

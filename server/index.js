@@ -41,7 +41,7 @@ import {
   isBotLevel, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL
 } from "../shared/sim.js";
 import {
-  encodeSnapshot, decodeClientMessage, createClientState, MSG,
+  encodeSnapshot, snapshotFrame, decodeClientMessage, createClientState, MSG,
   PHASE_LIVE, PHASE_INTERMISSION, PHASE_LOBBY, PHASE_COUNTDOWN, PHASE_HOLD, PROTOCOL_VERSION
 } from "../shared/protocol.js";
 import { PRACTICE, MICRO_PER_MASS, formatUsdc, valueOfMass, UNIT }
@@ -57,6 +57,7 @@ import { Accounts } from "./accounts.js";
 import { handleApi } from "./api.js";
 import { verifyTicket, verifyRequest, TicketError, assertSecret } from "./ticket.js";
 import { createMatchmaker } from "./matchmaker/core.js";
+import { createTickStats, recordTick, summarise } from "./tickstats.js";
 import { answerMatch, createRateLimit } from "./matchmaker/http.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -230,6 +231,12 @@ const LIMITS = {
 // ticket is about 350 bytes. 1024 keeps the same headroom the 512 limit was
 // chosen for, and is still far too small to be any use to an attacker.
 const MAX_PAYLOAD = 1024;
+// Bytes queued on a socket past which it is sent no more snapshots until it
+// drains. A client that has stopped reading (a backgrounded tab, a link the
+// heartbeat has not caught yet) would otherwise have every tick queued for it
+// without bound, and receive each one later than the last. About two seconds
+// of snapshots at 20Hz in a busy view.
+const SEND_BACKLOG = envInt("SEND_BACKLOG", 64 * 1024);
 // How long your cells stay in the arena after you vanish, motionless and
 // edible. Also the window in which a reconnect gets them back.
 const LINGER_SEC = envInt("LINGER_SEC", 6);
@@ -453,8 +460,15 @@ const server = http.createServer(async (req, res) => {
         budgetMs: +(1000 / HZ).toFixed(1),
         avgMs: +tickCost.avgMs.toFixed(2),
         worstMs: +tickCost.worstMs.toFixed(2),
-        overruns: tickCost.behind
-      }
+        overruns: tickCost.behind,
+        snapshotsHeld: tickCost.held,
+        // ?window=N: the last N ticks only, for a load test's measured span.
+        window: summarise(tickStats, HZ, Number(url.searchParams.get("window")) || tickStats.n)
+      },
+      memory: (({ rss, heapUsed, heapTotal, external }) => ({
+        rssMB: +(rss / 2 ** 20).toFixed(1), heapUsedMB: +(heapUsed / 2 ** 20).toFixed(1),
+        heapTotalMB: +(heapTotal / 2 ** 20).toFixed(1), externalMB: +(external / 2 ** 20).toFixed(1)
+      }))(process.memoryUsage())
     }));
     return;
   }
@@ -2047,7 +2061,10 @@ let lastTick = process.hrtime.bigint();
 
 // Rolling tick cost across all rooms, exposed on /health. A server that cannot
 // hold its tick feels exactly like bad netcode from the player's side.
-const tickCost = { avgMs: 0, worstMs: 0, behind: 0 };
+// held counts snapshots not sent to a client too far behind to take them.
+const tickCost = { avgMs: 0, worstMs: 0, behind: 0, held: 0 };
+// And the last minute of ticks one by one: lateness, stepping and sending.
+const tickStats = createTickStats(60 * HZ);
 
 function tickRoom(room, dt) {
   const { world, round } = room;
@@ -2055,6 +2072,7 @@ function tickRoom(room, dt) {
   // with. Taken per room: with several rooms, each steps a little later.
   const tickAt = performance.now();
   const events = stepWorld(world, dt, round.phase === PHASE_HOLD);
+  tickStats.cur.sim += performance.now() - tickAt;
 
   if (round.phase === PHASE_HOLD && world.time >= round.endsAt) {
     releaseRound(room);
@@ -2105,19 +2123,32 @@ function tickRoom(room, dt) {
   }
 
   const view = roundView(room);
+  const sendFrom = performance.now();
+  // What every snapshot below shares, worked out once. Nothing changes the
+  // world between here and the last send.
+  let frame = null;
   for (const [ws, meta] of room.clients) {
     if (ws.readyState !== ws.OPEN) continue;
     const player = world.players.get(meta.id);
     if (!player) continue;
+    // Skipped before encoding, so its delta state still matches what it was
+    // last sent and the snapshot it gets once drained is correct.
+    if (ws.bufferedAmount > SEND_BACKLOG) { tickCost.held++; continue; }
 
     refreshSpectate(room, meta);
     const eye = meta.spectateId ? world.players.get(meta.spectateId) : null;
-    ws.send(encodeSnapshot(world, player, meta.state, view, eye, tickAt));
+    frame ||= snapshotFrame(world);
+    const snap = encodeSnapshot(world, player, meta.state, view, eye, tickAt, frame);
+    tickStats.cur.bytes += snap.length;
+    ws.send(snap);
   }
+  tickStats.cur.snap += performance.now() - sendFrom;
 }
 
-function tick() {
+// `due` is the Date.now() this tick was scheduled for.
+function tick(due) {
   const tickStart = process.hrtime.bigint();
+  const late = Math.max(0, Date.now() - due);
   // Measured elapsed time, not the nominal interval, so a busy event loop
   // slows the tick rather than silently changing game speed.
   const dt = Math.min(Number(tickStart - lastTick) / 1e9, 0.25);
@@ -2131,6 +2162,7 @@ function tick() {
   tickCost.avgMs = tickCost.avgMs * 0.95 + cost * 0.05;
   tickCost.worstMs = Math.max(tickCost.worstMs * 0.999, cost);
   if (cost > 1000 / HZ) tickCost.behind++;
+  recordTick(tickStats, late, cost);
 }
 
 // setInterval drifts. A tick that overruns pushes the next one late, the error
@@ -2144,7 +2176,8 @@ function scheduleTick() {
   nextTickAt += TICK_MS;
   const drift = Date.now() - nextTickAt;
   if (drift > 500) nextTickAt = Date.now();
-  setTimeout(() => { tick(); scheduleTick(); }, Math.max(0, nextTickAt - Date.now()));
+  const due = nextTickAt;
+  setTimeout(() => { tick(due); scheduleTick(); }, Math.max(0, due - Date.now()));
 }
 
 scheduleTick();

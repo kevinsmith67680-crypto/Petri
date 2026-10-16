@@ -1,6 +1,8 @@
 // ---------------------------------------------------------------------------
-// Cost of one forEachPelletNear call against its radius, current Map grid vs
-// the CSR variant (which clamps the bucket range to the arena).
+// Cost of one forEachPelletNear call against its radius: the Map grid
+// against the flat (CSR) layout, which clamps the bucket range to the arena.
+// At d93f567 that is current against csr; once the flat layout ships, mapgrid
+// against current.
 //
 //   node bench/spatial/query-bounds.mjs
 //
@@ -14,8 +16,9 @@ import { performance } from "node:perf_hooks";
 import { loadVariant } from "./build.mjs";
 
 const out = [];
-for (const [name, opts] of [["current", { counted: true }], ["csr", { csr: true, counted: true }]]) {
-  const { sim } = await loadVariant(opts);
+for (const [name, opts] of [["current", { counted: true }], ["csr", { csr: true, counted: true }], ["mapgrid", { mapgrid: true, counted: true }]]) {
+  let sim;
+  try { ({ sim } = await loadVariant(opts)); } catch (e) { console.log(`skip ${name}: ${e.message}`); continue; }
   sim.__S.spawnBox = null;
   const w = sim.createWorld(3, { pellets: 4100, viruses: 0 });
   sim.buildPelletGrid(w);

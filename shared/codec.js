@@ -59,6 +59,17 @@ export class Writer {
     return this;
   }
 
+  // Bytes encoded earlier, copied in as they are. A loop rather than set() on
+  // a subarray: the runs are a dozen bytes, too short to pay for the view.
+  raw(src, from, to) {
+    this.ensure(to - from);
+    const buf = this.buf;
+    let o = this.o;
+    for (let i = from; i < to; i++) buf[o++] = src[i];
+    this.o = o;
+    return this;
+  }
+
   bytes() { return this.buf.subarray(0, this.o); }
   get length() { return this.o; }
 }

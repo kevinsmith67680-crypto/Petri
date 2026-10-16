@@ -293,39 +293,131 @@ export function advancePellet(p, dt, size = WORLD) {
 // query's padding — and a cell can be passed straight through by mass it is
 // touching. Only moving pellets are touched, a handful a tick, so this costs
 // nothing like a second rebuild.
+//
+// Laid out flat: every pellet in one array, sorted by bucket, and an offset
+// table saying where each bucket starts. A rebuild is one counting sort into
+// arrays kept from tick to tick, and a query reads two offsets per bucket
+// rather than looking the bucket up in a Map. A flat layout cannot grow a
+// bucket in place, so the two things that change the index between rebuilds
+// work round it: a pellet that leaves a bucket leaves a hole, and one that
+// arrives (sown, or moved in) joins the bucket's list of arrivals, visited
+// after the rest. Each bucket is therefore visited in exactly the order a
+// list of its own would give: by world.pellets as of the rebuild, then by
+// arrival. Eat order, the orbs a snapshot lists and which orb a bot picks
+// on a tie all follow that order, so it is kept to the letter.
 
 const GRID = 220;                       // ~half the view radius of a small cell
-const key = (gx, gy) => gx * 100003 + gy;   // prime stride, coords are >= 0
+
+// world.grid, laid out by buildPelletGrid:
+//   cols     buckets per side: the arena's, or more if a pellet lies past it
+//   start    bucket k holds items[start[k]] up to items[start[k + 1] - 1]
+//   items    pellets by bucket as of the rebuild; null where one has left since
+//   extra    each bucket's arrivals since the rebuild, in order; null if none yet
+//   touched  buckets with arrivals, emptied at the next rebuild
+function makeGrid(cols) {
+  const nb = cols * cols;
+  return {
+    cols, start: new Int32Array(nb + 1), at: new Int32Array(nb),
+    items: [], extra: new Array(nb).fill(null), touched: [], keys: new Int32Array(0)
+  };
+}
+
+// The bucket a pellet is filed in. -1 if it lies a whole bucket or more
+// below or left of the arena, where no query ever looks; -2 if it lies past
+// the far edge of this grid.
+function bucketOf(g, p) {
+  const gx = (p.x / GRID) | 0, gy = (p.y / GRID) | 0;
+  if (gx < 0 || gy < 0) return -1;
+  if (gx >= g.cols || gy >= g.cols) return -2;
+  return gx * g.cols + gy;
+}
+const colsFor = p => Math.max((p.x / GRID) | 0, (p.y / GRID) | 0) + 1;
 
 export function buildPelletGrid(world) {
-  // Buckets are kept and emptied rather than the Map being cleared: clearing
-  // it meant allocating ~1,600 fresh arrays every tick, and the garbage
-  // collector was a quarter of the whole frame.
-  const g = world.grid || (world.grid = new Map());
-  for (const bucket of g.values()) bucket.length = 0;
-  for (const p of world.pellets) gridInsert(g, p);
+  const ps = world.pellets, n = ps.length;
+  let g = world.grid;
+  const cols = Math.ceil(world.size / GRID) + 1;
+  if (!g || g.cols < cols) g = world.grid = makeGrid(cols);
+  // Emptied rather than dropped: allocating fresh lists every tick made the
+  // garbage collector a quarter of the frame.
+  for (const k of g.touched) g.extra[k].length = 0;
+  g.touched.length = 0;
+  for (;;) {
+    if (g.keys.length < n) g.keys = new Int32Array(Math.max(n, 2 * g.keys.length, 1024));
+    let wider = 0;
+    for (let i = 0; i < n; i++) {
+      const k = bucketOf(g, ps[i]);
+      g.keys[i] = k;
+      if (k === -2) wider = Math.max(wider, colsFor(ps[i]));
+    }
+    if (!wider) break;
+    // Something lies past the far wall by a bucket or more. Rare, and never
+    // the arena's own orbs; widen to take it and file again.
+    const keys = g.keys;
+    g = world.grid = makeGrid(wider);
+    g.keys = keys;
+  }
+  const { start, at, keys, items } = g, nb = g.cols * g.cols;
+  start.fill(0);
+  let filed = 0;
+  for (let i = 0; i < n; i++) if (keys[i] >= 0) { start[keys[i] + 1]++; filed++; }
+  for (let k = 0; k < nb; k++) start[k + 1] += start[k];
+  at.set(start.subarray(0, nb));
+  // Grown with nulls rather than by length, so the array stays packed.
+  while (items.length < filed) items.push(null);
+  items.length = filed;
+  // Stable, so each bucket keeps world.pellets order.
+  for (let i = 0; i < n; i++) if (keys[i] >= 0) items[at[keys[i]]++] = ps[i];
+}
+
+function arrive(g, k, p) {
+  let list = g.extra[k];
+  if (list === null) list = g.extra[k] = [];
+  if (!list.length) g.touched.push(k);
+  list.push(p);
+}
+
+// Lays the grid out again, wider, with every pellet kept in its bucket and in
+// its order, as arrivals. Only needed if the arena is made bigger after the
+// grid was laid out; the next rebuild lays it out flat again.
+function widen(world, cols) {
+  const old = world.grid, g = world.grid = makeGrid(cols);
+  g.keys = old.keys;
+  for (let k = 0, nb = old.cols * old.cols; k < nb; k++) {
+    const to = ((k / old.cols) | 0) * cols + (k % old.cols);
+    for (let i = old.start[k]; i < old.start[k + 1]; i++) if (old.items[i] !== null) arrive(g, to, old.items[i]);
+    const list = old.extra[k];
+    if (list !== null) for (const p of list) arrive(g, to, p);
+  }
+  return g;
 }
 
 // Also used by sowOrbs, which indexes each orb the moment it is placed so the
 // next one can keep its distance from it.
-const keyOf = p => key((p.x / GRID) | 0, (p.y / GRID) | 0);
-
-function gridInsert(g, p) {
-  const k = keyOf(p);
-  const bucket = g.get(k);
-  if (bucket) bucket.push(p);
-  else g.set(k, [p]);
+function gridInsert(world, p) {
+  let g = world.grid, k = bucketOf(g, p);
+  if (k === -2) { g = widen(world, colsFor(p)); k = bucketOf(g, p); }
+  if (k >= 0) arrive(g, k, p);
 }
 
 // Re-files a pellet after it has moved, given the bucket it was filed under.
-// Most moves stay inside the bucket and cost one key comparison; one that
-// crosses a line leaves its old bucket and joins the new one.
-function gridMove(g, p, was) {
-  if (keyOf(p) === was) return;
-  const from = g.get(was);
-  const i = from ? from.indexOf(p) : -1;
-  if (i >= 0) from.splice(i, 1);
-  gridInsert(g, p);
+// Most moves stay inside the bucket and cost one comparison; one that crosses
+// a line leaves a hole in (or is taken off the arrivals of) its old bucket and
+// arrives in the new one.
+function gridMove(world, p, was) {
+  const g = world.grid;
+  if (bucketOf(g, p) === was) return;
+  if (was >= 0) {
+    const items = g.items, end = g.start[was + 1];
+    let i = g.start[was];
+    while (i < end && items[i] !== p) i++;
+    if (i < end) items[i] = null;
+    else {
+      const list = g.extra[was], j = list === null ? -1 : list.indexOf(p);
+      if (j >= 0) list.splice(j, 1);
+    }
+  }
+  gridInsert(world, p);
 }
 
 // Visits every pellet in the buckets overlapping the box around (x, y, r).
@@ -340,15 +432,21 @@ function forEachPelletIn(world, minX, minY, maxX, maxY, fn) {
   // called before the first tick, and an empty result there would look like
   // "no orbs in view" rather than "index not ready".
   if (!world.grid) buildPelletGrid(world);
-  const x0 = Math.max(0, (minX / GRID) | 0);
-  const x1 = (maxX / GRID) | 0;
-  const y0 = Math.max(0, (minY / GRID) | 0);
-  const y1 = (maxY / GRID) | 0;
+  const g = world.grid, cols = g.cols, start = g.start, items = g.items, extra = g.extra;
+  // Clamped at both ends: a giant's view can reach far past the arena, and
+  // nothing out there is filed.
+  const x0 = Math.max(0, (minX / GRID) | 0), x1 = Math.min(cols - 1, (maxX / GRID) | 0);
+  const y0 = Math.max(0, (minY / GRID) | 0), y1 = Math.min(cols - 1, (maxY / GRID) | 0);
   for (let gx = x0; gx <= x1; gx++) {
+    const row = gx * cols;
     for (let gy = y0; gy <= y1; gy++) {
-      const bucket = world.grid.get(key(gx, gy));
-      if (!bucket) continue;
-      for (let i = 0; i < bucket.length; i++) fn(bucket[i]);
+      const k = row + gy;
+      for (let i = start[k], end = start[k + 1]; i < end; i++) {
+        const p = items[i];
+        if (p !== null) fn(p);
+      }
+      const list = extra[k];
+      if (list !== null) for (let i = 0; i < list.length; i++) fn(list[i]);
     }
   }
 }
@@ -543,7 +641,7 @@ function sowOrbs(world) {
     }
     const orb = makePellet(world, x, y);
     world.pellets.push(orb);
-    gridInsert(world.grid, orb);
+    gridInsert(world, orb);
   }
 }
 
@@ -1788,17 +1886,16 @@ export function stepWorld(world, dt, held = false) {
   // Each remembers where it set off from, for the swept tests, and the
   // furthest any of them went widens the eat queries by as much: a pellet is
   // filed where it ended up, but a cell may have touched it anywhere on the way.
-  const grid = world.grid;
   const now = world.tick;
   world.pelletStep = 0;
   for (const p of world.pellets) {
     if (!p.vx && !p.vy) continue;
-    const was = keyOf(p);
+    const grid = world.grid, was = grid ? bucketOf(grid, p) : -1;
     p.startX = p.x; p.startY = p.y; p.movedAt = now;
     advancePellet(p, dt, world.size);
     const step = Math.max(Math.abs(p.x - p.startX), Math.abs(p.y - p.startY));
     if (step > world.pelletStep) world.pelletStep = step;
-    if (grid) gridMove(grid, p, was);
+    if (grid) gridMove(world, p, was);
   }
   for (const v of world.viruses) {
     if (!v.vx && !v.vy) continue;

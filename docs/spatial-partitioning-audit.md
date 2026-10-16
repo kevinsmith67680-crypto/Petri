@@ -7,6 +7,15 @@ The benchmarks and correctness checks behind every figure here are in
 branch moved on during the audit; what still holds at the head is in the next
 section.
 
+## Since the audit
+
+Everything this audit recommended as critical or high has since been done,
+along with snapshot encoding, load tests against the real server and a
+final validation against the baseline. The whole account, with
+before-and-after measurements, is in
+[`docs/performance-report.md`](performance-report.md). The sections below
+record each step as it landed.
+
 ## Update: B1 fixed
 
 `stepWorld` now re-files each pellet in flight as it moves, before anyone eats
@@ -87,6 +96,153 @@ crossing a cell) and feeding viruses.
     the wall clamp, which can leave one a few units past the wall.
   - The H-1 grid prototype tests end points only. A swept version must insert
     cells where they end and query each attacker's whole step plus the band.
+    (Since shipped, filing each cell by its path instead: see "Update: H-1
+    shipped".)
+
+## Update: H-1 shipped
+
+`cellCombat` now finds its candidate pairs with a uniform grid instead of
+testing every cell of every player against every cell of every other ("cell
+combat" in `shared/sim.js`).
+
+- **Built where it is used.**
+  - The grid is rebuilt at the start of combat, after the tick's moves,
+    splits, merges, pops and zone losses. It uses 256-unit buckets,
+    counting-sorted into typed arrays that are reused between ticks. It
+    cannot go stale, and nothing else has to keep it up to date.
+  - A cell eaten during combat is marked and never tested again.
+  - Filing costs 0.02–0.04 ms a tick, 34–42% of the new `cellCombat`
+    (`results/combat-filing.txt`). A grid kept up to date would save less than
+    that, since nearly every cell moves every tick.
+- **Complete for the swept test, at any size.** A bite needs the victim's
+  centre within the attacker's radius at the end of the tick or along the way.
+  So each cell is filed in every bucket its centre's path covers this tick
+  (1.06–1.09 entries per cell). Each attacker cell searches its own path
+  widened by its radius. A giant attacker searches more buckets; a giant
+  victim is still filed by its centre.
+- **No duplicates.** A victim filed in several buckets is kept once per
+  search, by a per-search stamp.
+- **Same order, same numbers.** These are the prototype's rules:
+  - attackers and victims in join order;
+  - attacker cells in order, victim cells from the back;
+  - the mass test live and the reach fixed per victim player;
+  - a fresh search after a bite.
+
+  Candidates are not filtered by mass, as warned under H-1.
+- **Verified:**
+  - **`test/combat.test.js`, now in `npm test`.** It checks the grid against
+    a plain all-pairs reference with no early rejects:
+    - hand-built cases: giants across 15 buckets, a 900-unit step, crossing
+      paths, walls, a victim filed in four buckets, join order, victim order,
+      growth reaching a later player, an eaten attacker;
+    - 3,000 random frozen states, bite for bite (348,115 bites);
+    - three whole games, tick for tick: a 100-player hard-bot lobby, 60
+      players splitting at tick lengths of 50–250 ms, and giants.
+
+    Nine deliberate breakages of the grid each fail it.
+  - **`bench/spatial/correctness.mjs`.** Run against `pairs` (the all-pairs
+    loop from `a44cad8`, verbatim), the grid plays identically for 1,200
+    ticks in six scenarios, and for 600 at 250 ms ticks in three. C7 passes
+    on both. Nothing fails (`results/correctness-combat-grid.txt`).
+- **Measured** (`results/combat-grid-bench.md`, `-dt025.md`; median of 3 runs,
+  ms per room tick excluding bot AI; the games are identical, so the
+  comparison is like for like):
+
+  | Scenario | `cellCombat` all pairs → grid | Tick avg | Tick p99 |
+  |---|---:|---:|---:|
+  | Low population (10) | 0.012 → 0.019 | 0.34 → 0.42 | 1.38 → 1.97 |
+  | Full lobby (100) | 0.966 → 0.078 | 6.00 → 4.98 | 11.17 → 10.79 |
+  | Standard mode (live config) | 1.054 → 0.083 | 6.95 → 5.41 | 14.41 → 10.82 |
+  | Stress test (150) | 2.315 → 0.115 | 13.42 → 10.44 | 24.85 → 21.72 |
+  | Very large cells | 1.102 → 0.085 | 8.84 → 8.00 | 16.28 → 15.20 |
+  | Rapid split + merge | 3.449 → 0.144 | 14.82 → 11.05 | 34.13 → 20.99 |
+  | Full lobby, 250 ms ticks | 1.670 → 0.117 | 9.52 → 7.03 | 17.52 → 14.65 |
+  | Rapid split + merge, 250 ms ticks | 1.203 → 0.095 | 8.72 → 7.73 | 17.63 → 17.20 |
+
+  - Worst single `cellCombat` call in split play: 16.2 → 1.6 ms.
+  - Candidate tests fall from 50,695–230,213 pair-loop iterations to 8–17.
+    Hit tests and eats are identical in every scenario.
+  - With 10 players the grid costs 7 µs more a tick, which does not matter.
+  - Tick differences beyond `cellCombat`'s own are run-to-run noise.
+- **Not changed:** any rule, the 20 Hz tick, and the pellet grid.
+  `underCell`'s linear scan in `sowOrbs` could use a cell grid too, but it
+  runs after combat, when this one no longer matches the cells.
+
+## Update: H-2 shipped
+
+The pellet index is now laid out flat ("pellet spatial index" in
+`shared/sim.js`). It is one array of pellets sorted by bucket plus an offset
+table, filled by a stable counting sort into arrays kept from tick to tick.
+Queries clamp the bucket range at both ends of the arena (L2).
+
+- **What the prototype could not do.** Since the audit the index changes
+  between rebuilds in two ways:
+  - `sowOrbs` files each orb the moment it places it, so the next dart keeps
+    its distance (`adb6295`);
+  - `stepWorld` re-files thrown mass as it moves (`93148bf`).
+
+  A flat layout cannot grow a bucket in place, so the shipped version handles
+  both differently:
+  - a pellet that leaves a bucket leaves a hole;
+  - one that arrives joins that bucket's list of arrivals, visited after the
+    rest;
+  - the next rebuild lays everything out flat again.
+- **Membership and order exactly as the Map's.** Every bucket hands out what
+  the Map's array held, in the same order: by `world.pellets` as of the
+  rebuild, then by arrival. Eat order, the orbs a snapshot lists and a bot's
+  choice on a tie all follow that order.
+- **Edges.**
+  - A pellet a whole bucket below zero is filed nowhere. No query ever
+    looked there, so the Map's bucket for it was never visited either.
+  - A pellet past the far wall widens the grid instead of being clamped into
+    an edge bucket, which the audit's prototype did.
+  - Creation, sowing, eating, sweeping, `resetArena` and an arena grown after
+    layout all keep membership exact.
+- **Verified:**
+  - **`test/pelletgrid.test.js`, now in `npm test`.** It puts a copy of
+    `sim.js` with the Map grid restored through the same steps as the
+    current one, comparing what every bucket hands out, in order:
+    - creation, sowing, a rebuild, ejected mass, eating, `resetArena`;
+    - pellets past every wall, and an arena grown after layout;
+    - 6,000 random inserts, moves, deaths and rebuilds;
+    - two whole games (a 100-bot Standard room, and a crowd throwing mass
+      under a closing zone with a reset), with snapshots compared byte for
+      byte.
+
+    Nine deliberate breakages each fail it.
+  - **`bench/spatial/correctness.mjs`.** Run against `mapgrid` (the Map put
+    back), the flat grid plays identically for 1,200 ticks in six scenarios,
+    and for 600 at 250 ms ticks in four. C1 (grid query superset) and C8
+    (walls and bucket corners) pass on both. 65 passed, 0 failed
+    (`results/correctness-pellet-grid.txt`).
+- **Measured** (`results/pelletgrid-bench.md`, `-dt025.md`,
+  `pelletgrid-query-bounds.txt`). Median of three runs, ms per room tick
+  excluding bot AI. The games are identical, so this is like for like:
+
+  | Scenario | Tick avg, Map → flat | p99 | Rebuild | Snapshots |
+  |---|---:|---:|---:|---:|
+  | Low population (10) | 0.38 → 0.31 | 1.78 → 1.35 | 0.103 → 0.021 | 0.17 → 0.18 |
+  | Full lobby (100) | 4.87 → 3.96 | 10.83 → 8.79 | 0.420 → 0.093 | 3.65 → 3.09 |
+  | Standard mode (live config) | 5.98 → 5.26 | 12.41 → 11.75 | 0.525 → 0.151 | 4.44 → 4.07 |
+  | Stress test (150) | 9.82 → 8.44 | 20.99 → 16.87 | 0.579 → 0.194 | 7.71 → 6.70 |
+  | Very large cells | 7.99 → 6.25 | 14.46 → 13.95 | 0.411 → 0.091 | 6.49 → 5.21 |
+  | Rapid split + merge | 10.16 → 9.18 | 22.97 → 21.90 | 0.439 → 0.112 | 7.66 → 7.04 |
+  | Ejected-mass storm | 7.27 → 5.45 | 15.16 → 10.89 | 0.422 → 0.087 | 5.57 → 4.28 |
+  | Full lobby, 250 ms ticks | 7.07 → 5.93 | 14.90 → 12.65 | 0.470 → 0.107 | 4.90 → 4.29 |
+  | Ejected-mass storm, 250 ms ticks | 6.18 → 4.96 | 13.97 → 10.87 | 0.456 → 0.100 | 4.52 → 3.79 |
+
+  - A single query is never slower.
+  - For a giant's view reaching past the arena it is 1.5–4.8× faster,
+    because buckets past the wall are no longer looked up.
+- **Bucket size** (`results/pelletgrid-size.md`, same method):
+  - 110, 165 and 440 were not better than 220 anywhere.
+  - 330 was faster in five scenarios of six (Standard 5.40 → 4.52 ms) but
+    slower on the dense cluster (3.57 → 4.15 ms, p99 8.45 → 13.29), and most
+    differences were within noise.
+  - A different size also changes the visiting order, so those games are not
+    identical to each other.
+
+  **220 is kept.**
 
 ## Status at the branch head (`a8319cc`)
 
@@ -114,7 +270,8 @@ What that changes below:
   orb to the grid as it places it (`gridInsert`), so the next dart can keep
   its distance. A CSR layout is fixed between rebuilds, so it would need a
   small overflow list that queries also scan and that is folded in once it
-  grows. This variant was not prototyped against the head.
+  grows. This variant was not prototyped against the head. *(Since shipped,
+  with per-bucket arrival lists and holes: see "Update: H-2 shipped".)*
 - **New linear scan at the head (Low).** `underCell` (`sim.js:479`) tests every
   cell in the arena for every dart `sowOrbs` throws, and the zone can push
   that to 60 darts per orb. H-1's cell grid would serve it as well. Not
@@ -440,7 +597,9 @@ round.
 
 ### High: meaningful, measured optimisation
 
-**H-1. Give `cellCombat` a uniform-grid broad phase.** Insert every live cell
+**H-1. Give `cellCombat` a uniform-grid broad phase.** *Done, with each cell
+filed by its path this tick for the swept test. See "Update: H-1 shipped" at
+the top.* Insert every live cell
 by its **centre** into 256-unit buckets at the start of `cellCombat`. Each
 attacker cell then queries the box of half-size `ra` around itself.
 
@@ -465,7 +624,8 @@ attacker cell then queries the box of half-size `ra` around itself.
   to whatever ships.
 
 **H-2. Store the pellet grid as a flat CSR array, and clamp both ends of the
-query.** One stable counting sort per rebuild into a reused
+query.** *Done, with arrival lists for what is filed between rebuilds. See
+"Update: H-2 shipped" at the top.* One stable counting sort per rebuild into a reused
 `Int32Array` offset table and one pellet array (prototype: `CSR_GRID` in
 `build.mjs`). It keeps the same bucket visit order and the same order within a
 bucket, so it is bit-identical.

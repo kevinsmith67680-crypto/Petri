@@ -249,9 +249,30 @@ The known-set lives on the server. The client never tells us what it already has
 
 The server treats any decode failure as "close the socket", since a client that cannot speak the protocol has nothing useful to say.
 
+### Encoding cost
+
+Most of a snapshot is the same for every client in a room: where each cell is and how far it reaches, its record on the wire, the viruses, the zone, the leaderboard. `snapshotFrame` works that out once per room per tick. Each client's `encodeSnapshot` shares it and does only what depends on its own view: the cells and viruses it can see, its pellet delta, its own cells' motion. The pellet delta keeps each client's known ids in a small open-addressed hash table in typed arrays, not a fresh `Set` per client per tick. One writer serves every snapshot, and each snapshot is copied out at its exact length.
+
+The bytes are unchanged, so the client needs no change:
+
+- `bench/spatial/snapshot-cost.mjs` encodes every client's snapshot both ways on the same world and compares them byte for byte: 366,000 snapshots, all identical.
+- `test/snapshot.test.js` checks every client's view against the world by brute force: every cell, pellet and virus the view covers and nothing else, with nothing sent twice, nothing removed that was never sent and nothing left on screen after it has gone.
+
+Measured on one machine, a tick's snapshots fell as follows (average over 600 ticks, both encoders taking turns on the same world):
+
+| Scenario | Before | After |
+|---|---:|---:|
+| 100 players, Standard config | 3.95 ms | 2.15 ms |
+| 100 players, heavy split play | 8.08 ms | 4.42 ms |
+| 150 players | 7.86 ms | 4.11 ms |
+
+Garbage-collection time roughly halved.
+
+**A client that stops reading is not sent more.** A socket more than 64 KiB behind (`SEND_BACKLOG`) gets no snapshot until it drains. That covers a backgrounded tab, or a dead link the heartbeat has not caught yet. Nothing is encoded for it either, so its delta state still matches what it was last sent, and the stream resumes consistently. Without this, every tick was queued for it without bound, and it got each one later than the last. `/health` counts snapshots held back, and `test/backlog.test.js` drives it through the real server.
+
 ### Remaining bandwidth work
 
-- Cells are still sent in full each tick. They move constantly so there is less to win, but quantising positions relative to the view origin would save a few bytes each.
+- Cells are still sent in full each tick. They are 54–76% of all snapshot bytes; viruses, sent every tick though they rarely move, are 6–15%. Delta-coding both against what each client last saw might save a third of the bandwidth, but it needs per-client cell state on the server and matching changes in the client. Bandwidth is 3–15 KiB/s per client, and CPU is the server's limit, so it has not been done.
 - The 100-player figures assume one world. Rooms open on demand within a process (see *Rooms on demand*), but a process is one thread: past one CPU core, run several game servers and let the matchmaker route between them (see *Matchmaking*).
 - WebTransport instead of WebSocket, with WebSocket as fallback. It reached Baseline in March 2026, and its unreliable datagrams suit positional updates you would discard on arrival anyway. Keyframes already exist, which is what makes lossy transport survivable.
 
@@ -914,11 +935,21 @@ The grid is rebuilt at the **end** of each tick, not the start. Pellets are crea
 
 That leaves one gap, closed separately. Thrown mass moves at the **start** of the next tick, after the rebuild and before anyone eats, so each blob in flight is re-filed into its new bucket as it moves (`gridMove`). Without that it was looked up a tick behind — 57 units at 20Hz, three times the eat query's padding — and a cell could have a blob it was touching pass straight through it. Only pellets that cross a bucket line are touched: none at all in an ordinary round, about ten a tick when everyone is throwing mass, against 4,100 for a second rebuild. `test/grid.test.js` checks each tick's eats against a brute-force scan.
 
+**Laid out flat.** The pellet index is one array of pellets sorted by bucket, plus an offset table, instead of a Map of bucket arrays. Each rebuild is a counting sort into arrays kept from tick to tick. Between rebuilds the index still changes in two ways: `sowOrbs` files each orb as it places it, and thrown mass is re-filed as it moves. So a pellet that leaves a bucket leaves a hole, and one that arrives joins the bucket's list of arrivals, visited after the rest. Every bucket hands out exactly the pellets the Map did, in exactly the same order. `test/pelletgrid.test.js` compares the two through creation, sowing, ejected mass, eating, resets, pellets past the walls and whole games, snapshots byte for byte. Measured against the Map on identical games (median of three runs, excluding bot AI), the rebuild fell from 0.53 to 0.15 ms a tick in the Standard config, snapshot queries from 4.44 to 4.07 ms, and the whole tick from 5.98 to 5.26 ms. With a full lobby the tick fell from 4.87 to 3.96 ms, and in an ejected-mass storm from 7.27 to 5.45 ms. Buckets stay 220 units. 330 was faster in five scenarios of six but slower on a dense cluster, and most of the differences were within run-to-run noise.
+
 **Collisions along the way.** Everything that moves is integrated as one straight step per tick, and collisions used to be tested only where the step ended. That let fast things pass through what they should have hit. A small split half covers ~68 units in one 50ms step against an eat window 42 units wide on small prey, so a split at prey 105–115 or 165–170 units away landed either side of it. The server also steps by measured time, capped at 250ms, so one late tick did the same to thrown mass (177 units a step), shot viruses (165) and big split pieces (300+). In a 100-player Standard round at 20Hz (hard bots), about 7% of kills and 2% of orb eats are now caught only by the test along the way: that tick, the old test would have missed them.
 
 Each test (eating orbs, eating cells, popping on viruses, feeding them) is now made twice: at the end of the tick exactly as before, then, only if that fails and something moved, along both entities' straight steps. The second can only add a collision the first missed, so nothing that holds still behaves any differently. Its thresholds use the least favourable size either side had during the tick, so a cell that only grew big enough by the end cannot reach back for something it passed while still too small. The eat ratio, the owner cooldown on thrown mass, the receding rule, pop mass and the order players act in are unchanged. The eat query covers each cell's whole step, widened by the furthest any pellet moved that tick. The 20Hz tick and the measured-time stepping are unchanged too: collisions no longer depend on the step length, and sub-stepping would have made a late tick later. `test/sweep.test.js` covers each case at every tick length from 50 to 250ms, and a crowded arena checked against a sampled brute force.
 
-**Hardware.** At 100 players this needs roughly 13 ms/tick on one core. Render's free instance (0.1 CPU) fails outright at 260% of the tick budget; Starter (0.5 CPU) runs at 52%, which works but is tight; Standard (1 CPU, $25/mo) sits at 26% and is the realistic floor for a full lobby. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
+**Cells against cells.** `cellCombat` used to test every cell of every player against every cell of every other: in a full lobby, ten thousand player pairs and 50,000–230,000 cell pairs a tick, nearly all on opposite sides of the map. It now files the cells in a 256-unit grid as combat starts and tests each attacker cell only against the cells filed near it, 8–17 candidates a tick. Each cell is filed by the path its centre took this tick, and each attacker searches its own path widened by its radius, which covers the test along the way and cells of any size. The grid is rebuilt every time rather than kept up to date: nearly every cell moves every tick, and the rebuild costs 0.02–0.04 ms. The bites, their order and every number are the same as the all-pairs loop's. `test/combat.test.js` plays the two side by side, and the lockstep runs in `bench/spatial` agree for 1,200 ticks in six scenarios. Measured on one machine, `cellCombat` fell from 1.05 to 0.08 ms a tick in the Standard config and from 3.45 to 0.14 ms in heavy split play. The whole tick fell from 6.95 to 5.41 ms and from 14.8 to 11.1 ms, with p99 from 14.4 to 10.8 ms and from 34.1 to 21.0 ms.
+
+**Hardware.** On one core of a 2.8 GHz Xeon, the load test (`bench/stress/`: 100 real clients on the real server, sends included) measured 4.7 ms a tick, 11.6 at p99, and 14.5% of the core's time. At 150 players it was 6.8 ms, 16.2 at p99. Before the work in `docs/performance-report.md` the same test measured 7.6 and 12.3 ms. The instance guidance here was worked out from an older estimate of about 13 ms a tick at 100 players:
+
+- Render's free instance (0.1 CPU) failed at 260% of the tick budget.
+- Starter (0.5 CPU) ran at 52%, which worked but was tight.
+- Standard (1 CPU, $25/mo) sat at 26%, the realistic floor for a full lobby.
+
+Re-measure on the instance before relying on any of those. Remember a single world is single-threaded, so a bigger instance buys headroom, not parallelism.
 
 ### How orbs are placed
 

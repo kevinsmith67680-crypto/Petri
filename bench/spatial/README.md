@@ -19,17 +19,18 @@ working as the code moves.
 
 | File | What it does |
 |---|---|
-| `build.mjs` | Builds the variants: `current` (instrumentation hooks only), `fresh` (index rebuilt after pellets move and after `resetArena`), `csr` (flat counting-sort pellet grid), `gcombat` (uniform-grid broad phase for `cellCombat`, same iteration order as the original: the prototype for what now ships), `pairs` (the reverse, for revisions that ship the grid: `cellCombat` put back to the all-pairs loop, verbatim from `a44cad8`), `all` (fresh + csr + gcombat), plus `all-g110` / `all-g440` for a bucket-size sweep. Any variant can also be built `counted`, which adds broad/narrow-phase counters, a brute-force shadow check inside `eatPellets`, and a brute-force reference mode. |
+| `build.mjs` | Builds the variants: `current` (instrumentation hooks only), `fresh` (index rebuilt after pellets move and after `resetArena`), `csr` (flat counting-sort pellet grid), `gcombat` (uniform-grid broad phase for `cellCombat`, same iteration order as the original: the prototype for what now ships), `pairs` (the reverse, for revisions that ship the grid: `cellCombat` put back to the all-pairs loop, verbatim from `a44cad8`), `mapgrid` (likewise for the pellet grid: the Map of buckets put back, as at `7594a8b`), `all` (fresh + csr + gcombat), `g110`/`g165`/`g330`/`g440` (the shipped layout at other bucket sizes), plus `all-g110` / `all-g440` for a bucket-size sweep. Any variant can also be built `counted`, which adds broad/narrow-phase counters, a brute-force shadow check inside `eatPellets`, and a brute-force reference mode. |
 | `scenarios.mjs` | The seeded scenarios from the brief, plus the live Standard config, very large cells, rapid split + merge, an ejected-mass storm and spawn/consume churn. |
 | `correctness.mjs` | Deterministic checks against brute-force references, and lockstep tests showing each alternative plays bit-identically to what it replaces. |
 | `run-one.mjs` | One timed run of one scenario on one variant, in a fresh process. A tick is `stepWorld` plus one `encodeSnapshot` per player, the same work as `tickRoom` in `server/index.js`. |
 | `bench.mjs` | Runs every scenario on every variant, takes medians across repetitions, and prints the tables used in the report. |
 | `client-view.mjs`, `client-render.mjs` | Practice-mode view building (Node) and canvas draw cost (headless Chromium via Playwright). These two use the working-tree client; the report's figures were taken at `d93f567`. |
 | `head-check.mjs` | B1/B2 reproductions and a Standard-config timing on unpatched modules: the working tree, or `--rev <rev>`. |
+| `snapshot-cost.mjs` | Every player's snapshot encoded by the encoder at `dd03e01` and by the current one, from the same world every tick, compared byte for byte and timed; `--only old\|new` counts each one's garbage on its own; also where the bytes go, section by section. |
 | `combat-filing.mjs` | How much of `cellCombat` goes on rebuilding its cell grid each tick, on the working tree. |
 | `sweep-combat-cost.mjs` | `cellCombat`'s pair loop with and without the swept test, on identical frozen states. Whole games diverge once the sweep catches something, so they cannot compare it fairly. |
 | `query-bounds.mjs` | Cost of a single grid query against its radius, showing what the unclamped upper bound costs for very large cells. |
-| `results/` | Output from the runs quoted in the report. `b1-fix-perf.*` and `correctness-b1-fix.*` cover the B1 fix; `r1-*`, `sweep-combat-cost.txt` and `correctness-r1-fix.*` cover R1; `combat-grid-*` and `correctness-combat-grid.*` cover the `cellCombat` grid (H-1). These numbers depend on the machine. |
+| `results/` | Output from the runs quoted in the report. `b1-fix-perf.*` and `correctness-b1-fix.*` cover the B1 fix; `r1-*`, `sweep-combat-cost.txt` and `correctness-r1-fix.*` cover R1; `combat-grid-*` and `correctness-combat-grid.*` cover the `cellCombat` grid (H-1); `pelletgrid-*` and `correctness-pellet-grid.*` the flat pellet grid (H-2); `snapshot-*` snapshot encoding. These numbers depend on the machine. |
 
 ## Run
 
@@ -45,6 +46,7 @@ node bench/spatial/query-bounds.mjs
 node --expose-gc bench/spatial/head-check.mjs       # or --rev d93f567
 node bench/spatial/sweep-combat-cost.mjs
 node bench/spatial/combat-filing.mjs
+node --expose-gc bench/spatial/snapshot-cost.mjs
 # the shipped grid against the all-pairs loop it replaced
 SPATIAL_REV=working node bench/spatial/bench.mjs --variants pairs,current --scenarios full,standard,splits
 ```
@@ -60,8 +62,8 @@ revision it ran against.
   the `cellCombat` grid shipped:** nothing fails. The `csr` and `gcombat`
   checks are skipped. `csr` predates incremental `gridInsert`, and
   `gcombat` is superseded by the grid that shipped; both refuse to build
-  rather than measure a different game. `pairs` builds instead, and the E
-  checks play it against `current` tick for tick.
+  rather than measure a different game. `pairs` and `mapgrid` build instead,
+  and the E checks play each against `current` tick for tick.
 
 Results are in `results/correctness.txt` (d93f567),
 `results/correctness-b1-fix.txt`, `results/correctness-r1-fix.txt` and

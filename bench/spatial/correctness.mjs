@@ -9,7 +9,7 @@
 // REV, d93f567 by default); the same check is then run on the `fresh` variant
 // to show the proposed fix closes it. Variants a revision cannot build (csr
 // once orbs are indexed incrementally, gcombat once the grid ships, pairs
-// before it does) are reported as SKIP. The game code itself is never
+// and mapgrid before what they undo ships) are reported as SKIP. The game code itself is never
 // modified.
 // ---------------------------------------------------------------------------
 
@@ -335,6 +335,10 @@ function c8(build) {
 
 // ── C9: snapshot area-of-interest query vs brute force ──────────────────────
 
+// The pellets a client state says it was sent: a Set up to dd03e01, and
+// after that the ids in the order sent (knownOrder, knownCount).
+const sentTo = cs => cs.knownPellets ?? new Set(cs.knownOrder.subarray(0, cs.knownCount));
+
 function c9(build, key, ticks) {
   const { sim, protocol } = B[build];
   const { world, driver } = setupScenario(sim, key, 17);
@@ -349,11 +353,12 @@ function c9(build, key, ticks) {
       if (!cs) states.set(p.id, (cs = protocol.createClientState(i)));
       i++;
       protocol.encodeSnapshot(world, p, cs);
+      const known = sentTo(cs);
       const c = sim.centroid(p), R = protocol.viewRadius(p);
       for (const q of world.pellets) {
         const dx = q.x - c.x, dy = q.y - c.y;
         const want = dx * dx + dy * dy < R * R;
-        const got = cs.knownPellets.has(q.id);
+        const got = known.has(q.id);
         if (want && !got) missing++;
         if (!want && got) extra++;
       }
@@ -433,7 +438,7 @@ function c11(build) {
 // ── run ─────────────────────────────────────────────────────────────────────
 
 console.log("\nC1  grid query superset");
-c1("current"); need("csr") && c1("csr");
+c1("current"); need("csr") && c1("csr"); need("mapgrid") && c1("mapgrid");
 console.log("\nC2  index after resetArena");
 c2("current"); c2("fresh");
 console.log("\nC3  moving pellet, stale bucket");
@@ -469,7 +474,7 @@ c6long("currentC", "eject", QUICK ? 300 : 1200);
 console.log("\nC7  very large cells");
 c7("current"); need("gcombat") && c7("gcombat"); need("pairs") && c7("pairs");
 console.log("\nC8  walls and bucket corners");
-c8("current"); need("csr") && c8("csr");
+c8("current"); need("csr") && c8("csr"); need("mapgrid") && c8("mapgrid");
 console.log("\nC9  snapshot area of interest");
 c9("current", "full", QUICK ? 60 : 200);
 c9("current", "splits", QUICK ? 60 : 200);
@@ -488,7 +493,7 @@ for (const key of ["eject", "splits", "full"]) {
   check(`E.${key}`, `the instrumented build plays identically to the plain one`, "currentC", d < 0, { firstDivergentTick: d });
 }
 for (const key of ["full", "dense", "giants", "splits", "eject", "churn"]) {
-  for (const [a, b] of [["current", "csr"], ["current", "gcombat"], ["fresh", "all"], ["pairs", "current"]]) {
+  for (const [a, b] of [["current", "csr"], ["current", "gcombat"], ["fresh", "all"], ["pairs", "current"], ["mapgrid", "current"]]) {
     if (!need(a, b)) continue;
     const d = lockstep(a, b, key, LT, { seed: 23 });
     check(`E.${key}`, `${b} plays identically to ${a} for ${LT} ticks`, b, d < 0, { firstDivergentTick: d });
@@ -496,10 +501,14 @@ for (const key of ["full", "dense", "giants", "splits", "eject", "churn"]) {
 }
 // The grid broad phase against the all-pairs loop it replaced, also at the
 // longest tick the server steps by, where every path is five times as long.
-for (const key of ["full", "splits", "giants"]) {
-  if (!need("pairs", "current")) break;
-  const d = lockstep("pairs", "current", key, Math.min(LT, 600), { seed: 29, dt: 0.25 });
-  check(`E.${key}@0.25`, `current plays identically to pairs at 250ms ticks`, "current", d < 0, { firstDivergentTick: d });
+// The same for the flat pellet grid against the Map of buckets.
+for (const ref of ["pairs", "mapgrid"]) {
+  for (const key of ["full", "splits", "giants", "eject"]) {
+    if (!need(ref, "current")) break;
+    if (ref === "pairs" && key === "eject") continue;
+    const d = lockstep(ref, "current", key, Math.min(LT, 600), { seed: 29, dt: 0.25 });
+    check(`E.${key}@0.25`, `current plays identically to ${ref} at 250ms ticks`, "current", d < 0, { firstDivergentTick: d });
+  }
 }
 
 const failed = results.filter(r => !r.ok);

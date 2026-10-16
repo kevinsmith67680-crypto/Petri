@@ -29,6 +29,8 @@
 //             prototype for what shared/sim.js now ships.
 //   pairs     the reverse, for revisions that ship the grid: cellCombat put
 //             back to the all-pairs loop it replaced, verbatim from a44cad8.
+//   mapgrid   the reverse of csr, for revisions that ship the flat pellet
+//             grid: the Map of buckets put back, as it was at 7594a8b.
 // ---------------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -433,7 +435,14 @@ function counted(src) {
   src = once(src, "    for (const c of o.cells) {\n      // Cheap rejects first",
     "    for (const c of o.cells) { __S.c.botScan++;\n      // Cheap rejects first", "bot scan");
   if (src.includes("function gridMove(")) {
-    src = once(src, "  if (keyOf(p) === was) return;\n", "  __S.c.gridMoves++;\n  if (keyOf(p) === was) return;\n  __S.c.gridRefiles++;\n", "grid moves");
+    src = oneOf(src, "grid moves", [
+      ["  if (keyOf(p) === was) return;\n", "  __S.c.gridMoves++;\n  if (keyOf(p) === was) return;\n  __S.c.gridRefiles++;\n"],
+      ["  if (bucketOf(g, p) === was) return;\n", "  __S.c.gridMoves++;\n  if (bucketOf(g, p) === was) return;\n  __S.c.gridRefiles++;\n"]
+    ]);
+  }
+  if (src.includes("      const k = row + gy;\n      for (let i = start[k], end = start[k + 1]; i < end; i++) {")) {
+    src = once(src, "      const k = row + gy;\n      for (let i = start[k], end = start[k + 1]; i < end; i++) {",
+      "      const k = row + gy; __S.c.buckets++; __S.c.pelletCandAll += start[k + 1] - start[k] + (extra[k] === null ? 0 : extra[k].length);\n      for (let i = start[k], end = start[k + 1]; i < end; i++) {", "flat buckets");
   }
   if (src.includes("      const bucket = world.grid.get(key(gx, gy));")) {
     src = once(src, "      const bucket = world.grid.get(key(gx, gy));",
@@ -447,10 +456,19 @@ function counted(src) {
 function countedProtocol(src) {
   src = once(src, "  radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,",
     "  __S, radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,", "import __S");
-  src = once(src, "    if (p.dead || !near(p.x, p.y)) return;",
-    "    __S.c.snapCand++;\n    if (p.dead || !near(p.x, p.y)) return;\n    __S.c.snapNarrow++;", "snap pellets");
-  src = once(src, "      if (!near(c.x, c.y, radiusOf(c.mass))) continue;",
-    "      __S.c.snapCellTests++;\n      if (!near(c.x, c.y, radiusOf(c.mass))) continue;", "snap cells");
+  // One snapshot at a time (up to dd03e01), or from a shared frame after.
+  src = oneOf(src, "snap pellets", [
+    ["    if (p.dead || !near(p.x, p.y)) return;",
+     "    __S.c.snapCand++;\n    if (p.dead || !near(p.x, p.y)) return;\n    __S.c.snapNarrow++;"],
+    ["  if (p.dead) return;\n  const dx = p.x - qx, dy = p.y - qy;\n  if (!(dx * dx + dy * dy < qr2)) return;\n",
+     "  __S.c.snapCand++;\n  if (p.dead) return;\n  const dx = p.x - qx, dy = p.y - qy;\n  if (!(dx * dx + dy * dy < qr2)) return;\n  __S.c.snapNarrow++;\n"]
+  ]);
+  src = oneOf(src, "snap cells", [
+    ["      if (!near(c.x, c.y, radiusOf(c.mass))) continue;",
+     "      __S.c.snapCellTests++;\n      if (!near(c.x, c.y, radiusOf(c.mass))) continue;"],
+    ["    const dx = xs[i] - mx, dy = ys[i] - my, r = R + reach[i];\n",
+     "    __S.c.snapCellTests++;\n    const dx = xs[i] - mx, dy = ys[i] - my, r = R + reach[i];\n"]
+  ]);
   return src;
 }
 
@@ -524,6 +542,7 @@ export function forEachPelletNear(world, x, y, r, fn) {
 function csr(src, on) {
   // sowOrbs (adb6295 onward) inserts into the grid one orb at a time, which a
   // counting-sort layout cannot do between rebuilds.
+  if (src.includes("// Laid out flat:")) throw new Error("variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead");
   if (src.includes("function gridInsert(")) throw new Error("variant csr: this revision indexes orbs incrementally (gridInsert); csr predates it");
   return between(src, "export function buildPelletGrid(world) {", "const clamp = (v, a, b) =>",
     counters(CSR_GRID, on), "csr grid", ["forEachPelletNear", "world.grid"]);
@@ -677,6 +696,65 @@ function gcombat(src, on) {
     counters(COMBAT_GRID, on), "grid combat", ["EAT_BONUS", "B.cells.splice"]);
 }
 
+// ── variant: Map grid ───────────────────────────────────────────────────────
+
+// The pellet grid as a Map of bucket arrays, as it was before the flat layout
+// shipped (7594a8b), with the call signatures the rest of sim.js now uses.
+// The same text as test/pelletgrid.test.js's reference.
+const MAP_GRID = `const GRID = 220;
+const key = (gx, gy) => gx * 100003 + gy;
+
+export function buildPelletGrid(world) {
+  const g = world.grid || (world.grid = new Map());
+  for (const bucket of g.values()) bucket.length = 0;
+  for (const p of world.pellets) mapInsert(g, p);
+}
+
+const keyOf = p => key((p.x / GRID) | 0, (p.y / GRID) | 0);
+const bucketOf = (g, p) => keyOf(p);
+
+function mapInsert(g, p) {
+  const k = keyOf(p);
+  const bucket = g.get(k);
+  if (bucket) bucket.push(p);
+  else g.set(k, [p]);
+}
+const gridInsert = (world, p) => mapInsert(world.grid, p);
+
+function gridMove(world, p, was) {
+  const g = world.grid;
+  if (keyOf(p) === was) return;
+  const from = g.get(was);
+  const i = from ? from.indexOf(p) : -1;
+  if (i >= 0) from.splice(i, 1);
+  mapInsert(g, p);
+}
+
+export function forEachPelletNear(world, x, y, r, fn) {
+  forEachPelletIn(world, x - r, y - r, x + r, y + r, fn);
+}
+
+function forEachPelletIn(world, minX, minY, maxX, maxY, fn) {
+  if (!world.grid) buildPelletGrid(world);
+  const x0 = Math.max(0, (minX / GRID) | 0);
+  const x1 = (maxX / GRID) | 0;
+  const y0 = Math.max(0, (minY / GRID) | 0);
+  const y1 = (maxY / GRID) | 0;
+  for (let gx = x0; gx <= x1; gx++) {
+    for (let gy = y0; gy <= y1; gy++) {
+      const bucket = world.grid.get(key(gx, gy));
+      if (!bucket) continue;
+      for (let i = 0; i < bucket.length; i++) fn(bucket[i]);
+    }
+  }
+}
+`;
+
+function mapgrid(src) {
+  if (!src.includes("// Laid out flat:")) throw new Error("variant mapgrid: this revision's pellet grid is already a Map");
+  return between(src, "// Laid out flat:", "const clamp = (v, a, b) =>", MAP_GRID + "\n", "map grid", ["function gridMove(world, p, was)"]);
+}
+
 // ── variant: all pairs ──────────────────────────────────────────────────────
 
 // cellCombat as it was before the grid broad phase shipped: every ordered
@@ -748,7 +826,7 @@ function pairs(src) {
 
 // ── build ───────────────────────────────────────────────────────────────────
 
-export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = false, pairs: pr = false, counted: k = false, tag = "", gridSize = null } = {}, outRoot) {
+export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = false, pairs: pr = false, mapgrid: mg = false, counted: k = false, tag = "", gridSize = null } = {}, outRoot) {
   let sim = source("sim.js");
   let protocol = source("protocol.js");
   const codec = source("codec.js");
@@ -759,12 +837,13 @@ export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = fa
   if (c) sim = csr(sim, k);
   if (g) sim = gcombat(sim, k);
   if (pr) sim = pairs(sim);
+  if (mg) sim = mapgrid(sim);
   if (f) sim = fresh(sim);
   if (k) { sim = counted(sim); protocol = countedProtocol(protocol); }
 
   // `tag` gives a second, independent module instance of the same build, for
   // lockstep runs that need two worlds with separate __S flags.
-  const name = [k ? "counted" : "plain", f && "fresh", c && "csr", g && "gcombat", pr && "pairs", gridSize && `g${gridSize}`, tag].filter(Boolean).join("-");
+  const name = [k ? "counted" : "plain", f && "fresh", c && "csr", g && "gcombat", pr && "pairs", mg && "mapgrid", gridSize && `g${gridSize}`, tag].filter(Boolean).join("-");
   const root = path.join(outRoot || process.env.SPATIAL_BUILD_DIR || path.join(os.tmpdir(), "petri-spatial-builds"), REV);
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
@@ -789,8 +868,14 @@ export const VARIANTS = {
   csr: { csr: true },
   gcombat: { gcombat: true },
   pairs: { pairs: true },
+  mapgrid: { mapgrid: true },
   all: { fresh: true, csr: true, gcombat: true },
   // Bucket-size sweep on the recommended layout.
   "all-g110": { fresh: true, csr: true, gcombat: true, gridSize: 110 },
-  "all-g440": { fresh: true, csr: true, gcombat: true, gridSize: 440 }
+  "all-g440": { fresh: true, csr: true, gcombat: true, gridSize: 440 },
+  // Bucket-size sweep on whatever the revision ships.
+  g110: { gridSize: 110 },
+  g165: { gridSize: 165 },
+  g330: { gridSize: 330 },
+  g440: { gridSize: 440 }
 };

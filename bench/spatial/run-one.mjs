@@ -5,7 +5,8 @@
 //        [--counted] [--warm 300] [--ticks 900] [--seed 1] [--dt 0.05]
 //
 // A tick here is what the server does per room per tick: stepWorld, then one
-// encodeSnapshot per player (server/index.js tickRoom). Prints one JSON line.
+// encodeSnapshot per player, sharing one snapshotFrame where the revision has
+// it (server/index.js tickRoom). Sending is not included. Prints one JSON line.
 // ---------------------------------------------------------------------------
 
 import { PerformanceObserver, performance, constants } from "node:perf_hooks";
@@ -29,7 +30,10 @@ function tick() {
   sim.stepWorld(world, DT);
   const t1 = performance.now();
   let bytes = 0;
-  for (const { p, cs } of clients) bytes += protocol.encodeSnapshot(world, p, cs).length;
+  // One frame per tick shared by every snapshot, as tickRoom does. Revisions
+  // from before frames have no snapshotFrame and encode each from scratch.
+  const frame = protocol.snapshotFrame ? protocol.snapshotFrame(world) : null;
+  for (const { p, cs } of clients) bytes += protocol.encodeSnapshot(world, p, cs, null, null, null, frame).length;
   return [t1 - t0, performance.now() - t1, bytes];
 }
 

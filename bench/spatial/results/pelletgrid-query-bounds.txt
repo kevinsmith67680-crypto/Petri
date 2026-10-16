@@ -1,0 +1,25 @@
+skip csr: variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+┌─────────┬───────────┬───────┬───────┬───────────────────┬───────────────┬────────────────┬────────────┐
+│ (index) │ grid      │ mass  │ R     │ where             │ bucketLookups │ pelletsVisited │ usPerQuery │
+├─────────┼───────────┼───────┼───────┼───────────────────┼───────────────┼────────────────┼────────────┤
+│ 0       │ 'current' │ 100   │ 760   │ 'centre'          │ 64            │ 179            │ 4.1        │
+│ 1       │ 'current' │ 100   │ 760   │ 'near far corner' │ 64            │ 114            │ 3.5        │
+│ 2       │ 'current' │ 5000  │ 2546  │ 'centre'          │ 576           │ 1574           │ 23.8       │
+│ 3       │ 'current' │ 5000  │ 2546  │ 'near far corner' │ 256           │ 568            │ 9.8        │
+│ 4       │ 'current' │ 20000 │ 5091  │ 'centre'          │ 1681          │ 4100           │ 79         │
+│ 5       │ 'current' │ 20000 │ 5091  │ 'near far corner' │ 729           │ 1784           │ 29.6       │
+│ 6       │ 'current' │ 40000 │ 7200  │ 'centre'          │ 1681          │ 4100           │ 65.7       │
+│ 7       │ 'current' │ 40000 │ 7200  │ 'near far corner' │ 1369          │ 3393           │ 56.3       │
+│ 8       │ 'current' │ 95000 │ 11096 │ 'centre'          │ 1681          │ 4100           │ 94.5       │
+│ 9       │ 'current' │ 95000 │ 11096 │ 'near far corner' │ 1681          │ 4100           │ 65.5       │
+│ 10      │ 'mapgrid' │ 100   │ 760   │ 'centre'          │ 64            │ 179            │ 4.2        │
+│ 11      │ 'mapgrid' │ 100   │ 760   │ 'near far corner' │ 64            │ 114            │ 4.8        │
+│ 12      │ 'mapgrid' │ 5000  │ 2546  │ 'centre'          │ 576           │ 1574           │ 38.1       │
+│ 13      │ 'mapgrid' │ 5000  │ 2546  │ 'near far corner' │ 576           │ 568            │ 28.8       │
+│ 14      │ 'mapgrid' │ 20000 │ 5091  │ 'centre'          │ 1936          │ 4100           │ 119.2      │
+│ 15      │ 'mapgrid' │ 20000 │ 5091  │ 'near far corner' │ 2209          │ 1784           │ 78.3       │
+│ 16      │ 'mapgrid' │ 40000 │ 7200  │ 'centre'          │ 2809          │ 4100           │ 181.4      │
+│ 17      │ 'mapgrid' │ 40000 │ 7200  │ 'near far corner' │ 4489          │ 3393           │ 225.2      │
+│ 18      │ 'mapgrid' │ 95000 │ 11096 │ 'centre'          │ 5041          │ 4100           │ 237.6      │
+│ 19      │ 'mapgrid' │ 95000 │ 11096 │ 'near far corner' │ 7744          │ 4100           │ 314.8      │
+└─────────┴───────────┴───────┴───────┴───────────────────┴───────────────┴────────────────┴────────────┘
