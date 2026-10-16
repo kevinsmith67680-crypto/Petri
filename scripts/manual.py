@@ -55,6 +55,7 @@ def read_constants():
     const { createWorld, addPlayer, spawnRing, orbGap } = S;
     import { MODES } from './shared/modes.js';
     import * as W from './shared/wager.js';
+    import { MOUSE_FULL_SPEED_DISTANCE } from './client/render.js';
     const names = ['WORLD','PELLETS','VIRUSES','START_MASS','PELLET_MASS','EJECT_MASS',
       'EJECT_KEEP','VIRUS_MASS','VIRUS_EAT_RATIO','VIRUS_PIECES','MAX_CELLS','EAT_RATIO',
       'EAT_BONUS','MERGE_DELAY','DECAY_ABOVE','DECAY_RATE','BASE_SPEED','EJECT_SPEED',
@@ -64,6 +65,7 @@ def read_constants():
     const out = {};
     for (const n of names) out[n] = S[n];
     out.MODES = MODES;
+    out.MOUSE_FULL_SPEED_DISTANCE = MOUSE_FULL_SPEED_DISTANCE;
     out.MICRO_PER_MASS = W.MICRO_PER_MASS;
     out.UNIT = W.UNIT;
     const speed = m => S.BASE_SPEED * Math.pow(m, -0.24) * 60;
@@ -978,8 +980,11 @@ def story():
 
     s.append(datatable(
         ["Action", "Keyboard", "Touch", "What it does"],
-        [["Move", "Mouse", "Drag", "Your cells steer toward the pointer. There is no "
-                                   "stop button - you are always moving."],
+        [["Move", "Mouse", "Drag", "Your cells steer toward the pointer, faster the "
+                                   "further away it is: full speed once it is "
+                                   f"{round(K['MOUSE_FULL_SPEED_DISTANCE'] * 100)}% of the "
+                                   "way from the middle of the screen to its nearest "
+                                   "edge. Hold it on your cell to stop."],
          ["Split", "Space", "Split", "Every cell splits in half and the new halves are "
                                      f"launched forward. Up to {K['MAX_CELLS']} cells."],
          ["Eject", "W", "Feed", f"Throws {K['EJECT_KEEP']} mass out of the front of each "

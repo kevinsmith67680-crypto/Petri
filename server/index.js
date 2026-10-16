@@ -219,10 +219,12 @@ const LIMITS = {
   action: 12     // per second, split / eject / respawn
 };
 
-// Binary gameplay frames are 5 bytes; the only text frame is the join, which
-// carries a 16-character name. 128 is generous and rejects floods earlier.
-// Largest client frame we will accept. Gameplay messages are tiny — aim is 5
-// bytes, an action is 2 — but the join frame carries a 64-character session
+// Binary gameplay frames are 10 bytes at most; the only text frame is the
+// join, which carries a 16-character name. 128 is generous and rejects floods
+// earlier.
+// Largest client frame we will accept. Gameplay messages are tiny — aim is 9
+// bytes, an action 10, two fewer each from a client older than the full-speed
+// reach — but the join frame carries a 64-character session
 // token plus a display name of up to 16, and at 128 it did not fit: a join
 // measured 138 bytes and the server closed the socket the moment a player
 // tried to enter. Anyone with a long display name could never connect at all.
@@ -1936,6 +1938,9 @@ wss.on("connection", (ws, req) => {
 
         ws.send(JSON.stringify({
           type: MSG.WELCOME, id, nid: player.nid, tickHz: HZ,
+          // This server reads the full-speed reach on the end of an aim or an
+          // action, so the client may send it. See PROTOCOL_VERSION.
+          aimReach: true,
           // Readiness belongs to the connection, so a fresh one starts unready
           // unless it picked a live run back up. Said, so the button agrees.
           ready: meta.ready,
@@ -1993,8 +1998,10 @@ wss.on("connection", (ws, req) => {
 
     // Aims, and the aim every action carries. Echoed in the snapshot, with how
     // long before the tick it arrived, so the client knows which of its inputs
-    // — and so which of its actions — this tick has already used.
-    setAim(meta.room.world, id, msg.x, msg.y);
+    // — and so which of its actions — this tick has already used. The reach
+    // shapes the speed curve; setAim bounds it, and the speed itself is still
+    // worked out here from mass alone.
+    setAim(meta.room.world, id, msg.x, msg.y, msg.reach);
     const self = meta.room.world.players.get(id);
     if (self) { self.inputSeq = msg.seq; self.inputAt = performance.now(); }
 

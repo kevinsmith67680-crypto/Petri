@@ -751,10 +751,14 @@ function frame(now) {
     // pointer move only reached the cell on the following frame. It is
     // measured from where the cell was drawn last frame, which is where the
     // player saw it when they moved.
+    //
+    // That drawn centroid is also the control centre: the cursor's distance
+    // from it sets the speed, against the full-speed reach at the camera's
+    // current zoom. See MOUSE_FULL_SPEED_DISTANCE in client/render.js.
     if (!running) aimOrigin.conn = null;
     if (aimOrigin.conn === conn) {
       const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
-      conn.sendAim(target.x - aimOrigin.x, target.y - aimOrigin.y);
+      conn.sendAim(target.x - aimOrigin.x, target.y - aimOrigin.y, renderer.fullSpeedReach(camera));
     }
     if (running || conn.mode === "online") conn.update(dt);
 
@@ -764,7 +768,7 @@ function frame(now) {
     // cell actually is on screen rather than where the server last said.
     if (fresh && running) {
       const target = renderer.screenToWorld(camera, pointer.x, pointer.y);
-      conn.sendAim(target.x - fresh.me.x, target.y - fresh.me.y);
+      conn.sendAim(target.x - fresh.me.x, target.y - fresh.me.y, renderer.fullSpeedReach(camera));
       aimOrigin.conn = conn;
       aimOrigin.x = fresh.me.x;
       aimOrigin.y = fresh.me.y;

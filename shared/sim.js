@@ -98,6 +98,12 @@ export const DECAY_RATE = 0.005;
 // Speed still falls with mass at the same rate; only the base moves.
 export const BASE_SPEED = 17;
 
+// A cell's top steering speed, world units per second. The formula the game
+// has always used, given a name so the steering throttle and the tests can say
+// "a share of the limit" without restating it. Nothing may steer faster: the
+// throttle in advanceCell only ever picks a fraction of this, from 0 to 1.
+export const topSpeedOf = mass => BASE_SPEED * Math.pow(mass, -0.24) * 60;
+
 // Split and burst physics. Velocity is in world units per second and decays
 // exponentially. The old per-frame factor of 0.86 shed 90% of the travel in
 // 255ms, which read as a pop; agar.io pieces visibly coast for half a second
@@ -712,7 +718,9 @@ export function addPlayer(world, { id, name, bot = false, ci = null }) {
     bot,
     ci: ci === null ? Math.floor(world.rng() * STAIN_COUNT) : ci,
     cells: [],
-    input: { x: 0, y: 0 },   // aim offset from own centroid, in world units
+    // Aim offset from own centroid, and the full-speed reach, in world units.
+    // Bots never set a reach and steer by the old rule.
+    input: { x: 0, y: 0, reach: 0 },
     actions: [],             // queued "split" / "eject" this tick
     alive: false,
     respawnAt: 0,
@@ -811,16 +819,36 @@ export function fillBots(world, target = DEFAULT_BOTS) {
   }
 }
 
+// The full-speed reach a client may ask for: a positive, finite distance no
+// wider than the arena, or 0 for none. 0 is also how the aim of a client that
+// predates the reach arrives, and it steers by the old rule alone. Exported so
+// the client's prediction bounds the reach exactly as the server does.
+//
+// The client works the reach out from its own screen — the full-speed
+// distance in pixels over its camera's zoom, see fullSpeedReach in
+// client/render.js — so the speed curve stays fixed on the screen however far
+// the camera pulls back, and the server needs to know nothing about anyone's
+// window. It is not a speed: the most any reach can buy is the top speed a
+// cursor at the edge of the screen already gets.
+export const clampReach = (reach, size) =>
+  Number.isFinite(reach) && reach > 0 ? Math.min(reach, size) : 0;
+
 // Aim is expressed as an offset from the player's own centroid, so it means
-// the same thing regardless of the client's screen size or zoom level.
-export function setAim(world, id, dx, dy) {
+// the same thing regardless of the client's screen size or zoom level. The
+// reach, in world units, is how far from a cell the aim point has to be for
+// it to steer at full speed; see steerThrottle.
+export function setAim(world, id, dx, dy, reach = 0) {
   const p = world.players.get(id);
   if (!p) return;
+  // Off the wire these are always integers. Nothing else calling in may put
+  // a NaN into the physics, where it would spread to every position it meets.
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) dx = dy = 0;
   const d = Math.hypot(dx, dy);
   const cap = world.size;                  // reject absurd values from clients
   const k = d > cap ? cap / d : 1;
   p.input.x = dx * k;
   p.input.y = dy * k;
+  p.input.reach = clampReach(reach, cap);
 }
 
 export function queueAction(world, id, action) {
@@ -840,24 +868,46 @@ export function centroid(ent) {
 
 // ── mechanics ───────────────────────────────────────────────────────────────
 
+// The share of its top speed a cell steers at, 0 to 1, with the aim point d
+// world units from its centre. Two limits, and the cell takes the lower:
+//
+//   * the old rule: ease off as the aim point enters the cell, so it settles
+//     on it instead of jittering round it — full speed from 0.9 radii out;
+//   * the reach: d / reach, so speed is proportional to distance and full at
+//     the reach. On screen that is the cursor's distance from the cell over
+//     the full-speed distance, whatever the zoom.
+//
+// Wherever the reach is wider than 0.9 radii — every cell short of several
+// thousand mass on an ordinary screen — the reach alone shapes the curve, and
+// it is a straight line. Past that the old rule sets the full-speed distance,
+// as it always has. A reach of 0 is none: the old rule exactly, which is how
+// bots and clients that predate the reach steer.
+//
+// d is a length, so heading never enters into it: a diagonal aim is worth no
+// more than a straight one.
+export function steerThrottle(d, r, reach = 0) {
+  if (!(d > 0)) return 0;                    // NaN included
+  const settle = clamp(d / (r * 0.9), 0, 1);
+  return reach > 0 ? Math.min(settle, d / reach) : settle;
+}
+
 // Movement for a single cell, exported so the CLIENT can run exactly this
 // code to predict its own motion instead of waiting for a round trip. If the
 // two ever diverge, prediction drifts and the correction becomes visible — so
 // there must only be one copy of this maths, and this is it.
-export function advanceCell(c, tx, ty, dt, size = WORLD) {
+export function advanceCell(c, tx, ty, dt, size = WORLD, reach = 0) {
   const dx = tx - c.x, dy = ty - c.y;
   const d = Math.hypot(dx, dy);
   const r = radiusOf(c.mass);
 
-  // Desired heading and speed this frame.
+  // Desired heading and speed this frame. The heading is a unit vector and
+  // the speed a share of the cell's top speed, so neither the aim's length
+  // nor its direction can carry a cell past the limit its mass sets.
   let wantX = 0, wantY = 0, wantSpeed = 0;
   if (d > 1) {
     wantX = dx / d;
     wantY = dy / d;
-    // Ease off as the aim point enters the cell so it settles instead of
-    // jittering around the target.
-    const throttle = clamp(d / (r * 0.9), 0, 1);
-    wantSpeed = BASE_SPEED * Math.pow(c.mass, -0.24) * 60 * throttle;
+    wantSpeed = topSpeedOf(c.mass) * steerThrottle(d, r, reach);
   }
 
   // Ease the actual heading and speed toward them. A cell with no steering
@@ -889,8 +939,12 @@ export function advanceCell(c, tx, ty, dt, size = WORLD) {
 }
 
 function moveCells(world, ent, tx, ty, dt) {
+  // Each cell measures its own distance to the aim point, so split pieces
+  // still close on the cursor — a piece far from it runs at full speed while
+  // one sitting under it stops — and steering them back together works as it
+  // always has.
   for (const c of ent.cells) {
-    advanceCell(c, tx, ty, dt, world.size);
+    advanceCell(c, tx, ty, dt, world.size, ent.input.reach);
     // Decay stays server-side: it is a rule, not motion, and predicting it
     // would have the client quietly disagreeing about mass.
     if (c.mass > DECAY_ABOVE) c.mass -= c.mass * DECAY_RATE * dt;

@@ -51,6 +51,13 @@ export const WORLD_LIMIT = MAX_WORLD;
 // actions carry a sequence number; the snapshot says which one its tick used
 // and how long before the tick it arrived, and carries the launch velocity and
 // steering state of the viewer's own cells. Time is an f64 (see the header).
+//
+// The full-speed reach on the end of aims and actions is NOT a version bump,
+// deliberately. It is two bytes the server reads when they are there, and the
+// client only sends them to a server whose welcome says `aimReach`. So a tab
+// open from before keeps playing against a new server, and a new tab matched
+// onto a server not yet redeployed keeps playing too — both steer by the old
+// rule — instead of a whole room being told to reload mid-round.
 export const PROTOCOL_VERSION = 12;
 
 export const MSG = {
@@ -138,8 +145,14 @@ const readBox = r => ({ x0: r.u16(), y0: r.u16(), x1: r.u16(), y1: r.u16() });
 // `seq` numbers each aim so the snapshot can say which one the server has
 // acted on. 16 bits wrap after half an hour at 30Hz; the client only ever
 // looks a second or so back, and 0 is reserved for "none yet".
-export function encodeAim(dx, dy, seq = 0) {
-  return new Writer(8).u8(MSG.AIM).i16(dx).i16(dy).u16(seq).bytes();
+//
+// `reach` is how far from a cell the aim point must be for it to steer at
+// full speed, u16 world units; see steerThrottle in shared/sim.js. Left off,
+// the frame is the one older servers expect; see PROTOCOL_VERSION.
+export function encodeAim(dx, dy, seq = 0, reach) {
+  const w = new Writer(10).u8(MSG.AIM).i16(dx).i16(dy).u16(seq);
+  if (reach !== undefined) w.u16(reach);
+  return w.bytes();
 }
 
 // An action carries the aim it was made with, numbered like any other aim.
@@ -147,12 +160,20 @@ export function encodeAim(dx, dy, seq = 0) {
 // happened to, and the action is acknowledged in the same breath as the aim:
 // once a snapshot has acted on the number, it has acted on the action. Sent
 // separately, a tick could fall between the two and the client would drop the
-// pieces it was showing before the server's arrived.
-export function encodeAction(action, dx = 0, dy = 0, seq = 0) {
+// pieces it was showing before the server's arrived. It carries the reach
+// too, for the same reason: the server takes the whole aim from it.
+export function encodeAction(action, dx = 0, dy = 0, seq = 0, reach) {
   const idx = ACTIONS.indexOf(action);
   if (idx < 0) return null;
-  return new Writer(8).u8(MSG.ACTION).u8(idx).i16(dx).i16(dy).u16(seq).bytes();
+  const w = new Writer(10).u8(MSG.ACTION).u8(idx).i16(dx).i16(dy).u16(seq);
+  if (reach !== undefined) w.u16(reach);
+  return w.bytes();
 }
+
+// The reach on the end of an aim or an action. Absent from a client that
+// predates it: 0, which steers by the old rule. One stray byte is still a
+// malformed frame, and r.end() says so.
+const readReach = r => (r.remaining >= 2 ? r.u16() : 0);
 
 // Throws on anything malformed. The server treats a throw as "close the
 // socket" rather than trying to recover, because a client that cannot speak
@@ -165,8 +186,9 @@ export function decodeClientMessage(buffer) {
     const x = r.i16();
     const y = r.i16();
     const seq = r.u16();
+    const reach = readReach(r);
     r.end();
-    return { type, x, y, seq };
+    return { type, x, y, seq, reach };
   }
 
   if (type === MSG.ACTION) {
@@ -174,10 +196,11 @@ export function decodeClientMessage(buffer) {
     const x = r.i16();
     const y = r.i16();
     const seq = r.u16();
+    const reach = readReach(r);
     r.end();
     const action = ACTIONS[idx];
     if (!action) throw new RangeError("unknown action");
-    return { type, action, x, y, seq };
+    return { type, action, x, y, seq, reach };
   }
 
   throw new RangeError(`unknown message type ${type}`);

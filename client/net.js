@@ -23,10 +23,11 @@ import {
   MSG, decodeSnapshot, encodeAim, encodeAction, PROTOCOL_VERSION, PHASE_HOLD
 } from "../shared/protocol.js";
 import {
-  TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed, separateCells,
+  TICK_HZ, advanceCell, advancePellet, radiusOf, splitLaunchSpeed, separateCells, clampReach,
   EJECT_MASS, EJECT_KEEP, MAX_CELLS, PELLET_MASS, ORB_RADIUS,
   EJECT_SPEED, EJECT_OWNER_COOLDOWN
 } from "../shared/sim.js";
+import { clampU16 } from "../shared/codec.js";
 
 // Other players are rendered slightly in the past so their motion is smooth
 // between ticks: one tick, plus however late snapshots actually arrive.
@@ -54,7 +55,7 @@ const PLAYOUT_SNAP = 0.25;      // seconds off target before it jumps instead
 // long instead, which on a straight path is exactly right.
 const EXTRAPOLATE_MAX = 0.1;
 
-// Aim is 7 bytes. Sending it as fast as the tick, unsynchronised, means the
+// Aim is 9 bytes. Sending it as fast as the tick, unsynchronised, means the
 // server acts on a vector at most a tick old when its tick comes round.
 const AIM_HZ = 30;
 
@@ -162,7 +163,15 @@ export function createSocketConnection({
   const colours = new Map();      // nid -> palette slot, sent alongside the name
   let board = [];
   let lastAimSent = 0;
-  const pendingAim = { x: 0, y: 0 };
+  // `reach` is the full-speed distance in world units, already the u16 the
+  // wire carries, so prediction steers by the very number the server does.
+  const pendingAim = { x: 0, y: 0, reach: 0 };
+  // Whether this server reads the reach, from its welcome. Until one says so
+  // aims and actions go out in their older, shorter form and prediction
+  // steers by the old rule — which is what a server from before the reach
+  // does with them.
+  let aimReach = false;
+  const reachOf = aim => (aimReach ? clampReach(aim.reach, worldSize) : 0);
 
   // The render clock for other players: renderTime = now + playOffset, in
   // seconds on the server's clock. playTarget is where it is being eased to.
@@ -177,7 +186,7 @@ export function createSocketConnection({
   // Replaying these from its position is what puts the cell where the server
   // is about to have it, instead of where it was.
   let aimSeq = 0;
-  const inputs = [];              // { seq, at, x, y }
+  const inputs = [];              // { seq, at, x, y, reach }
   // Splits and ejects the server may not have acted on yet, replayed the same
   // way, so a split cell stays split instead of growing back for a round trip
   // while the server catches up.
@@ -485,6 +494,8 @@ export function createSocketConnection({
       if (msg.type === MSG.WELCOME) {
         myNid = msg.nid;
         if (msg.tickHz) serverHz = msg.tickHz;
+        // Asked of every welcome: a reconnect may land on another server.
+        aimReach = msg.aimReach === true;
         // No pick of our own means the server chose one. Keep it, so a
         // reconnect asks for the same colour instead of rolling a new one.
         if (ci === null && Number.isInteger(msg.ci)) ci = msg.ci;
@@ -635,14 +646,15 @@ export function createSocketConnection({
   }
 
   // One step of our own cells, exactly as a server tick moves them: toward
-  // the centroid plus the aim, then the push that keeps unmergeable pieces
-  // apart. `steps` is how many server ticks dt spans, for the push.
+  // the centroid plus the aim, as fast as that aim's reach allows, then the
+  // push that keeps unmergeable pieces apart. `steps` is how many server ticks dt spans, for the push.
   function moveOwn(cells, aim, dt, steps) {
     let sx = 0, sy = 0, sm = 0;
     for (const p of cells) { sx += p.x * p.mass; sy += p.y * p.mass; sm += p.mass; }
     if (!sm) return;
     const tx = sx / sm + aim.x, ty = sy / sm + aim.y;
-    for (const p of cells) advanceCell(p, tx, ty, dt, worldSize);
+    const fullReach = reachOf(aim);
+    for (const p of cells) advanceCell(p, tx, ty, dt, worldSize, fullReach);
     separateCells(cells, isLocked, steps);
   }
 
@@ -952,7 +964,10 @@ export function createSocketConnection({
   function nextInput(now) {
     lastAimSent = now;
     aimSeq = (aimSeq % 0xffff) + 1;   // 1..65535; 0 is "none"
-    const input = { seq: aimSeq, at: now, x: Math.round(pendingAim.x), y: Math.round(pendingAim.y) };
+    const input = {
+      seq: aimSeq, at: now, x: Math.round(pendingAim.x), y: Math.round(pendingAim.y),
+      reach: pendingAim.reach
+    };
     inputs.push(input);
     if (inputs.length > MAX_INPUTS) inputs.shift();
     return input;
@@ -965,7 +980,13 @@ export function createSocketConnection({
 
     on(kind, fn) { listeners[kind]?.push(fn); },
 
-    sendAim(dx, dy) { pendingAim.x = dx; pendingAim.y = dy; },
+    // reach: the full-speed distance in world units, see fullSpeedReach in
+    // client/render.js. Rounded once, here, to what the wire carries.
+    sendAim(dx, dy, reach = 0) {
+      pendingAim.x = dx;
+      pendingAim.y = dy;
+      pendingAim.reach = clampU16(Math.round(reach));
+    },
 
     sendAction(action) {
       if (socket?.readyState !== WebSocket.OPEN) return;
@@ -975,7 +996,9 @@ export function createSocketConnection({
       // send interval ago.
       const now = performance.now();
       const input = nextInput(now);
-      socket.send(encodeAction(action, input.x, input.y, input.seq));
+      socket.send(encodeAction(
+        action, input.x, input.y, input.seq, aimReach ? input.reach : undefined
+      ));
       if (action !== "split" && action !== "eject") return;
       // Still sent during the hold, since the server decides whether it is
       // over, but not shown: a held server drops it.
@@ -995,7 +1018,7 @@ export function createSocketConnection({
       const now = performance.now();
       if (now - lastAimSent >= 1000 / AIM_HZ && socket?.readyState === WebSocket.OPEN) {
         const input = nextInput(now);
-        socket.send(encodeAim(input.x, input.y, input.seq));
+        socket.send(encodeAim(input.x, input.y, input.seq, aimReach ? input.reach : undefined));
       }
       advancePlayout(dt);
       if (dt) {
@@ -1111,7 +1134,7 @@ export function createSocketConnection({
     },
 
     // Money actions travel as text frames: they are rare, and keeping them off
-    // the binary path means the hot loop stays 7 bytes per message.
+    // the binary path means the hot loop stays 9 bytes per message.
     sendSpectate(dir) {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: "spectate", dir }));
