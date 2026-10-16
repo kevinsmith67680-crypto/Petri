@@ -94,6 +94,8 @@ export const COUNTER_NAMES = [
   "virusTests", "feedTests", "ownTests", "botScan",
   // gridMove (the B1 fix): pellets checked after moving, and re-filed
   "gridMoves", "gridRefiles",
+  // swept collision: eats only the test along the way caught
+  "sweptPelletEats", "sweptCellEats",
   // shadow check
   "shadowEligible", "missSameTick", "missStaleMoving", "missOther",
   "ghostVisits", "ghostEats"
@@ -257,9 +259,109 @@ function eatPellets(world, ent) {
 
 `;
 
+// The same instrumentation for revisions whose eatPellets also tests along
+// each step (the swept collision tests). The predicate is production's, line
+// for line, factored out so the grid pass, the full-scan shadow and the
+// reference mode all apply exactly the same rule; the lockstep check "counted
+// plays like plain" in correctness.mjs fails if it ever drifts.
+const EAT_PELLETS_COUNTED_SWEPT = `function __eligible(world, ent, c, r, rs, moved, p) {
+  if (p.dead) return false;
+  if (p.owner === ent.id && world.time < p.ownerFree) return false;
+  const dx = p.x - c.x, dy = p.y - c.y;
+  const pr = pelletRadius(p) * 0.6;
+  const reach = r + pr;
+  const away = p.vx || p.vy ? dx * p.vx + dy * p.vy : 0;
+  if (away <= 0 && dx * dx + dy * dy < reach * reach) return 1;
+  const pm = p.movedAt === world.tick;
+  if (!moved && !pm) return 0;
+  const px0 = pm ? p.startX : p.x, py0 = pm ? p.startY : p.y;
+  const ux = p.vx || p.vy ? p.vx : p.x - px0, uy = p.vx || p.vy ? p.vy : p.y - py0;
+  // 2: caught along the way, missed by the end-of-tick test alone.
+  return sweptWithin(px0 - c.startX, py0 - c.startY, dx, dy, rs + pr, ux, uy) ? 2 : 0;
+}
+
+function __eatOne(world, ent, c, p) {
+  c.mass += p.mass;
+  p.dead = true;
+  world.pelletsDirty = true;
+  ent.orbs++;
+  world.events.push({ t: "orb", id: ent.id });
+  __S.c.pelletEats++;
+  if (__S.eatLog) __S.eatLog.push(p.id);
+}
+
+function eatPellets(world, ent) {
+  const pad = ORB_RADIUS * 3 + world.pelletStep;
+  for (const c of ent.cells) {
+    const r = radiusOf(c.mass);
+    const rs = radiusOf(Math.min(c.startMass, c.mass));
+    const moved = c.startX !== c.x || c.startY !== c.y;
+    const q = r + pad;
+    const box = [Math.min(c.x, c.startX) - q, Math.min(c.y, c.startY) - q,
+      Math.max(c.x, c.startX) + q, Math.max(c.y, c.startY) + q];
+
+    if (__S.ref) {
+      // Brute-force reference: WHAT is eaten comes from every pellet in the
+      // world; the grid only supplies the order, so a complete grid matches
+      // production bit for bit and anything it misses is eaten after.
+      const hit = new Set();
+      for (const p of world.pellets) {
+        if (p.id >= __S.tickStartId) continue;
+        __S.c.eatNarrow++;
+        if (__eligible(world, ent, c, r, rs, moved, p)) hit.add(p);
+      }
+      const order = [];
+      forEachPelletIn(world, ...box, p => { if (hit.delete(p)) order.push(p); });
+      for (const p of hit) order.push(p);
+      for (const p of order) __eatOne(world, ent, c, p);
+      continue;
+    }
+
+    let want = null;
+    if (__S.shadow) {
+      want = [];
+      for (const p of world.pellets) {
+        if (p.id >= __S.tickStartId && !(p.movedAt === world.tick)) {
+          // Created this tick and not yet indexed: no grid variant sees it.
+          if (__eligible(world, ent, c, r, rs, moved, p)) __S.c.missSameTick++;
+          continue;
+        }
+        if (__eligible(world, ent, c, r, rs, moved, p)) want.push(p);
+      }
+      __S.c.shadowEligible += want.length;
+    }
+
+    forEachPelletIn(world, ...box, p => {
+      __S.c.eatCand++;
+      const ghost = __S.shadow && !__S.live.has(p) && p.id < __S.tickStartId;
+      if (ghost) __S.c.ghostVisits++;
+      if (p.dead || (p.owner === ent.id && world.time < p.ownerFree)) return;
+      __S.c.eatNarrow++;
+      const e = __eligible(world, ent, c, r, rs, moved, p);
+      if (e) {
+        if (ghost) __S.c.ghostEats++;
+        if (e === 2) __S.c.sweptPelletEats++;
+        __eatOne(world, ent, c, p);
+      }
+    });
+
+    if (want) {
+      for (const p of want) {
+        if (p.dead) continue;
+        if (p.vx || p.vy || p.__moved) __S.c.missStaleMoving++;
+        else __S.c.missOther++;
+      }
+    }
+  }
+}
+
+`;
+
 function counted(src) {
+  const swept = src.includes("function sweptWithin(");
   src = between(src, "function eatPellets(world, ent) {", "// Ejected mass fed into a virus.",
-    EAT_PELLETS_COUNTED, "eatPellets", ["forEachPelletNear"]);
+    swept ? EAT_PELLETS_COUNTED_SWEPT : EAT_PELLETS_COUNTED, "eatPellets",
+    [swept ? "forEachPelletIn" : "forEachPelletNear"]);
   // Moving pellets that came to rest this tick are still "moved" for the
   // shadow classification.
   src = once(src,
@@ -277,14 +379,35 @@ function counted(src) {
     src = once(src, "          const b = B.cells[k];\n          if (a.mass < b.mass * EAT_RATIO) continue;",
       "          const b = B.cells[k]; __S.c.combatIter++;\n          if (a.mass < b.mass * EAT_RATIO) continue; __S.c.combatMassPass++;",
       "combat iter");
-    src = once(src, "          const rb = radiusOf(b.mass);\n          if (Math.hypot(dx, dy) < ra - rb * 0.55) {",
-      "          const rb = radiusOf(b.mass); __S.c.combatNarrow++;\n          if (Math.hypot(dx, dy) < ra - rb * 0.55) { __S.c.combatEats++;",
-      "combat narrow");
+    src = oneOf(src, "combat narrow", [
+      ["          const rb = radiusOf(b.mass);\n          if (Math.hypot(dx, dy) < ra - rb * 0.55) {",
+       "          const rb = radiusOf(b.mass); __S.c.combatNarrow++;\n          if (Math.hypot(dx, dy) < ra - rb * 0.55) { __S.c.combatEats++;"],
+      // Swept revisions decide first and act after.
+      ["          const rb = radiusOf(b.mass);\n          let hit = ",
+       "          const rb = radiusOf(b.mass); __S.c.combatNarrow++;\n          let hit = "]
+    ]);
+    if (src.includes("              closestApproach(sx, sy, dx, dy) < radiusOf(least) - radiusOf(most) * 0.55;\n")) {
+      src = once(src, "              closestApproach(sx, sy, dx, dy) < radiusOf(least) - radiusOf(most) * 0.55;\n",
+        "              closestApproach(sx, sy, dx, dy) < radiusOf(least) - radiusOf(most) * 0.55;\n            if (hit) __S.c.sweptCellEats++;\n",
+        "swept cell eats");
+    }
+    if (src.includes("          if (hit) {\n            a.mass += b.mass * EAT_BONUS;")) {
+      src = once(src, "          if (hit) {\n            a.mass += b.mass * EAT_BONUS;",
+        "          if (hit) { __S.c.combatEats++;\n            a.mass += b.mass * EAT_BONUS;", "combat eats");
+    }
   }
-  src = once(src, "      const v = world.viruses[i];\n      if (Math.hypot(",
-    "      const v = world.viruses[i]; __S.c.virusTests++;\n      if (Math.hypot(", "virus tests");
-  src = once(src, "    for (const v of world.viruses) {\n      const dx = p.x - v.x, dy = p.y - v.y;",
-    "    for (const v of world.viruses) { __S.c.feedTests++;\n      const dx = p.x - v.x, dy = p.y - v.y;", "feed tests");
+  src = oneOf(src, "virus tests", [
+    ["      const v = world.viruses[i];\n      if (Math.hypot(",
+     "      const v = world.viruses[i]; __S.c.virusTests++;\n      if (Math.hypot("],
+    ["      const v = world.viruses[i];\n      const dx = v.x - c.x",
+     "      const v = world.viruses[i]; __S.c.virusTests++;\n      const dx = v.x - c.x"]
+  ]);
+  src = oneOf(src, "feed tests", [
+    ["    for (const v of world.viruses) {\n      const dx = p.x - v.x, dy = p.y - v.y;",
+     "    for (const v of world.viruses) { __S.c.feedTests++;\n      const dx = p.x - v.x, dy = p.y - v.y;"],
+    ["    for (const v of world.viruses) {\n      const reach = radiusOf(v.mass) + pr;",
+     "    for (const v of world.viruses) { __S.c.feedTests++;\n      const reach = radiusOf(v.mass) + pr;"]
+  ]);
   // Every own-cell pair loop (one at d93f567; merge and separation later).
   if (!src.includes("      const a = cells[i], b = cells[j];")) throw new Error('patch "own tests": anchor not found');
   src = src.split("      const a = cells[i], b = cells[j];").join("      const a = cells[i], b = cells[j]; __S.c.ownTests++;");
@@ -525,6 +648,11 @@ function cellCombat(world) {
 `;
 
 function gcombat(src, on) {
+  // The prototype tests only where cells end the tick. Against a revision
+  // that also tests along the way it would quietly undo that, so it refuses:
+  // a swept version has to insert cells where they end and query each
+  // attacker's whole step, widened by the furthest any cell moved.
+  if (src.includes("function closestApproach(")) throw new Error("variant gcombat: this revision tests collisions along each step; the prototype predates it");
   return between(src, "function cellCombat(world) {", "const SCAN = 620",
     counters(COMBAT_GRID, on), "grid combat", ["EAT_BONUS", "B.cells.splice"]);
 }

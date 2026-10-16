@@ -316,8 +316,9 @@ check("watching a dead target falls back to self", fallback.spectating === false
   const w = createWorld(21, { size: 8800, pellets: 0, viruses: 3 });
   const me = addPlayer(w, { id: "me", name: "Me" });
   me.cells[0].mass = 400;
-  // All three in view, so none is culled out of the comparison.
-  w.viruses.forEach((v, i) => { v.x = me.cells[0].x + i * 30; v.y = me.cells[0].y; });
+  // All three in view, so none is culled out of the comparison, and clear of
+  // the cell: one under a cell this size pops, and this is about ids.
+  w.viruses.forEach((v, i) => { v.x = me.cells[0].x + 150 + i * 30; v.y = me.cells[0].y; });
   w.viruses[1].fed = 2;
 
   const got = decodeSnapshot(encodeSnapshot(w, me, createClientState(0))).viruses;

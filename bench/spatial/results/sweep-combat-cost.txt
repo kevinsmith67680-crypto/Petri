@@ -1,0 +1,6 @@
+endpoint only states 40 avg ms 2.457 max ms 5.536 narrow/state 6.3 hits/state 0.23
+swept states 40 avg ms 2.723 max ms 6.892 narrow/state 7.3 hits/state 0.23
+endpoint only states 40 avg ms 3.013 max ms 4.963 narrow/state 6.3 hits/state 0.23
+swept states 40 avg ms 3.183 max ms 6.398 narrow/state 7.3 hits/state 0.23
+endpoint only states 40 avg ms 3.026 max ms 6.453 narrow/state 6.3 hits/state 0.23
+swept states 40 avg ms 3.051 max ms 5.363 narrow/state 7.3 hits/state 0.23

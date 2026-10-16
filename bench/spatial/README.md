@@ -26,8 +26,9 @@ working as the code moves.
 | `bench.mjs` | Runs every scenario on every variant, takes medians across repetitions, and prints the tables used in the report. |
 | `client-view.mjs`, `client-render.mjs` | Practice-mode view building (Node) and canvas draw cost (headless Chromium via Playwright). These two use the working-tree client; the report's figures were taken at `d93f567`. |
 | `head-check.mjs` | B1/B2 reproductions and a Standard-config timing on unpatched modules: the working tree, or `--rev <rev>`. |
+| `sweep-combat-cost.mjs` | `cellCombat`'s pair loop with and without the swept test, on identical frozen states. Whole games diverge once the sweep catches something, so they cannot compare it fairly. |
 | `query-bounds.mjs` | Cost of a single grid query against its radius, showing what the unclamped upper bound costs for very large cells. |
-| `results/` | Output from the runs quoted in the report. `b1-fix-perf.*` and `correctness-b1-fix.*` cover the B1 fix. These numbers depend on the machine. |
+| `results/` | Output from the runs quoted in the report. `b1-fix-perf.*` and `correctness-b1-fix.*` cover the B1 fix; `r1-*`, `sweep-combat-cost.txt` and `correctness-r1-fix.*` cover R1. These numbers depend on the machine. |
 
 ## Run
 
@@ -41,6 +42,7 @@ node --expose-gc bench/spatial/client-view.mjs
 node bench/spatial/client-render.mjs               # needs playwright
 node bench/spatial/query-bounds.mjs
 node --expose-gc bench/spatial/head-check.mjs       # or --rev d93f567
+node bench/spatial/sweep-combat-cost.mjs
 ```
 
 `correctness.mjs` exits non-zero when any check fails, and prints the
@@ -50,12 +52,18 @@ revision it ran against.
   are C2 (the index after `resetArena`), C3/C4/C5 (moving-pellet staleness,
   B1) and C10/C11 (discrete collision steps). The `fresh` variant passes C2 to
   C5.
-- **On the working tree (`SPATIAL_REV=working`), with B1 and B2 both fixed:**
-  only C10 and C11 fail. The `csr` checks are skipped, because that variant
-  cannot be built against incremental `gridInsert`.
+- **On the working tree (`SPATIAL_REV=working`), with B1, B2 and R1 fixed:**
+  nothing fails. The `csr` and `gcombat` checks are skipped. Those prototypes
+  predate incremental `gridInsert` and the swept collision tests, and refuse
+  to build rather than measure a different game.
 
-Results for both are in `results/correctness.txt` and
-`results/correctness-b1-fix.txt`.
+Results are in `results/correctness.txt` (d93f567),
+`results/correctness-b1-fix.txt` and `results/correctness-r1-fix.txt`.
+
+The `counted` build replaces `eatPellets` with an instrumented copy. For
+revisions with the swept tests it mirrors production line for line, and the
+E check "the instrumented build plays identically to the plain one" fails if
+it ever drifts.
 
 Timings include the instrumentation hooks that every variant shares: two
 `performance.now()` calls around each timed region, about 20–40 µs per tick.
