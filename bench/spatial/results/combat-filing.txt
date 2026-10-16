@@ -1,0 +1,8 @@
+| Scenario | Cells | cellCombat ms | of which filing ms | filing share | bucket entries per cell |
+|---|---:|---:|---:|---:|---:|
+| Full lobby | 212 | 0.065 | 0.025 | 39% | 1.07 |
+| Standard mode (live config) | 228 | 0.057 | 0.022 | 39% | 1.07 |
+| Rapid split + merge | 514 | 0.111 | 0.040 | 36% | 1.08 |
+| Very large cells | 265 | 0.065 | 0.022 | 34% | 1.06 |
+| Stress test | 323 | 0.103 | 0.039 | 38% | 1.07 |
+| Ejected-mass storm | 184 | 0.043 | 0.018 | 42% | 1.09 |

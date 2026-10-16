@@ -87,6 +87,77 @@ crossing a cell) and feeding viruses.
     the wall clamp, which can leave one a few units past the wall.
   - The H-1 grid prototype tests end points only. A swept version must insert
     cells where they end and query each attacker's whole step plus the band.
+    (Since shipped, filing each cell by its path instead: see "Update: H-1
+    shipped".)
+
+## Update: H-1 shipped
+
+`cellCombat` now finds its candidate pairs with a uniform grid instead of
+testing every cell of every player against every cell of every other ("cell
+combat" in `shared/sim.js`).
+
+- **Built where it is used.**
+  - The grid is rebuilt at the start of combat, after the tick's moves,
+    splits, merges, pops and zone losses. It uses 256-unit buckets,
+    counting-sorted into typed arrays that are reused between ticks. It
+    cannot go stale, and nothing else has to keep it up to date.
+  - A cell eaten during combat is marked and never tested again.
+  - Filing costs 0.02–0.04 ms a tick, 34–42% of the new `cellCombat`
+    (`results/combat-filing.txt`). A grid kept up to date would save less than
+    that, since nearly every cell moves every tick.
+- **Complete for the swept test, at any size.** A bite needs the victim's
+  centre within the attacker's radius at the end of the tick or along the way.
+  So each cell is filed in every bucket its centre's path covers this tick
+  (1.06–1.09 entries per cell). Each attacker cell searches its own path
+  widened by its radius. A giant attacker searches more buckets; a giant
+  victim is still filed by its centre.
+- **No duplicates.** A victim filed in several buckets is kept once per
+  search, by a per-search stamp.
+- **Same order, same numbers.** These are the prototype's rules:
+  - attackers and victims in join order;
+  - attacker cells in order, victim cells from the back;
+  - the mass test live and the reach fixed per victim player;
+  - a fresh search after a bite.
+
+  Candidates are not filtered by mass, as warned under H-1.
+- **Verified:**
+  - **`test/combat.test.js`, now in `npm test`.** It checks the grid against
+    a plain all-pairs reference with no early rejects:
+    - hand-built cases: giants across 15 buckets, a 900-unit step, crossing
+      paths, walls, a victim filed in four buckets, join order, victim order,
+      growth reaching a later player, an eaten attacker;
+    - 3,000 random frozen states, bite for bite (348,115 bites);
+    - three whole games, tick for tick: a 100-player hard-bot lobby, 60
+      players splitting at tick lengths of 50–250 ms, and giants.
+
+    Nine deliberate breakages of the grid each fail it.
+  - **`bench/spatial/correctness.mjs`.** Run against `pairs` (the all-pairs
+    loop from `a44cad8`, verbatim), the grid plays identically for 1,200
+    ticks in six scenarios, and for 600 at 250 ms ticks in three. C7 passes
+    on both. Nothing fails (`results/correctness-combat-grid.txt`).
+- **Measured** (`results/combat-grid-bench.md`, `-dt025.md`; median of 3 runs,
+  ms per room tick excluding bot AI; the games are identical, so the
+  comparison is like for like):
+
+  | Scenario | `cellCombat` all pairs → grid | Tick avg | Tick p99 |
+  |---|---:|---:|---:|
+  | Low population (10) | 0.012 → 0.019 | 0.34 → 0.42 | 1.38 → 1.97 |
+  | Full lobby (100) | 0.966 → 0.078 | 6.00 → 4.98 | 11.17 → 10.79 |
+  | Standard mode (live config) | 1.054 → 0.083 | 6.95 → 5.41 | 14.41 → 10.82 |
+  | Stress test (150) | 2.315 → 0.115 | 13.42 → 10.44 | 24.85 → 21.72 |
+  | Very large cells | 1.102 → 0.085 | 8.84 → 8.00 | 16.28 → 15.20 |
+  | Rapid split + merge | 3.449 → 0.144 | 14.82 → 11.05 | 34.13 → 20.99 |
+  | Full lobby, 250 ms ticks | 1.670 → 0.117 | 9.52 → 7.03 | 17.52 → 14.65 |
+  | Rapid split + merge, 250 ms ticks | 1.203 → 0.095 | 8.72 → 7.73 | 17.63 → 17.20 |
+
+  - Worst single `cellCombat` call in split play: 16.2 → 1.6 ms.
+  - Candidate tests fall from 50,695–230,213 pair-loop iterations to 8–17.
+    Hit tests and eats are identical in every scenario.
+  - With 10 players the grid costs 7 µs more a tick, which does not matter.
+  - Tick differences beyond `cellCombat`'s own are run-to-run noise.
+- **Not changed:** any rule, the 20 Hz tick, and the pellet grid.
+  `underCell`'s linear scan in `sowOrbs` could use a cell grid too, but it
+  runs after combat, when this one no longer matches the cells.
 
 ## Status at the branch head (`a8319cc`)
 
@@ -440,7 +511,9 @@ round.
 
 ### High: meaningful, measured optimisation
 
-**H-1. Give `cellCombat` a uniform-grid broad phase.** Insert every live cell
+**H-1. Give `cellCombat` a uniform-grid broad phase.** *Done, with each cell
+filed by its path this tick for the swept test. See "Update: H-1 shipped" at
+the top.* Insert every live cell
 by its **centre** into 256-unit buckets at the start of `cellCombat`. Each
 attacker cell then queries the box of half-size `ra` around itself.
 
