@@ -1,0 +1,689 @@
+{
+  "meta": {
+    "rev": "working",
+    "node": "v22.22.0",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cores": 4,
+    "warm": 10,
+    "seconds": 40,
+    "seed": 1,
+    "date": "2026-10-16T14:08:41.875Z"
+  },
+  "results": [
+    {
+      "scenario": "p10",
+      "label": "10 players",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 3.4,
+      "clients": 10,
+      "live": 10,
+      "aliveAtEnd": 9,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.354,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 5
+        },
+        "simMs": {
+          "avg": 0.577,
+          "p50": 0.488,
+          "p95": 1.028,
+          "p99": 2.001,
+          "max": 7.801
+        },
+        "snapMs": {
+          "avg": 0.708,
+          "p50": 0.617,
+          "p95": 1.233,
+          "p99": 2.02,
+          "max": 8.89
+        },
+        "totalMs": {
+          "avg": 1.337,
+          "p50": 1.197,
+          "p95": 2.21,
+          "p99": 3.364,
+          "max": 16.753
+        },
+        "bytesPerTick": 1454,
+        "bytesPerSec": 29074,
+        "gc": {
+          "count": 23,
+          "ms": 18.9,
+          "maxMs": 3.33
+        },
+        "cpuPercent": 5.2,
+        "rssMB": {
+          "end": 172.9,
+          "peak": 172.9
+        },
+        "heapUsedMB": {
+          "end": 18,
+          "peak": 19.3
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 2.84,
+        "snapshotsPerSec": 20,
+        "gapMs": {
+          "p50": 50,
+          "p95": 51.5,
+          "p99": 53,
+          "max": 59.8
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "p50",
+      "label": "50 players",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 4,
+      "clients": 50,
+      "live": 50,
+      "aliveAtEnd": 37,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.313,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 9
+        },
+        "simMs": {
+          "avg": 0.829,
+          "p50": 0.747,
+          "p95": 1.399,
+          "p99": 2.045,
+          "max": 2.637
+        },
+        "snapMs": {
+          "avg": 2.356,
+          "p50": 2.072,
+          "p95": 4.051,
+          "p99": 5.627,
+          "max": 12.472
+        },
+        "totalMs": {
+          "avg": 3.246,
+          "p50": 2.912,
+          "p95": 5.405,
+          "p99": 7.031,
+          "max": 13.32
+        },
+        "bytesPerTick": 7246,
+        "bytesPerSec": 144914,
+        "gc": {
+          "count": 69,
+          "ms": 63.7,
+          "maxMs": 8.46
+        },
+        "cpuPercent": 10.6,
+        "rssMB": {
+          "end": 180.1,
+          "peak": 180.1
+        },
+        "heapUsedMB": {
+          "end": 19.6,
+          "peak": 21.4
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 2.83,
+        "snapshotsPerSec": 20.02,
+        "gapMs": {
+          "p50": 50,
+          "p95": 51.8,
+          "p99": 53,
+          "max": 59
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "p100",
+      "label": "100 players",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 5,
+      "clients": 100,
+      "live": 100,
+      "aliveAtEnd": 42,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.335,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 4
+        },
+        "simMs": {
+          "avg": 0.895,
+          "p50": 0.783,
+          "p95": 1.456,
+          "p99": 2.505,
+          "max": 23.56
+        },
+        "snapMs": {
+          "avg": 3.736,
+          "p50": 3.284,
+          "p95": 6.101,
+          "p99": 10.231,
+          "max": 12.925
+        },
+        "totalMs": {
+          "avg": 4.697,
+          "p50": 4.153,
+          "p95": 7.468,
+          "p99": 11.558,
+          "max": 27.347
+        },
+        "bytesPerTick": 14397,
+        "bytesPerSec": 287949,
+        "gc": {
+          "count": 68,
+          "ms": 58.9,
+          "maxMs": 4.98
+        },
+        "cpuPercent": 14.5,
+        "rssMB": {
+          "end": 197.4,
+          "peak": 197.4
+        },
+        "heapUsedMB": {
+          "end": 20.2,
+          "peak": 30.5
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 2.81,
+        "snapshotsPerSec": 20.01,
+        "gapMs": {
+          "p50": 50,
+          "p95": 52.5,
+          "p99": 54.8,
+          "max": 75.7
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "splits",
+      "label": "100 players, heavy splitting",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 4.9,
+      "clients": 100,
+      "live": 100,
+      "aliveAtEnd": 41,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.287,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 4
+        },
+        "simMs": {
+          "avg": 1.462,
+          "p50": 1.325,
+          "p95": 2.157,
+          "p99": 3.45,
+          "max": 6.677
+        },
+        "snapMs": {
+          "avg": 4.426,
+          "p50": 3.941,
+          "p95": 6.983,
+          "p99": 9.72,
+          "max": 13.912
+        },
+        "totalMs": {
+          "avg": 5.958,
+          "p50": 5.344,
+          "p95": 9.322,
+          "p99": 12.698,
+          "max": 16.916
+        },
+        "bytesPerTick": 17485,
+        "bytesPerSec": 349695,
+        "gc": {
+          "count": 65,
+          "ms": 64.2,
+          "maxMs": 3.83
+        },
+        "cpuPercent": 16.9,
+        "rssMB": {
+          "end": 198.8,
+          "peak": 198.8
+        },
+        "heapUsedMB": {
+          "end": 20.7,
+          "peak": 31.3
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 3.41,
+        "snapshotsPerSec": 20,
+        "gapMs": {
+          "p50": 50,
+          "p95": 52.8,
+          "p99": 55,
+          "max": 59.9
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "p150",
+      "label": "150 players (stress)",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 5.5,
+      "clients": 150,
+      "live": 150,
+      "aliveAtEnd": 47,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.304,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 3
+        },
+        "simMs": {
+          "avg": 0.989,
+          "p50": 0.905,
+          "p95": 1.603,
+          "p99": 2.479,
+          "max": 3.286
+        },
+        "snapMs": {
+          "avg": 5.762,
+          "p50": 5.013,
+          "p95": 11.028,
+          "p99": 14.612,
+          "max": 20.784
+        },
+        "totalMs": {
+          "avg": 6.831,
+          "p50": 6.059,
+          "p95": 12.516,
+          "p99": 16.232,
+          "max": 22.142
+        },
+        "bytesPerTick": 20321,
+        "bytesPerSec": 406419,
+        "gc": {
+          "count": 65,
+          "ms": 70,
+          "maxMs": 5.06
+        },
+        "cpuPercent": 19.3,
+        "rssMB": {
+          "end": 203.2,
+          "peak": 203.2
+        },
+        "heapUsedMB": {
+          "end": 20.1,
+          "peak": 30.6
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 2.65,
+        "snapshotsPerSec": 20.02,
+        "gapMs": {
+          "p50": 50,
+          "p95": 53.3,
+          "p99": 56,
+          "max": 64
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "rooms",
+      "label": "Two rooms at once, 100 + 50",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 5.8,
+      "clients": 150,
+      "live": 150,
+      "aliveAtEnd": 72,
+      "rooms": 2,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.301,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 6
+        },
+        "simMs": {
+          "avg": 1.131,
+          "p50": 1.024,
+          "p95": 1.686,
+          "p99": 3.246,
+          "max": 5.983
+        },
+        "snapMs": {
+          "avg": 6.045,
+          "p50": 5.378,
+          "p95": 9.624,
+          "p99": 13.616,
+          "max": 16.711
+        },
+        "totalMs": {
+          "avg": 7.252,
+          "p50": 6.468,
+          "p95": 11.148,
+          "p99": 15.79,
+          "max": 20.263
+        },
+        "bytesPerTick": 20285,
+        "bytesPerSec": 405699,
+        "gc": {
+          "count": 69,
+          "ms": 80.9,
+          "maxMs": 5.85
+        },
+        "cpuPercent": 20.9,
+        "rssMB": {
+          "end": 198.5,
+          "peak": 198.5
+        },
+        "heapUsedMB": {
+          "end": 23.8,
+          "peak": 29.1
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 2.64,
+        "snapshotsPerSec": 20.02,
+        "gapMs": {
+          "p50": 50,
+          "p95": 53.4,
+          "p99": 55.7,
+          "max": 61
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "eject",
+      "label": "100 players, heavy ejected mass",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 5,
+      "clients": 100,
+      "live": 100,
+      "aliveAtEnd": 35,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.347,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 13
+        },
+        "simMs": {
+          "avg": 1.086,
+          "p50": 0.949,
+          "p95": 1.605,
+          "p99": 3.22,
+          "max": 12.184
+        },
+        "snapMs": {
+          "avg": 3.867,
+          "p50": 3.413,
+          "p95": 6.507,
+          "p99": 9.617,
+          "max": 12.213
+        },
+        "totalMs": {
+          "avg": 5.024,
+          "p50": 4.454,
+          "p95": 8.077,
+          "p99": 11.295,
+          "max": 18.359
+        },
+        "bytesPerTick": 11861,
+        "bytesPerSec": 237215,
+        "gc": {
+          "count": 54,
+          "ms": 54.6,
+          "maxMs": 6.6
+        },
+        "cpuPercent": 13.6,
+        "rssMB": {
+          "end": 196.9,
+          "peak": 196.9
+        },
+        "heapUsedMB": {
+          "end": 20.2,
+          "peak": 27.6
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 2.32,
+        "snapshotsPerSec": 20,
+        "gapMs": {
+          "p50": 50,
+          "p95": 52.7,
+          "p99": 55.9,
+          "max": 68.4
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": null,
+      "net": null
+    },
+    {
+      "scenario": "stalls",
+      "label": "100 players, 50-250 ms stalls every 2 s",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 4.7,
+      "clients": 100,
+      "live": 100,
+      "aliveAtEnd": 31,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 7.315,
+          "p50": 0,
+          "p95": 60,
+          "p99": 163,
+          "max": 239
+        },
+        "simMs": {
+          "avg": 1.176,
+          "p50": 1.057,
+          "p95": 1.895,
+          "p99": 3.219,
+          "max": 4.87
+        },
+        "snapMs": {
+          "avg": 4.602,
+          "p50": 3.682,
+          "p95": 7.352,
+          "p99": 12.444,
+          "max": 176.337
+        },
+        "totalMs": {
+          "avg": 5.85,
+          "p50": 4.826,
+          "p95": 9.016,
+          "p99": 14.459,
+          "max": 177.244
+        },
+        "bytesPerTick": 18129,
+        "bytesPerSec": 362583,
+        "gc": {
+          "count": 73,
+          "ms": 71.4,
+          "maxMs": 6.13
+        },
+        "cpuPercent": 15.3,
+        "rssMB": {
+          "end": 201.5,
+          "peak": 201.5
+        },
+        "heapUsedMB": {
+          "end": 27.7,
+          "peak": 29
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 3.6,
+        "snapshotsPerSec": 20.4,
+        "gapMs": {
+          "p50": 49.9,
+          "p95": 54,
+          "p99": 197.1,
+          "max": 288.4
+        },
+        "skippedTicks": 0,
+        "protocolErrors": 0
+      },
+      "stalls": {
+        "count": 18,
+        "avgMs": 157,
+        "maxMs": 240
+      },
+      "net": null
+    },
+    {
+      "scenario": "network",
+      "label": "100 players, 80 ± 30 ms latency, 1% loss",
+      "rev": "working",
+      "seconds": 40,
+      "warm": 10,
+      "setupSeconds": 7.1,
+      "clients": 100,
+      "live": 100,
+      "aliveAtEnd": 40,
+      "rooms": 1,
+      "server": {
+        "ticks": 800,
+        "lateMs": {
+          "avg": 0.27,
+          "p50": 0,
+          "p95": 1,
+          "p99": 2,
+          "max": 63
+        },
+        "simMs": {
+          "avg": 1.203,
+          "p50": 1.109,
+          "p95": 1.885,
+          "p99": 2.803,
+          "max": 3.991
+        },
+        "snapMs": {
+          "avg": 4.175,
+          "p50": 3.615,
+          "p95": 7.269,
+          "p99": 10.329,
+          "max": 29.911
+        },
+        "totalMs": {
+          "avg": 5.435,
+          "p50": 4.808,
+          "p95": 9,
+          "p99": 12.304,
+          "max": 30.784
+        },
+        "bytesPerTick": 18912,
+        "bytesPerSec": 378248,
+        "gc": {
+          "count": 68,
+          "ms": 73,
+          "maxMs": 12.78
+        },
+        "cpuPercent": 19.5,
+        "rssMB": {
+          "end": 200.2,
+          "peak": 200.2
+        },
+        "heapUsedMB": {
+          "end": 21.3,
+          "peak": 29.2
+        },
+        "snapshotsHeld": 0
+      },
+      "client": {
+        "kibPerSecEach": 3.69,
+        "snapshotsPerSec": 20,
+        "gapMs": {
+          "p50": 48.7,
+          "p95": 92.5,
+          "p99": 201.2,
+          "max": 308.5
+        },
+        "skippedTicks": 3419,
+        "protocolErrors": 39
+      },
+      "stalls": null,
+      "net": {
+        "latency": 80,
+        "jitter": 30,
+        "loss": 0.01,
+        "rto": 200
+      }
+    }
+  ]
+}

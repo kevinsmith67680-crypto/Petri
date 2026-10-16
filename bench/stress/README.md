@@ -60,5 +60,19 @@ Over a fixed window after a warm-up:
 hooks patched in. The clients are always this tree's, which is fine while
 the wire format is unchanged.
 
-Results are in `results/`. They depend on the machine, and on the other
-work running on it.
+`compare.mjs` prints two runs side by side, with `--replace` for a scenario
+rerun on its own:
+
+```sh
+node bench/stress/compare.mjs results/baseline-a44cad8.json results/optimised.json \
+  --replace results/network-rerun-baseline-a44cad8.json --replace results/network-rerun-optimised.json
+```
+
+Results are in `results/`, with the comparison in `results/comparison.md`.
+They depend on the machine, and on the other work running on it. The network
+scenario in the two full runs went through a proxy that could reorder chunks
+less than a millisecond apart (its timers were rounded to whole
+milliseconds). That showed up as 96 and 39 "protocol errors", and was fixed
+in the proxy. The `network-rerun-*` files are that scenario run again through
+the fixed proxy, with no errors on either build, and the comparison uses
+those.
