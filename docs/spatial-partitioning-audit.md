@@ -159,6 +159,82 @@ combat" in `shared/sim.js`).
   `underCell`'s linear scan in `sowOrbs` could use a cell grid too, but it
   runs after combat, when this one no longer matches the cells.
 
+## Update: H-2 shipped
+
+The pellet index is now laid out flat ("pellet spatial index" in
+`shared/sim.js`). It is one array of pellets sorted by bucket plus an offset
+table, filled by a stable counting sort into arrays kept from tick to tick.
+Queries clamp the bucket range at both ends of the arena (L2).
+
+- **What the prototype could not do.** Since the audit the index changes
+  between rebuilds in two ways:
+  - `sowOrbs` files each orb the moment it places it, so the next dart keeps
+    its distance (`adb6295`);
+  - `stepWorld` re-files thrown mass as it moves (`93148bf`).
+
+  A flat layout cannot grow a bucket in place, so the shipped version handles
+  both differently:
+  - a pellet that leaves a bucket leaves a hole;
+  - one that arrives joins that bucket's list of arrivals, visited after the
+    rest;
+  - the next rebuild lays everything out flat again.
+- **Membership and order exactly as the Map's.** Every bucket hands out what
+  the Map's array held, in the same order: by `world.pellets` as of the
+  rebuild, then by arrival. Eat order, the orbs a snapshot lists and a bot's
+  choice on a tie all follow that order.
+- **Edges.**
+  - A pellet a whole bucket below zero is filed nowhere. No query ever
+    looked there, so the Map's bucket for it was never visited either.
+  - A pellet past the far wall widens the grid instead of being clamped into
+    an edge bucket, which the audit's prototype did.
+  - Creation, sowing, eating, sweeping, `resetArena` and an arena grown after
+    layout all keep membership exact.
+- **Verified:**
+  - **`test/pelletgrid.test.js`, now in `npm test`.** It puts a copy of
+    `sim.js` with the Map grid restored through the same steps as the
+    current one, comparing what every bucket hands out, in order:
+    - creation, sowing, a rebuild, ejected mass, eating, `resetArena`;
+    - pellets past every wall, and an arena grown after layout;
+    - 6,000 random inserts, moves, deaths and rebuilds;
+    - two whole games (a 100-bot Standard room, and a crowd throwing mass
+      under a closing zone with a reset), with snapshots compared byte for
+      byte.
+
+    Nine deliberate breakages each fail it.
+  - **`bench/spatial/correctness.mjs`.** Run against `mapgrid` (the Map put
+    back), the flat grid plays identically for 1,200 ticks in six scenarios,
+    and for 600 at 250 ms ticks in four. C1 (grid query superset) and C8
+    (walls and bucket corners) pass on both. 65 passed, 0 failed
+    (`results/correctness-pellet-grid.txt`).
+- **Measured** (`results/pelletgrid-bench.md`, `-dt025.md`,
+  `pelletgrid-query-bounds.txt`). Median of three runs, ms per room tick
+  excluding bot AI. The games are identical, so this is like for like:
+
+  | Scenario | Tick avg, Map → flat | p99 | Rebuild | Snapshots |
+  |---|---:|---:|---:|---:|
+  | Low population (10) | 0.38 → 0.31 | 1.78 → 1.35 | 0.103 → 0.021 | 0.17 → 0.18 |
+  | Full lobby (100) | 4.87 → 3.96 | 10.83 → 8.79 | 0.420 → 0.093 | 3.65 → 3.09 |
+  | Standard mode (live config) | 5.98 → 5.26 | 12.41 → 11.75 | 0.525 → 0.151 | 4.44 → 4.07 |
+  | Stress test (150) | 9.82 → 8.44 | 20.99 → 16.87 | 0.579 → 0.194 | 7.71 → 6.70 |
+  | Very large cells | 7.99 → 6.25 | 14.46 → 13.95 | 0.411 → 0.091 | 6.49 → 5.21 |
+  | Rapid split + merge | 10.16 → 9.18 | 22.97 → 21.90 | 0.439 → 0.112 | 7.66 → 7.04 |
+  | Ejected-mass storm | 7.27 → 5.45 | 15.16 → 10.89 | 0.422 → 0.087 | 5.57 → 4.28 |
+  | Full lobby, 250 ms ticks | 7.07 → 5.93 | 14.90 → 12.65 | 0.470 → 0.107 | 4.90 → 4.29 |
+  | Ejected-mass storm, 250 ms ticks | 6.18 → 4.96 | 13.97 → 10.87 | 0.456 → 0.100 | 4.52 → 3.79 |
+
+  - A single query is never slower.
+  - For a giant's view reaching past the arena it is 1.5–4.8× faster,
+    because buckets past the wall are no longer looked up.
+- **Bucket size** (`results/pelletgrid-size.md`, same method):
+  - 110, 165 and 440 were not better than 220 anywhere.
+  - 330 was faster in five scenarios of six (Standard 5.40 → 4.52 ms) but
+    slower on the dense cluster (3.57 → 4.15 ms, p99 8.45 → 13.29), and most
+    differences were within noise.
+  - A different size also changes the visiting order, so those games are not
+    identical to each other.
+
+  **220 is kept.**
+
 ## Status at the branch head (`a8319cc`)
 
 Thirteen commits landed while the audit ran: Poisson-disc orb sowing, a
@@ -185,7 +261,8 @@ What that changes below:
   orb to the grid as it places it (`gridInsert`), so the next dart can keep
   its distance. A CSR layout is fixed between rebuilds, so it would need a
   small overflow list that queries also scan and that is folded in once it
-  grows. This variant was not prototyped against the head.
+  grows. This variant was not prototyped against the head. *(Since shipped,
+  with per-bucket arrival lists and holes: see "Update: H-2 shipped".)*
 - **New linear scan at the head (Low).** `underCell` (`sim.js:479`) tests every
   cell in the arena for every dart `sowOrbs` throws, and the zone can push
   that to 60 darts per orb. H-1's cell grid would serve it as well. Not
@@ -538,7 +615,8 @@ attacker cell then queries the box of half-size `ra` around itself.
   to whatever ships.
 
 **H-2. Store the pellet grid as a flat CSR array, and clamp both ends of the
-query.** One stable counting sort per rebuild into a reused
+query.** *Done, with arrival lists for what is filed between rebuilds. See
+"Update: H-2 shipped" at the top.* One stable counting sort per rebuild into a reused
 `Int32Array` offset table and one pellet array (prototype: `CSR_GRID` in
 `build.mjs`). It keeps the same bucket visit order and the same order within a
 bucket, so it is bit-identical.
