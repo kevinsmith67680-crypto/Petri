@@ -8,8 +8,9 @@
 // is a reproduced bug in shared/sim.js at the revision under test (build.mjs
 // REV, d93f567 by default); the same check is then run on the `fresh` variant
 // to show the proposed fix closes it. Variants a revision cannot build (csr
-// once orbs are indexed incrementally) are reported as SKIP. The game code
-// itself is never modified.
+// once orbs are indexed incrementally, gcombat once the grid ships, pairs
+// before it does) are reported as SKIP. The game code itself is never
+// modified.
 // ---------------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -466,7 +467,7 @@ c6long("currentC", "splits", QUICK ? 300 : 1200);
 c6long("currentC", "eject", QUICK ? 300 : 1200);
 
 console.log("\nC7  very large cells");
-c7("current"); need("gcombat") && c7("gcombat");
+c7("current"); need("gcombat") && c7("gcombat"); need("pairs") && c7("pairs");
 console.log("\nC8  walls and bucket corners");
 c8("current"); need("csr") && c8("csr");
 console.log("\nC9  snapshot area of interest");
@@ -487,11 +488,18 @@ for (const key of ["eject", "splits", "full"]) {
   check(`E.${key}`, `the instrumented build plays identically to the plain one`, "currentC", d < 0, { firstDivergentTick: d });
 }
 for (const key of ["full", "dense", "giants", "splits", "eject", "churn"]) {
-  for (const [a, b] of [["current", "csr"], ["current", "gcombat"], ["fresh", "all"]]) {
+  for (const [a, b] of [["current", "csr"], ["current", "gcombat"], ["fresh", "all"], ["pairs", "current"]]) {
     if (!need(a, b)) continue;
     const d = lockstep(a, b, key, LT, { seed: 23 });
     check(`E.${key}`, `${b} plays identically to ${a} for ${LT} ticks`, b, d < 0, { firstDivergentTick: d });
   }
+}
+// The grid broad phase against the all-pairs loop it replaced, also at the
+// longest tick the server steps by, where every path is five times as long.
+for (const key of ["full", "splits", "giants"]) {
+  if (!need("pairs", "current")) break;
+  const d = lockstep("pairs", "current", key, Math.min(LT, 600), { seed: 29, dt: 0.25 });
+  check(`E.${key}@0.25`, `current plays identically to pairs at 250ms ticks`, "current", d < 0, { firstDivergentTick: d });
 }
 
 const failed = results.filter(r => !r.ok);

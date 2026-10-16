@@ -2,7 +2,7 @@
 // Benchmark orchestrator.
 //
 //   node bench/spatial/bench.mjs [--quick] [--reps 3] [--scenarios a,b]
-//        [--variants current,fresh,...] [--out results/bench.json]
+//        [--variants current,fresh,...] [--dt 0.05] [--out results/bench.json]
 //
 // Runs every scenario x variant in its own process (run-one.mjs), takes the
 // median of each statistic across repetitions, then one counted run per
@@ -25,6 +25,7 @@ const WARM = Number(arg("--warm", QUICK ? 100 : 300));
 const TICKS = Number(arg("--ticks", QUICK ? 200 : 900));
 const scenarios = arg("--scenarios", Object.keys(SCENARIOS).join(",")).split(",");
 const variants = arg("--variants", "current,fresh,csr,gcombat,all").split(",");
+const DT = Number(arg("--dt", 0.05));
 const out = arg("--out", null);
 // --merge: start from an earlier results file and replace only the
 // scenarios run now; tables then cover everything in the merged file.
@@ -33,7 +34,7 @@ const merge = arg("--merge", null);
 function runOne(scenario, variant, extra = []) {
   const stdout = execFileSync(process.execPath, [
     "--expose-gc", path.join(here, "run-one.mjs"), scenario, variant,
-    "--warm", String(WARM), "--ticks", String(TICKS), ...extra
+    "--warm", String(WARM), "--ticks", String(TICKS), "--dt", String(DT), ...extra
   ], { encoding: "utf8", maxBuffer: 1 << 26 });
   return JSON.parse(stdout.trim().split("\n").pop());
 }
@@ -54,7 +55,7 @@ function mergeReps(runs) {
 
 const results = merge ? JSON.parse(fs.readFileSync(merge, "utf8")) : { meta: {
   node: process.version, cpu: os.cpus()[0]?.model, cores: os.cpus().length,
-  reps: REPS, warm: WARM, ticks: TICKS, date: new Date().toISOString()
+  reps: REPS, warm: WARM, ticks: TICKS, dt: DT, date: new Date().toISOString()
 }, timing: {}, counted: {} };
 if (merge) (results.meta.rerun ||= []).push({ scenarios, variants, reps: REPS, warm: WARM, ticks: TICKS, date: new Date().toISOString() });
 
@@ -67,7 +68,7 @@ for (const s of scenarios) {
     const m = results.timing[s][v].ms;
     console.error(`${s.padEnd(9)} ${v.padEnd(8)} total ${m.total.avg.toFixed(2)}ms  p99 ${m.total.p99.toFixed(2)}  exAI ${m.totalExAI.avg.toFixed(2)}`);
   }
-  for (const v of ["current", "gcombat"]) {
+  for (const v of ["current", "gcombat", "pairs"]) {
     if (!variants.includes(v)) continue;
     results.counted[s] = results.counted[s] || {};
     results.counted[s][v] = runOne(s, v, ["--counted", "--seed", "1"]);
@@ -84,7 +85,7 @@ const shownVariants = variants.filter(v => shown.every(s => results.timing[s][v]
 const f = (x, d = 2) => (x === undefined ? "–" : x.toFixed(d));
 const rows = [];
 rows.push(`Node ${results.meta.node}, ${results.meta.cpu} (${results.meta.cores} cores), ` +
-  `${results.meta.reps} rep(s) x ${results.meta.ticks} measured ticks after ${results.meta.warm} warm-up, dt 0.05.` +
+  `${results.meta.reps} rep(s) x ${results.meta.ticks} measured ticks after ${results.meta.warm} warm-up, dt ${results.meta.dt ?? 0.05}.` +
   (results.meta.rerun ? ` Re-run: ${results.meta.rerun.map(r => `${r.scenarios.join("/")} (${r.reps} x ${r.ticks} after ${r.warm})`).join("; ")}.` : ""));
 rows.push("");
 rows.push("Current implementation (ms per room tick; total = stepWorld + one snapshot per player)");
@@ -113,7 +114,10 @@ rows.push("");
 rows.push("| Scenario | naive pair-loop iterations | grid: bucket entries visited | grid: candidate tests | sqrt tests (both) | eats (both) |");
 rows.push("|---|---:|---:|---:|---:|---:|");
 for (const s of shown) {
-  const a = results.counted[s]?.current, b = results.counted[s]?.gcombat; if (!a || !b) continue;
+  // All pairs against the grid: current against the gcombat prototype at a
+  // revision that predates the grid, pairs against current once it ships.
+  const c = results.counted[s] || {};
+  const [a, b] = c.pairs ? [c.pairs, c.current] : [c.current, c.gcombat]; if (!a || !b) continue;
   rows.push(`| ${a.label} | ${f(a.counters.combatIter, 0)} | ${f(b.counters.combatGridVisits, 0)} | ${f(b.counters.combatIter, 0)} | ` +
     `${f(a.counters.combatNarrow, 1)} / ${f(b.counters.combatNarrow, 1)} | ${f(a.counters.combatEats, 2)} / ${f(b.counters.combatEats, 2)} |`);
 }
@@ -128,5 +132,15 @@ for (const s of shown) {
     shownVariants.map(v => `${f(t[v].ms.totalExAI.avg)} / ${f(t[v].ms.totalExAI.p99)}`).join(" | ") + " | " +
     shownVariants.map(v => f(t[v].ms.combat.avg, 3)).join(" | ") + " | " +
     shownVariants.map(v => f(t[v].ms.grid.avg + t[v].ms.gridFresh.avg, 3)).join(" | ") + " |");
+}
+rows.push("");
+rows.push("cellCombat alone (ms per tick, avg / p99 / max; median of reps)");
+rows.push("");
+rows.push(`| Scenario | Cells | ${shownVariants.join(" | ")} |`);
+rows.push(`|---|---:|${shownVariants.map(() => "---:").join("|")}|`);
+for (const s of shown) {
+  const t = results.timing[s];
+  rows.push(`| ${t.current?.label || s} | ${f(t.current?.state.avgCells, 0)} | ` +
+    shownVariants.map(v => `${f(t[v].ms.combat.avg, 3)} / ${f(t[v].ms.combat.p99, 3)} / ${f(t[v].ms.combat.max, 3)}`).join(" | ") + " |");
 }
 console.log(rows.join("\n"));
