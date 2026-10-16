@@ -57,6 +57,7 @@ import { Accounts } from "./accounts.js";
 import { handleApi } from "./api.js";
 import { verifyTicket, verifyRequest, TicketError, assertSecret } from "./ticket.js";
 import { createMatchmaker } from "./matchmaker/core.js";
+import { createTickStats, recordTick, summarise } from "./tickstats.js";
 import { answerMatch, createRateLimit } from "./matchmaker/http.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -460,8 +461,14 @@ const server = http.createServer(async (req, res) => {
         avgMs: +tickCost.avgMs.toFixed(2),
         worstMs: +tickCost.worstMs.toFixed(2),
         overruns: tickCost.behind,
-        snapshotsHeld: tickCost.held
-      }
+        snapshotsHeld: tickCost.held,
+        // ?window=N: the last N ticks only, for a load test's measured span.
+        window: summarise(tickStats, HZ, Number(url.searchParams.get("window")) || tickStats.n)
+      },
+      memory: (({ rss, heapUsed, heapTotal, external }) => ({
+        rssMB: +(rss / 2 ** 20).toFixed(1), heapUsedMB: +(heapUsed / 2 ** 20).toFixed(1),
+        heapTotalMB: +(heapTotal / 2 ** 20).toFixed(1), externalMB: +(external / 2 ** 20).toFixed(1)
+      }))(process.memoryUsage())
     }));
     return;
   }
@@ -2056,6 +2063,8 @@ let lastTick = process.hrtime.bigint();
 // hold its tick feels exactly like bad netcode from the player's side.
 // held counts snapshots not sent to a client too far behind to take them.
 const tickCost = { avgMs: 0, worstMs: 0, behind: 0, held: 0 };
+// And the last minute of ticks one by one: lateness, stepping and sending.
+const tickStats = createTickStats(60 * HZ);
 
 function tickRoom(room, dt) {
   const { world, round } = room;
@@ -2063,6 +2072,7 @@ function tickRoom(room, dt) {
   // with. Taken per room: with several rooms, each steps a little later.
   const tickAt = performance.now();
   const events = stepWorld(world, dt, round.phase === PHASE_HOLD);
+  tickStats.cur.sim += performance.now() - tickAt;
 
   if (round.phase === PHASE_HOLD && world.time >= round.endsAt) {
     releaseRound(room);
@@ -2113,6 +2123,7 @@ function tickRoom(room, dt) {
   }
 
   const view = roundView(room);
+  const sendFrom = performance.now();
   // What every snapshot below shares, worked out once. Nothing changes the
   // world between here and the last send.
   let frame = null;
@@ -2127,12 +2138,17 @@ function tickRoom(room, dt) {
     refreshSpectate(room, meta);
     const eye = meta.spectateId ? world.players.get(meta.spectateId) : null;
     frame ||= snapshotFrame(world);
-    ws.send(encodeSnapshot(world, player, meta.state, view, eye, tickAt, frame));
+    const snap = encodeSnapshot(world, player, meta.state, view, eye, tickAt, frame);
+    tickStats.cur.bytes += snap.length;
+    ws.send(snap);
   }
+  tickStats.cur.snap += performance.now() - sendFrom;
 }
 
-function tick() {
+// `due` is the Date.now() this tick was scheduled for.
+function tick(due) {
   const tickStart = process.hrtime.bigint();
+  const late = Math.max(0, Date.now() - due);
   // Measured elapsed time, not the nominal interval, so a busy event loop
   // slows the tick rather than silently changing game speed.
   const dt = Math.min(Number(tickStart - lastTick) / 1e9, 0.25);
@@ -2146,6 +2162,7 @@ function tick() {
   tickCost.avgMs = tickCost.avgMs * 0.95 + cost * 0.05;
   tickCost.worstMs = Math.max(tickCost.worstMs * 0.999, cost);
   if (cost > 1000 / HZ) tickCost.behind++;
+  recordTick(tickStats, late, cost);
 }
 
 // setInterval drifts. A tick that overruns pushes the next one late, the error
@@ -2159,7 +2176,8 @@ function scheduleTick() {
   nextTickAt += TICK_MS;
   const drift = Date.now() - nextTickAt;
   if (drift > 500) nextTickAt = Date.now();
-  setTimeout(() => { tick(); scheduleTick(); }, Math.max(0, nextTickAt - Date.now()));
+  const due = nextTickAt;
+  setTimeout(() => { tick(due); scheduleTick(); }, Math.max(0, due - Date.now()));
 }
 
 scheduleTick();
