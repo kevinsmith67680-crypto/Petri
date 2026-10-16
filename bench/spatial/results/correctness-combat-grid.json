@@ -1,0 +1,737 @@
+{
+  "revision": "working",
+  "quick": false,
+  "results": [
+    {
+      "id": "C1",
+      "label": "grid query covers every pellet in the query box, once",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "queries": 9000,
+        "missing": 0,
+        "duplicates": 0,
+        "foreign": 0
+      }
+    },
+    {
+      "id": "C2a",
+      "label": "after resetArena the index holds exactly the new round's pellets",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "indexedFromOldRound": 0,
+        "newPelletsNotIndexed": 0
+      }
+    },
+    {
+      "id": "C2b",
+      "label": "first snapshot after resetArena shows the new pellets, not the old",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "ghostPelletsSent": 0,
+        "livePelletsSent": 9,
+        "shouldSee": 9
+      }
+    },
+    {
+      "id": "C2c",
+      "label": "a player cannot eat an orb from the previous round",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "ghostOrbsEaten": 0
+      }
+    },
+    {
+      "id": "C2a",
+      "label": "after resetArena the index holds exactly the new round's pellets",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "indexedFromOldRound": 0,
+        "newPelletsNotIndexed": 0
+      }
+    },
+    {
+      "id": "C2b",
+      "label": "first snapshot after resetArena shows the new pellets, not the old",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "ghostPelletsSent": 0,
+        "livePelletsSent": 9,
+        "shouldSee": 9
+      }
+    },
+    {
+      "id": "C2c",
+      "label": "a player cannot eat an orb from the previous round",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "ghostOrbsEaten": 0
+      }
+    },
+    {
+      "id": "C3",
+      "label": "a thrown blob that enters a cell's reach is eaten on that tick",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "x": 465,
+        "dist": 15,
+        "reach": 26.5,
+        "eatenTick1": true,
+        "eatenLater": false,
+        "endX": 465
+      }
+    },
+    {
+      "id": "C3",
+      "label": "a thrown blob that enters a cell's reach is eaten on that tick",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "x": 465,
+        "dist": 15,
+        "reach": 26.5,
+        "eatenTick1": true,
+        "eatenLater": false,
+        "endX": 465
+      }
+    },
+    {
+      "id": "C4.eject",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 6298,
+        "eaten": 6298,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 269,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.eject",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "freshC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 6298,
+        "eaten": 6298,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 269,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.splits",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 15415,
+        "eaten": 15415,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 151,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.splits",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "freshC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 15415,
+        "eaten": 15415,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 151,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.full",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2583,
+        "eaten": 2583,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.full",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "freshC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2583,
+        "eaten": 2583,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.churn",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2030,
+        "eaten": 2030,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.churn",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "freshC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2030,
+        "eaten": 2030,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.eject@0.25",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.25,
+        "eligible": 18026,
+        "eaten": 18026,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 178,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C4.eject@0.25",
+      "label": "no pellet satisfying the eat rule is skipped by the grid (vs full scan)",
+      "build": "freshC",
+      "ok": true,
+      "detail": {
+        "ticks": 400,
+        "dt": 0.25,
+        "eligible": 18026,
+        "eaten": 18026,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 178,
+        "ghostEats": 0
+      }
+    },
+    {
+      "id": "C5.eject",
+      "label": "current == brute-force reference for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.eject",
+      "label": "fresh == brute-force reference for 1200 ticks",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.splits",
+      "label": "current == brute-force reference for 400 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.splits",
+      "label": "fresh == brute-force reference for 400 ticks",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.full",
+      "label": "current == brute-force reference for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.full",
+      "label": "fresh == brute-force reference for 1200 ticks",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.churn",
+      "label": "current == brute-force reference for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C5.churn",
+      "label": "fresh == brute-force reference for 1200 ticks",
+      "build": "fresh",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "C6a",
+      "label": "a stacked chain of eats consumes each victim exactly once",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "eats": 2,
+        "A": 1350
+      }
+    },
+    {
+      "id": "C6b",
+      "label": "an orb under two cells at once is eaten once",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "orbs": 1,
+        "gained": 2
+      }
+    },
+    {
+      "id": "C6c.churn",
+      "label": "no pellet eaten twice, none left behind, no duplicated cell",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 1200,
+        "pelletsEaten": 4488,
+        "dupEat": 0,
+        "stillPresent": 0,
+        "dupCell": 0,
+        "orbMismatch": 0
+      }
+    },
+    {
+      "id": "C6c.splits",
+      "label": "no pellet eaten twice, none left behind, no duplicated cell",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 1200,
+        "pelletsEaten": 29035,
+        "dupEat": 0,
+        "stillPresent": 0,
+        "dupCell": 0,
+        "orbMismatch": 0
+      }
+    },
+    {
+      "id": "C6c.eject",
+      "label": "no pellet eaten twice, none left behind, no duplicated cell",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "ticks": 1200,
+        "pelletsEaten": 16126,
+        "dupEat": 0,
+        "stillPresent": 0,
+        "dupCell": 0,
+        "orbMismatch": 0
+      }
+    },
+    {
+      "id": "C7a",
+      "label": "a radius-800 cell eats every orb just inside its reach, none just outside",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "inside": "360/360",
+        "outside": "0/360"
+      }
+    },
+    {
+      "id": "C7b",
+      "label": "a radius-800 cell eats prey anywhere inside its eat radius, none outside",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "inner": "24/24",
+        "outer": "0/24"
+      }
+    },
+    {
+      "id": "C7a",
+      "label": "a radius-800 cell eats every orb just inside its reach, none just outside",
+      "build": "pairs",
+      "ok": true,
+      "detail": {
+        "inside": "360/360",
+        "outside": "0/360"
+      }
+    },
+    {
+      "id": "C7b",
+      "label": "a radius-800 cell eats prey anywhere inside its eat radius, none outside",
+      "build": "pairs",
+      "ok": true,
+      "detail": {
+        "inner": "24/24",
+        "outer": "0/24"
+      }
+    },
+    {
+      "id": "C8",
+      "label": "orbs in arena corners and across bucket corners are eaten",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "eaten": "8/8"
+      }
+    },
+    {
+      "id": "C9.full",
+      "label": "each snapshot's pellets equal a brute-force view query",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "snapshots": 20000,
+        "missing": 0,
+        "extra": 0
+      }
+    },
+    {
+      "id": "C9.splits",
+      "label": "each snapshot's pellets equal a brute-force view query",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "snapshots": 20000,
+        "missing": 0,
+        "extra": 0
+      }
+    },
+    {
+      "id": "C10",
+      "label": "a feed and a split-engulf that land at 20Hz still land on a 250ms tick",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "feed@0.05": true,
+        "engulf@0.05": true,
+        "pieceAheadOfPrey@0.05": -43,
+        "feed@0.25": true,
+        "engulf@0.25": true,
+        "pieceAheadOfPrey@0.25": 177
+      }
+    },
+    {
+      "id": "C11",
+      "label": "a split half that passes over smaller prey at 20Hz eats it",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "preyDistancesSkipped": ""
+      }
+    },
+    {
+      "id": "E.eject",
+      "label": "the instrumented build plays identically to the plain one",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.splits",
+      "label": "the instrumented build plays identically to the plain one",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.full",
+      "label": "the instrumented build plays identically to the plain one",
+      "build": "currentC",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.full",
+      "label": "current plays identically to pairs for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.dense",
+      "label": "current plays identically to pairs for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.giants",
+      "label": "current plays identically to pairs for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.splits",
+      "label": "current plays identically to pairs for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.eject",
+      "label": "current plays identically to pairs for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.churn",
+      "label": "current plays identically to pairs for 1200 ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.full@0.25",
+      "label": "current plays identically to pairs at 250ms ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.splits@0.25",
+      "label": "current plays identically to pairs at 250ms ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    },
+    {
+      "id": "E.giants@0.25",
+      "label": "current plays identically to pairs at 250ms ticks",
+      "build": "current",
+      "ok": true,
+      "detail": {
+        "firstDivergentTick": -1
+      }
+    }
+  ],
+  "shadow": {
+    "eject": {
+      "current": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 6298,
+        "eaten": 6298,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 269,
+        "ghostEats": 0
+      },
+      "fresh": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 6298,
+        "eaten": 6298,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 269,
+        "ghostEats": 0
+      }
+    },
+    "splits": {
+      "current": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 15415,
+        "eaten": 15415,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 151,
+        "ghostEats": 0
+      },
+      "fresh": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 15415,
+        "eaten": 15415,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 151,
+        "ghostEats": 0
+      }
+    },
+    "full": {
+      "current": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2583,
+        "eaten": 2583,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      },
+      "fresh": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2583,
+        "eaten": 2583,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      }
+    },
+    "churn": {
+      "current": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2030,
+        "eaten": 2030,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      },
+      "fresh": {
+        "ticks": 400,
+        "dt": 0.05,
+        "eligible": 2030,
+        "eaten": 2030,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 0,
+        "ghostEats": 0
+      }
+    },
+    "eject@0.25": {
+      "current": {
+        "ticks": 400,
+        "dt": 0.25,
+        "eligible": 18026,
+        "eaten": 18026,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 178,
+        "ghostEats": 0
+      },
+      "fresh": {
+        "ticks": 400,
+        "dt": 0.25,
+        "eligible": 18026,
+        "eaten": 18026,
+        "missedStaleMoving": 0,
+        "missedOther": 0,
+        "missedCreatedThisTick": 178,
+        "ghostEats": 0
+      }
+    }
+  },
+  "skipped": [
+    "csr",
+    "gcombat",
+    "csr",
+    "current+csr",
+    "current+gcombat",
+    "fresh+all",
+    "current+csr",
+    "current+gcombat",
+    "fresh+all",
+    "current+csr",
+    "current+gcombat",
+    "fresh+all",
+    "current+csr",
+    "current+gcombat",
+    "fresh+all",
+    "current+csr",
+    "current+gcombat",
+    "fresh+all",
+    "current+csr",
+    "current+gcombat",
+    "fresh+all"
+  ]
+}
