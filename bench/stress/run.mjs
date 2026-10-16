@@ -184,15 +184,30 @@ function cpuSeconds(pid) {
 // ── network conditions ──────────────────────────────────────────────────────
 
 function startProxy(target, { latency, jitter, loss, rto }, rnd) {
+  // One queue and one timer per direction, delivering strictly in order. A
+  // timer per chunk is not enough: delays are rounded to whole milliseconds,
+  // so two chunks less than one apart could fire swapped, which is a
+  // reordered TCP stream and not something the network ever does.
   const lane = (from, to) => {
-    let last = 0;
+    let last = 0, timer = null;
+    const queue = [];
+    const flush = () => {
+      timer = null;
+      const now = performance.now();
+      while (queue.length && queue[0].at <= now) {
+        const { chunk } = queue.shift();
+        if (!to.destroyed) to.write(chunk);
+      }
+      if (queue.length) timer = setTimeout(flush, Math.max(1, queue[0].at - now));
+    };
     from.on("data", chunk => {
       const now = performance.now();
       let at = now + Math.max(0, latency + (rnd() * 2 - 1) * jitter);
       if (rnd() < loss) at += rto;                 // lost, and resent after a timeout
       at = Math.max(at, last);                     // and everything after waits behind it
       last = at;
-      setTimeout(() => { if (!to.destroyed) to.write(chunk); }, at - now);
+      queue.push({ at, chunk });
+      if (!timer) timer = setTimeout(flush, Math.max(1, at - now));
     });
     const end = () => { if (!to.destroyed) to.destroy(); };
     from.on("close", end); from.on("error", end);
