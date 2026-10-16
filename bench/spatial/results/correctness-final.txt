@@ -1,0 +1,114 @@
+revision under test: working
+
+C1  grid query superset
+  PASS  [current] C1 grid query covers every pellet in the query box, once  {"queries":9000,"missing":0,"duplicates":0,"foreign":0}
+  SKIP  [csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [mapgrid] C1 grid query covers every pellet in the query box, once  {"queries":9000,"missing":0,"duplicates":0,"foreign":0}
+
+C2  index after resetArena
+  PASS  [current] C2a after resetArena the index holds exactly the new round's pellets  {"indexedFromOldRound":0,"newPelletsNotIndexed":0}
+  PASS  [current] C2b first snapshot after resetArena shows the new pellets, not the old  {"ghostPelletsSent":0,"livePelletsSent":9,"shouldSee":9}
+  PASS  [current] C2c a player cannot eat an orb from the previous round  {"ghostOrbsEaten":0}
+  PASS  [fresh] C2a after resetArena the index holds exactly the new round's pellets  {"indexedFromOldRound":0,"newPelletsNotIndexed":0}
+  PASS  [fresh] C2b first snapshot after resetArena shows the new pellets, not the old  {"ghostPelletsSent":0,"livePelletsSent":9,"shouldSee":9}
+  PASS  [fresh] C2c a player cannot eat an orb from the previous round  {"ghostOrbsEaten":0}
+
+C3  moving pellet, stale bucket
+  PASS  [current] C3 a thrown blob that enters a cell's reach is eaten on that tick  {"x":465,"dist":15,"reach":26.5,"eatenTick1":true,"eatenLater":false,"endX":465}
+  PASS  [fresh] C3 a thrown blob that enters a cell's reach is eaten on that tick  {"x":465,"dist":15,"reach":26.5,"eatenTick1":true,"eatenLater":false,"endX":465}
+
+C4  shadow brute-force check during play
+  PASS  [currentC] C4.eject no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":6298,"eaten":6298,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":269,"ghostEats":0}
+  PASS  [freshC] C4.eject no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":6298,"eaten":6298,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":269,"ghostEats":0}
+  PASS  [currentC] C4.splits no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":15415,"eaten":15415,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":151,"ghostEats":0}
+  PASS  [freshC] C4.splits no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":15415,"eaten":15415,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":151,"ghostEats":0}
+  PASS  [currentC] C4.full no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":2583,"eaten":2583,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":0,"ghostEats":0}
+  PASS  [freshC] C4.full no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":2583,"eaten":2583,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":0,"ghostEats":0}
+  PASS  [currentC] C4.churn no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":2030,"eaten":2030,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":0,"ghostEats":0}
+  PASS  [freshC] C4.churn no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.05,"eligible":2030,"eaten":2030,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":0,"ghostEats":0}
+  PASS  [currentC] C4.eject@0.25 no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.25,"eligible":18026,"eaten":18026,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":178,"ghostEats":0}
+  PASS  [freshC] C4.eject@0.25 no pellet satisfying the eat rule is skipped by the grid (vs full scan)  {"ticks":400,"dt":0.25,"eligible":18026,"eaten":18026,"missedStaleMoving":0,"missedOther":0,"missedCreatedThisTick":178,"ghostEats":0}
+
+C5  lockstep against a brute-force reference (eatPellets by full scan)
+  PASS  [current] C5.eject current == brute-force reference for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [fresh] C5.eject fresh == brute-force reference for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] C5.splits current == brute-force reference for 400 ticks  {"firstDivergentTick":-1}
+  PASS  [fresh] C5.splits fresh == brute-force reference for 400 ticks  {"firstDivergentTick":-1}
+  PASS  [current] C5.full current == brute-force reference for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [fresh] C5.full fresh == brute-force reference for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] C5.churn current == brute-force reference for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [fresh] C5.churn fresh == brute-force reference for 1200 ticks  {"firstDivergentTick":-1}
+
+C6  duplicate consumption
+  PASS  [current] C6a a stacked chain of eats consumes each victim exactly once  {"eats":2,"A":1350}
+  PASS  [current] C6b an orb under two cells at once is eaten once  {"orbs":1,"gained":2}
+  PASS  [currentC] C6c.churn no pellet eaten twice, none left behind, no duplicated cell  {"ticks":1200,"pelletsEaten":4488,"dupEat":0,"stillPresent":0,"dupCell":0,"orbMismatch":0}
+  PASS  [currentC] C6c.splits no pellet eaten twice, none left behind, no duplicated cell  {"ticks":1200,"pelletsEaten":29035,"dupEat":0,"stillPresent":0,"dupCell":0,"orbMismatch":0}
+  PASS  [currentC] C6c.eject no pellet eaten twice, none left behind, no duplicated cell  {"ticks":1200,"pelletsEaten":16126,"dupEat":0,"stillPresent":0,"dupCell":0,"orbMismatch":0}
+
+C7  very large cells
+  PASS  [current] C7a a radius-800 cell eats every orb just inside its reach, none just outside  {"inside":"360/360","outside":"0/360"}
+  PASS  [current] C7b a radius-800 cell eats prey anywhere inside its eat radius, none outside  {"inner":"24/24","outer":"0/24"}
+  SKIP  [gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  PASS  [pairs] C7a a radius-800 cell eats every orb just inside its reach, none just outside  {"inside":"360/360","outside":"0/360"}
+  PASS  [pairs] C7b a radius-800 cell eats prey anywhere inside its eat radius, none outside  {"inner":"24/24","outer":"0/24"}
+
+C8  walls and bucket corners
+  PASS  [current] C8 orbs in arena corners and across bucket corners are eaten  {"eaten":"8/8"}
+  SKIP  [csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [mapgrid] C8 orbs in arena corners and across bucket corners are eaten  {"eaten":"8/8"}
+
+C9  snapshot area of interest
+  PASS  [current] C9.full each snapshot's pellets equal a brute-force view query  {"snapshots":20000,"missing":0,"extra":0}
+  PASS  [current] C9.splits each snapshot's pellets equal a brute-force view query  {"snapshots":20000,"missing":0,"extra":0}
+
+C10 discrete collision steps under a long tick
+  PASS  [current] C10 a feed and a split-engulf that land at 20Hz still land on a 250ms tick  {"feed@0.05":true,"engulf@0.05":true,"pieceAheadOfPrey@0.05":-43,"feed@0.25":true,"engulf@0.25":true,"pieceAheadOfPrey@0.25":177}
+
+C11 discrete collision steps at the normal tick
+  PASS  [current] C11 a split half that passes over smaller prey at 20Hz eats it  {"preyDistancesSkipped":""}
+
+E   alternatives produce bit-identical games (lockstep state hash)
+  PASS  [currentC] E.eject the instrumented build plays identically to the plain one  {"firstDivergentTick":-1}
+  PASS  [currentC] E.splits the instrumented build plays identically to the plain one  {"firstDivergentTick":-1}
+  PASS  [currentC] E.full the instrumented build plays identically to the plain one  {"firstDivergentTick":-1}
+  SKIP  [current, csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  SKIP  [current, gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  SKIP  [fresh, all] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [current] E.full current plays identically to pairs for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.full current plays identically to mapgrid for 1200 ticks  {"firstDivergentTick":-1}
+  SKIP  [current, csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  SKIP  [current, gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  SKIP  [fresh, all] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [current] E.dense current plays identically to pairs for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.dense current plays identically to mapgrid for 1200 ticks  {"firstDivergentTick":-1}
+  SKIP  [current, csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  SKIP  [current, gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  SKIP  [fresh, all] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [current] E.giants current plays identically to pairs for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.giants current plays identically to mapgrid for 1200 ticks  {"firstDivergentTick":-1}
+  SKIP  [current, csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  SKIP  [current, gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  SKIP  [fresh, all] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [current] E.splits current plays identically to pairs for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.splits current plays identically to mapgrid for 1200 ticks  {"firstDivergentTick":-1}
+  SKIP  [current, csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  SKIP  [current, gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  SKIP  [fresh, all] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [current] E.eject current plays identically to pairs for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.eject current plays identically to mapgrid for 1200 ticks  {"firstDivergentTick":-1}
+  SKIP  [current, csr] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  SKIP  [current, gcombat] variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead
+  SKIP  [fresh, all] variant csr: this revision ships its own flat pellet grid; compare it with mapgrid instead
+  PASS  [current] E.churn current plays identically to pairs for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.churn current plays identically to mapgrid for 1200 ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.full@0.25 current plays identically to pairs at 250ms ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.splits@0.25 current plays identically to pairs at 250ms ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.giants@0.25 current plays identically to pairs at 250ms ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.full@0.25 current plays identically to mapgrid at 250ms ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.splits@0.25 current plays identically to mapgrid at 250ms ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.giants@0.25 current plays identically to mapgrid at 250ms ticks  {"firstDivergentTick":-1}
+  PASS  [current] E.eject@0.25 current plays identically to mapgrid at 250ms ticks  {"firstDivergentTick":-1}
+
+65 passed, 0 failed, 21 skipped (revision working)
+exit 0

@@ -7,6 +7,15 @@ The benchmarks and correctness checks behind every figure here are in
 branch moved on during the audit; what still holds at the head is in the next
 section.
 
+## Since the audit
+
+Everything this audit recommended as critical or high has since been done,
+along with snapshot encoding, load tests against the real server and a
+final validation against the baseline. The whole account, with
+before-and-after measurements, is in
+[`docs/performance-report.md`](performance-report.md). The sections below
+record each step as it landed.
+
 ## Update: B1 fixed
 
 `stepWorld` now re-files each pellet in flight as it moves, before anyone eats
