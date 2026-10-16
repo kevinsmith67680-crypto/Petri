@@ -1091,43 +1091,189 @@ function eatViruses(world, ent) {
   }
 }
 
-function cellCombat(world) {
-  const ents = [...world.players.values()].filter(p => p.alive && p.cells.length);
-  // No pair can have closed by more than both their steps on an axis, so a
-  // pair further apart at the end than reach plus twice the longest step any
-  // cell took is rejected on end positions alone, as cheaply as before. Zero
-  // when nothing moved.
-  let step = 0;
-  for (const ent of ents) {
-    for (const c of ent.cells) {
-      const d = Math.max(Math.abs(c.x - c.startX), Math.abs(c.y - c.startY));
-      if (d > step) step = d;
+// ── cell combat ─────────────────────────────────────────────────────────────
+//
+// Who eats whom between players. The rule is the plain all-pairs loop: every
+// player, in join order, attacks every other player in join order; each of
+// its cells in turn tries that player's cells from the back; a bite lands at
+// once. So whoever joined first gets a contested victim, and a cell that has
+// just eaten goes on at its new mass straight away, and at its new reach from
+// the next victim player on.
+//
+// Testing every pair is quadratic: in a full lobby that is ten thousand
+// player pairs and up to a quarter of a million cell pairs a tick, nearly all
+// of them on opposite sides of the map. So the cells are filed in a grid
+// first, and each attacker cell is tested only against the cells filed near
+// it. The bites, their order and every number are the same as the all-pairs
+// loop, which test/combat.test.js checks by playing both side by side.
+//
+// Why the grid misses nothing, however big the cells are: a bite needs the
+// victim's centre inside the attacker's radius, at the end of the tick or
+// somewhere along the way (both tests reach less far than that radius). So a
+// cell is filed by the path its centre took this tick, start to end, and an
+// attacker searches its own path widened by its radius. If the two were ever
+// that close, the victim's centre was then at a point on its own path inside
+// the attacker's search, and that point's bucket is in both. A giant attacker
+// searches more buckets; a giant victim is still filed by its centre.
+//
+// The grid is built here, at the one moment it is used, after everything has
+// moved, split, merged and popped for the tick, so it cannot go stale. A
+// cell eaten during combat is marked gone and skipped from then on.
+
+const CELL_GRID = 256;
+
+// Kept between ticks so filing allocates nothing. Rooms share one process but
+// never run combat at the same time.
+const cg = {
+  cells: [],                    // index -> cell
+  owner: new Int32Array(64),    // index -> its player's place in combat order
+  rank: new Int32Array(64),     // index -> its place in that player's cells
+  box: new Int32Array(256),     // index -> buckets its path covers: x0 x1 y0 y1
+  gone: new Uint8Array(64),     // eaten this tick
+  seen: new Int32Array(64),     // the last search that met it
+  stamp: 0,
+  start: new Int32Array(1),     // bucket -> its first entry; the next bucket's is one past its last
+  at: new Int32Array(0),
+  entries: new Int32Array(256), // cell indices, bucket by bucket
+  cols: 1,
+  max: 0,
+  per: []                       // an attacker's candidate lists, one per cell
+};
+
+function cellBucket(v) {
+  const g = (v / CELL_GRID) | 0;
+  return g < 0 ? 0 : g > cg.max ? cg.max : g;
+}
+
+function fileCells(world, ents) {
+  let total = 0;
+  for (const ent of ents) total += ent.cells.length;
+  if (cg.owner.length < total) {
+    const n = Math.max(total, cg.owner.length * 2);
+    cg.owner = new Int32Array(n); cg.rank = new Int32Array(n);
+    cg.box = new Int32Array(n * 4); cg.gone = new Uint8Array(n); cg.seen = new Int32Array(n);
+  }
+  const cols = Math.ceil(world.size / CELL_GRID) + 1, nb = cols * cols;
+  if (cg.start.length < nb + 1) { cg.start = new Int32Array(nb + 1); cg.at = new Int32Array(nb); }
+  cg.cols = cols; cg.max = cols - 1; cg.stamp = 0;
+  const { cells, owner, rank, box, gone, seen, start } = cg;
+  start.fill(0, 0, nb + 1);
+  cells.length = total;
+  let t = 0, filed = 0;
+  for (let j = 0; j < ents.length; j++) {
+    const list = ents[j].cells;
+    for (let r = 0; r < list.length; r++, t++) {
+      const c = list[r];
+      cells[t] = c; owner[t] = j; rank[t] = r; gone[t] = 0; seen[t] = 0;
+      // A cell built by hand without a start is taken to have stood still.
+      const sx = c.startX ?? c.x, sy = c.startY ?? c.y;
+      const x0 = cellBucket(sx < c.x ? sx : c.x), x1 = cellBucket(sx < c.x ? c.x : sx);
+      const y0 = cellBucket(sy < c.y ? sy : c.y), y1 = cellBucket(sy < c.y ? c.y : sy);
+      box[4 * t] = x0; box[4 * t + 1] = x1; box[4 * t + 2] = y0; box[4 * t + 3] = y1;
+      for (let gx = x0; gx <= x1; gx++) {
+        for (let gy = y0; gy <= y1; gy++) { start[gx * cols + gy + 1]++; filed++; }
+      }
     }
   }
-  const band = 2 * step;
+  for (let k = 0; k < nb; k++) start[k + 1] += start[k];
+  if (cg.entries.length < filed) cg.entries = new Int32Array(Math.max(filed, cg.entries.length * 2));
+  const at = cg.at, entries = cg.entries;
+  at.set(start.subarray(0, nb));
+  for (let i = 0; i < total; i++) {
+    for (let gx = box[4 * i]; gx <= box[4 * i + 1]; gx++) {
+      for (let gy = box[4 * i + 2]; gy <= box[4 * i + 3]; gy++) entries[at[gx * cols + gy]++] = i;
+    }
+  }
+}
+
+// The order victims are tested in: players in combat order, and each one's
+// cells from the back, as the all-pairs loop walks them.
+const byVictim = (p, q) => cg.owner[p] - cg.owner[q] || cg.rank[q] - cg.rank[p];
+
+// Every other player's cell that cell `a` of player `i` could reach this tick
+// at its present size, each once, in victim order; null if none. A cell whose
+// path filed it in several searched buckets is met several times and kept once.
+function combatCandidates(i, a) {
+  const ra = radiusOf(a.mass);
+  const ax = a.startX ?? a.x, ay = a.startY ?? a.y;
+  const x0 = cellBucket((ax < a.x ? ax : a.x) - ra), x1 = cellBucket((ax < a.x ? a.x : ax) + ra);
+  const y0 = cellBucket((ay < a.y ? ay : a.y) - ra), y1 = cellBucket((ay < a.y ? a.y : ay) + ra);
+  const { cells, owner, gone, seen, start, entries, cols } = cg;
+  const stamp = ++cg.stamp;
+  let out = null;
+  for (let gx = x0; gx <= x1; gx++) {
+    for (let gy = y0; gy <= y1; gy++) {
+      const k = gx * cols + gy;
+      for (let s = start[k], e = start[k + 1]; s < e; s++) {
+        const t = entries[s];
+        if (seen[t] === stamp) continue;
+        seen[t] = stamp;
+        if (owner[t] === i || gone[t]) continue;
+        // Position only. Mass is tested live at the bite, because a cell
+        // that grows partway through a victim can eat what it could not
+        // when it started on them.
+        const b = cells[t];
+        if (sweptApart(b.startX - a.startX, b.startY - a.startY, b.x - a.x, b.y - a.y, ra)) continue;
+        (out || (out = [])).push(t);
+      }
+    }
+  }
+  if (out && out.length > 1) out.sort(byVictim);
+  return out;
+}
+
+// The next victim after player `after` that any of the attacker's cells can
+// reach, or -1.
+function nextVictim(per, n, after) {
+  let next = -1;
+  for (let ai = 0; ai < n; ai++) {
+    const list = per[ai];
+    if (!list) continue;
+    for (const t of list) {
+      const j = cg.owner[t];
+      if (j > after) { if (next < 0 || j < next) next = j; break; }
+    }
+  }
+  return next;
+}
+
+function cellCombat(world) {
+  const ents = [];
+  for (const p of world.players.values()) if (p.alive && p.cells.length) ents.push(p);
+  if (ents.length < 2) return;
+  fileCells(world, ents);
+  const { cells: filed, owner, gone, per } = cg;
   for (let i = 0; i < ents.length; i++) {
-    for (let j = 0; j < ents.length; j++) {
-      if (i === j) continue;
-      const A = ents[i], B = ents[j];
-      if (!A.cells.length || !B.cells.length) continue;
-      for (const a of A.cells) {
-        const ra = radiusOf(a.mass), rw = ra + band;
+    // An attacker's own cells cannot change while it attacks: only the
+    // victims lose cells.
+    const A = ents[i], cells = A.cells, n = cells.length;
+    if (!n) continue;
+    let any = false;
+    for (let ai = 0; ai < n; ai++) if ((per[ai] = combatCandidates(i, cells[ai]))) any = true;
+    if (!any) continue;
+    for (let j = nextVictim(per, n, -1); j >= 0; j = nextVictim(per, n, j)) {
+      const B = ents[j];
+      if (!B.cells.length) continue;
+      for (let ai = 0; ai < n; ai++) {
+        const list = per[ai];
+        if (!list) continue;
+        const a = cells[ai];
+        // Its size when it starts on this victim, as in the all-pairs loop;
+        // the mass test below is live.
+        const ra = radiusOf(a.mass);
         // The smallest this cell was during the tick: all it can have eaten
         // on the way, whatever it has eaten since.
         const least = Math.min(a.startMass, a.mass);
-        for (let k = B.cells.length - 1; k >= 0; k--) {
-          const b = B.cells[k];
+        let ate = false;
+        for (const t of list) {
+          const o = owner[t];
+          if (o < j) continue;
+          if (o > j) break;
+          if (gone[t]) continue;
+          const b = filed[t];
           if (a.mass < b.mass * EAT_RATIO) continue;
-          // Axis reject before the sqrt: with a hundred players this pair
-          // loop runs ten thousand times a tick. The first covers anything
-          // the band rules out; the second, the way from where the pair
-          // started to where it ended, so two cells that passed through each
-          // other this tick are not thrown out on where they stopped. A pair
-          // that did not move is rejected exactly as before.
-          const dx = b.x - a.x; if (dx > rw || dx < -rw) continue;
-          const dy = b.y - a.y; if (dy > rw || dy < -rw) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
           const sx = b.startX - a.startX, sy = b.startY - a.startY;
-          if (sweptApart(sx, sy, dx, dy, ra)) continue;
           const rb = radiusOf(b.mass);
           let hit = Math.hypot(dx, dy) < ra - rb * 0.55;
           if (!hit && (sx !== dx || sy !== dy)) {
@@ -1138,11 +1284,16 @@ function cellCombat(world) {
           }
           if (hit) {
             a.mass += b.mass * EAT_BONUS;
-            B.cells.splice(k, 1);
+            B.cells.splice(B.cells.indexOf(b), 1);
+            gone[t] = 1;
             A.eaten++;
             world.events.push({ t: "eat", id: A.id, victim: B.id });
+            ate = true;
           }
         }
+        // Bigger now, so it reaches further: the players after this one are
+        // searched for again at its new size.
+        if (ate) per[ai] = combatCandidates(i, a);
       }
     }
   }

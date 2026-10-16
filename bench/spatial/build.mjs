@@ -25,7 +25,10 @@
 //   csr       pellet grid as a flat counting-sort (CSR) array instead of a
 //             Map of arrays. Same bucket visit order, same results.
 //   gcombat   cellCombat with a uniform-grid broad phase over cells, written
-//             to reproduce the original iteration order exactly.
+//             to reproduce the original iteration order exactly. The
+//             prototype for what shared/sim.js now ships.
+//   pairs     the reverse, for revisions that ship the grid: cellCombat put
+//             back to the all-pairs loop it replaced, verbatim from a44cad8.
 // ---------------------------------------------------------------------------
 
 import fs from "node:fs";
@@ -90,7 +93,7 @@ export const COUNTER_NAMES = [
   "eatCand", "eatNarrow", "pelletEats",
   "snapCand", "snapNarrow", "snapCellTests",
   "combatPairs", "combatIter", "combatMassPass", "combatNarrow", "combatEats",
-  "combatQueries", "combatGridVisits",
+  "combatQueries", "combatGridVisits", "combatCand",
   "virusTests", "feedTests", "ownTests", "botScan",
   // gridMove (the B1 fix): pellets checked after moving, and re-filed
   "gridMoves", "gridRefiles",
@@ -372,13 +375,29 @@ function counted(src) {
     "  __S.tickStartId = world.nextId;\n",
     "  __S.tickStartId = world.nextId;\n  for (const p of world.pellets) p.__moved = false;\n",
     "clear moved flag");
-  // Original cellCombat, counted. Skipped automatically if gcombat replaced it.
-  if (src.includes("      const A = ents[i], B = ents[j];")) {
+  // cellCombat, counted: the all-pairs loop (up to a44cad8, and the pairs
+  // variant) or the grid that replaced it. The gcombat prototype carries its
+  // own counters.
+  const pairsLoop = src.includes("      const A = ents[i], B = ents[j];");
+  const gridLoop = src.includes("  fileCells(world, ents);\n");
+  if (pairsLoop) {
     src = once(src, "      const A = ents[i], B = ents[j];",
       "      const A = ents[i], B = ents[j]; __S.c.combatPairs++;", "combat pairs");
     src = once(src, "          const b = B.cells[k];\n          if (a.mass < b.mass * EAT_RATIO) continue;",
       "          const b = B.cells[k]; __S.c.combatIter++;\n          if (a.mass < b.mass * EAT_RATIO) continue; __S.c.combatMassPass++;",
       "combat iter");
+  }
+  if (gridLoop) {
+    src = once(src, "  const stamp = ++cg.stamp;\n", "  const stamp = ++cg.stamp; __S.c.combatQueries++;\n", "combat queries");
+    src = once(src, "        const t = entries[s];\n", "        const t = entries[s]; __S.c.combatGridVisits++;\n", "combat grid visits");
+    src = once(src, "        (out || (out = [])).push(t);\n", "        (out || (out = [])).push(t); __S.c.combatCand++;\n", "combat candidates");
+    src = once(src, "      const B = ents[j];\n      if (!B.cells.length) continue;\n",
+      "      const B = ents[j];\n      if (!B.cells.length) continue; __S.c.combatPairs++;\n", "combat pairs");
+    src = once(src, "          const b = filed[t];\n          if (a.mass < b.mass * EAT_RATIO) continue;",
+      "          const b = filed[t]; __S.c.combatIter++;\n          if (a.mass < b.mass * EAT_RATIO) continue; __S.c.combatMassPass++;",
+      "combat iter");
+  }
+  if (pairsLoop || gridLoop) {
     src = oneOf(src, "combat narrow", [
       ["          const rb = radiusOf(b.mass);\n          if (Math.hypot(dx, dy) < ra - rb * 0.55) {",
        "          const rb = radiusOf(b.mass); __S.c.combatNarrow++;\n          if (Math.hypot(dx, dy) < ra - rb * 0.55) { __S.c.combatEats++;"],
@@ -652,14 +671,84 @@ function gcombat(src, on) {
   // that also tests along the way it would quietly undo that, so it refuses:
   // a swept version has to insert cells where they end and query each
   // attacker's whole step, widened by the furthest any cell moved.
+  if (src.includes("function fileCells(")) throw new Error("variant gcombat: this revision ships its own grid broad phase in cellCombat; compare it with pairs instead");
   if (src.includes("function closestApproach(")) throw new Error("variant gcombat: this revision tests collisions along each step; the prototype predates it");
   return between(src, "function cellCombat(world) {", "const SCAN = 620",
     counters(COMBAT_GRID, on), "grid combat", ["EAT_BONUS", "B.cells.splice"]);
 }
 
+// ── variant: all pairs ──────────────────────────────────────────────────────
+
+// cellCombat as it was before the grid broad phase shipped: every ordered
+// pair of players, every cell against every cell. Verbatim from a44cad8, so
+// lockstep runs show the grid plays exactly the game this did.
+const ALL_PAIRS = `function cellCombat(world) {
+  const ents = [...world.players.values()].filter(p => p.alive && p.cells.length);
+  // No pair can have closed by more than both their steps on an axis, so a
+  // pair further apart at the end than reach plus twice the longest step any
+  // cell took is rejected on end positions alone, as cheaply as before. Zero
+  // when nothing moved.
+  let step = 0;
+  for (const ent of ents) {
+    for (const c of ent.cells) {
+      const d = Math.max(Math.abs(c.x - c.startX), Math.abs(c.y - c.startY));
+      if (d > step) step = d;
+    }
+  }
+  const band = 2 * step;
+  for (let i = 0; i < ents.length; i++) {
+    for (let j = 0; j < ents.length; j++) {
+      if (i === j) continue;
+      const A = ents[i], B = ents[j];
+      if (!A.cells.length || !B.cells.length) continue;
+      for (const a of A.cells) {
+        const ra = radiusOf(a.mass), rw = ra + band;
+        // The smallest this cell was during the tick: all it can have eaten
+        // on the way, whatever it has eaten since.
+        const least = Math.min(a.startMass, a.mass);
+        for (let k = B.cells.length - 1; k >= 0; k--) {
+          const b = B.cells[k];
+          if (a.mass < b.mass * EAT_RATIO) continue;
+          // Axis reject before the sqrt: with a hundred players this pair
+          // loop runs ten thousand times a tick. The first covers anything
+          // the band rules out; the second, the way from where the pair
+          // started to where it ended, so two cells that passed through each
+          // other this tick are not thrown out on where they stopped. A pair
+          // that did not move is rejected exactly as before.
+          const dx = b.x - a.x; if (dx > rw || dx < -rw) continue;
+          const dy = b.y - a.y; if (dy > rw || dy < -rw) continue;
+          const sx = b.startX - a.startX, sy = b.startY - a.startY;
+          if (sweptApart(sx, sy, dx, dy, ra)) continue;
+          const rb = radiusOf(b.mass);
+          let hit = Math.hypot(dx, dy) < ra - rb * 0.55;
+          if (!hit && (sx !== dx || sy !== dy)) {
+            // On the way: the eater at its smallest, the prey at its largest.
+            const most = Math.max(b.startMass, b.mass);
+            hit = least >= most * EAT_RATIO &&
+              closestApproach(sx, sy, dx, dy) < radiusOf(least) - radiusOf(most) * 0.55;
+          }
+          if (hit) {
+            a.mass += b.mass * EAT_BONUS;
+            B.cells.splice(k, 1);
+            A.eaten++;
+            world.events.push({ t: "eat", id: A.id, victim: B.id });
+          }
+        }
+      }
+    }
+  }
+}
+
+`;
+
+function pairs(src) {
+  if (!src.includes("  fileCells(world, ents);\n")) throw new Error("variant pairs: this revision's cellCombat already tests all pairs");
+  return between(src, "function cellCombat(world) {", "const SCAN = 620", ALL_PAIRS, "all pairs", ["fileCells(world, ents)"]);
+}
+
 // ── build ───────────────────────────────────────────────────────────────────
 
-export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = false, counted: k = false, tag = "", gridSize = null } = {}, outRoot) {
+export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = false, pairs: pr = false, counted: k = false, tag = "", gridSize = null } = {}, outRoot) {
   let sim = source("sim.js");
   let protocol = source("protocol.js");
   const codec = source("codec.js");
@@ -669,12 +758,13 @@ export function buildVariant({ fresh: f = false, csr: c = false, gcombat: g = fa
   if (gridSize) sim = once(sim, "const GRID = 220;", `const GRID = ${gridSize};`, "grid size");
   if (c) sim = csr(sim, k);
   if (g) sim = gcombat(sim, k);
+  if (pr) sim = pairs(sim);
   if (f) sim = fresh(sim);
   if (k) { sim = counted(sim); protocol = countedProtocol(protocol); }
 
   // `tag` gives a second, independent module instance of the same build, for
   // lockstep runs that need two worlds with separate __S flags.
-  const name = [k ? "counted" : "plain", f && "fresh", c && "csr", g && "gcombat", gridSize && `g${gridSize}`, tag].filter(Boolean).join("-");
+  const name = [k ? "counted" : "plain", f && "fresh", c && "csr", g && "gcombat", pr && "pairs", gridSize && `g${gridSize}`, tag].filter(Boolean).join("-");
   const root = path.join(outRoot || process.env.SPATIAL_BUILD_DIR || path.join(os.tmpdir(), "petri-spatial-builds"), REV);
   const dir = path.join(root, name);
   fs.mkdirSync(dir, { recursive: true });
@@ -698,6 +788,7 @@ export const VARIANTS = {
   fresh: { fresh: true },
   csr: { csr: true },
   gcombat: { gcombat: true },
+  pairs: { pairs: true },
   all: { fresh: true, csr: true, gcombat: true },
   // Bucket-size sweep on the recommended layout.
   "all-g110": { fresh: true, csr: true, gcombat: true, gridSize: 110 },
