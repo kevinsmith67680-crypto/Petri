@@ -68,7 +68,7 @@ for (const s of scenarios) {
     const m = results.timing[s][v].ms;
     console.error(`${s.padEnd(9)} ${v.padEnd(8)} total ${m.total.avg.toFixed(2)}ms  p99 ${m.total.p99.toFixed(2)}  exAI ${m.totalExAI.avg.toFixed(2)}`);
   }
-  for (const v of ["current", "gcombat", "pairs"]) {
+  for (const v of ["current", "gcombat", "pairs", "mapgrid"]) {
     if (!variants.includes(v)) continue;
     results.counted[s] = results.counted[s] || {};
     results.counted[s][v] = runOne(s, v, ["--counted", "--seed", "1"]);
@@ -132,6 +132,18 @@ for (const s of shown) {
     shownVariants.map(v => `${f(t[v].ms.totalExAI.avg)} / ${f(t[v].ms.totalExAI.p99)}`).join(" | ") + " | " +
     shownVariants.map(v => f(t[v].ms.combat.avg, 3)).join(" | ") + " | " +
     shownVariants.map(v => f(t[v].ms.grid.avg + t[v].ms.gridFresh.avg, 3)).join(" | ") + " |");
+}
+rows.push("");
+rows.push("The pellet grid and what queries it (ms per tick, avg; median of reps)");
+rows.push("");
+rows.push(`| Scenario | ${shownVariants.map(v => `${v}: rebuild / snapshots / eatPellets / bot AI`).join(" | ")} |`);
+rows.push(`|---|${shownVariants.map(() => "---:").join("|")}|`);
+for (const s of shown) {
+  const t = results.timing[s];
+  rows.push(`| ${t.current?.label || s} | ` + shownVariants.map(v => {
+    const m = t[v].ms;
+    return `${f(m.grid.avg + m.gridFresh.avg, 3)} / ${f(m.snap.avg)} / ${f(m.eat.avg, 3)} / ${f(m.bot.avg)}`;
+  }).join(" | ") + " |");
 }
 rows.push("");
 rows.push("cellCombat alone (ms per tick, avg / p99 / max; median of reps)");
