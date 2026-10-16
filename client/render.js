@@ -23,6 +23,34 @@ const CAMERA_FOLLOW = 24;
 // Zoom stays gentle. It changes rarely and a snappy zoom is nauseating.
 const CAMERA_ZOOM_RATE = 4;
 
+// Distance-based steering: how far the cursor has to be from your cell, on
+// screen, for it to steer at full speed. Nearer in, speed falls in a straight
+// line to nothing on the cell itself (steerThrottle in shared/sim.js).
+//
+// A share of the distance from the middle of the screen to its nearest edge,
+// not a pixel count. The pointer and the window are both measured in CSS
+// pixels, so device pixel ratio and the sharp setting change nothing; a phone
+// and a 1440p monitor reach full speed the same proportion of the way out;
+// and a resized window is picked up on the next frame.
+//
+// Why 0.6 — about 246px on the 820px-tall screen the camera is framed for:
+//   * Full speed has to be reachable in every direction, with room to hold
+//     it without pinning the cursor to the edge. The camera trails the cell
+//     by about 35ms at 60fps (the follow below), which draws a starting
+//     cell some 24px ahead of the screen centre at top speed, so full speed
+//     sits 65–68% of the way to the nearest edge on every screen size
+//     measured, phone to 1440p. The outer third is left to hold it in.
+//   * Under the old rule a starting cell was at full speed 24px from its
+//     centre, 0.9 of its own radius: precision only existed inside your own
+//     membrane. This spreads it across ten times that.
+//   * It stays wider than 0.9 radii of your cell up to about 6,900 mass on
+//     that screen, so the curve is a straight line for any cell a round
+//     normally sees. Past that the old rule sets the full-speed distance.
+export const MOUSE_FULL_SPEED_DISTANCE = 0.6;
+
+// The full-speed distance in CSS pixels for a viewport.
+export const fullSpeedPixels = (vw, vh) => (MOUSE_FULL_SPEED_DISTANCE * Math.min(vw, vh)) / 2;
+
 export const THEMES = {
   light: {
     outside: "#f4f4f2",
@@ -402,6 +430,16 @@ export function createRenderer(canvas, mapCanvas) {
     y: camera.y + (sy - state.vh / 2) / camera.scale
   });
 
+  // The full-speed distance in world units at the zoom the camera is drawn at
+  // right now: the reach that travels with the aim. Dividing by the live zoom
+  // is what keeps the curve fixed on the screen as the camera pulls back with
+  // mass; a reach fixed in world units would take less and less cursor travel
+  // the bigger you got. 0 — the old rule — with no viewport to measure.
+  const fullSpeedReach = camera =>
+    camera.scale > 0 ? fullSpeedPixels(state.vw, state.vh) / camera.scale : 0;
+
   resize();
-  return { resize, draw, drawMinimap, follow, initialScale, screenToWorld, setSharp, state };
+  return {
+    resize, draw, drawMinimap, follow, initialScale, screenToWorld, fullSpeedReach, setSharp, state
+  };
 }

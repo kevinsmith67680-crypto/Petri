@@ -147,6 +147,14 @@ live in `petri.progress`. Without it the game still plays: joins and matches fal
 to the starting figures and fill-only seating, and the menu's career stats still load.
 But nothing a round earns is saved. The round-end write fails and logs `progress:`.
 
+**This branch: speed follows the cursor's distance, with no version bump.** Aims and
+actions gained a two-byte full-speed reach (aim 9 bytes, action 10; were 7 and 8). The
+server reads both forms and the client only adds the reach when the welcome says
+`aimReach`, so open tabs are **not** told to reload: a tab from before keeps the old
+full-speed-everywhere steering until it reloads, which is no faster than the new rule
+allows. The top speed per mass is unchanged; README, "Speed follows the cursor's
+distance", has the rest.
+
 **Apply `server/db/migrations/010_zone_outcome.sql`.** A player drained by the closing
 zone is recorded with outcome `zone`, which the old check constraint refuses. Without
 it the game still plays and still settles — the stake is forfeit either way — but each

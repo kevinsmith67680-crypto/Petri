@@ -166,7 +166,8 @@ index.html  markup and CSS
 Both connection adapters expose the same interface:
 
 ```js
-conn.sendAim(dx, dy)     // aim offset from your own centroid, in world units
+conn.sendAim(dx, dy, reach) // aim offset from your own centroid, and the full-speed
+                            // reach, both in world units
 conn.sendAction("split") // or "eject", or "respawn"
 conn.update(dt)
 conn.getView()           // -> { time, cells, pellets, viruses, me, board }
@@ -175,7 +176,7 @@ conn.on("event", fn)
 
 `main.js` picks one on line ~40 and never mentions the difference again. Offline play is now just a server that happens to live in the same process.
 
-Aim is sent as an **offset from your own centroid**, not a screen coordinate and not an absolute world point. Screen coordinates would be meaningless to a server that doesn't know your zoom level or window size; the offset means the same thing to everyone.
+Aim is sent as an **offset from your own centroid**, not a screen coordinate and not an absolute world point. Screen coordinates would be meaningless to a server that doesn't know your zoom level or window size; the offset means the same thing to everyone. The **reach** is how far from a cell the aim point must be for it to steer at full speed — the client's full-speed screen distance at its current zoom, already in world units — so speed can follow the cursor's distance on screen without the server knowing anything about the screen. See "Speed follows the cursor's distance".
 
 ## Cheating: what is closed, and what isn't
 
@@ -190,9 +191,10 @@ The corollary is worth internalising: **never move a rule back to the client for
 | Speed hack, teleport, mass editing | Client sends inputs only; the server simulates |
 | Seeing the whole map | Area-of-interest culling in `protocol.js` — a player physically cannot be sent what is outside their view radius |
 | Message flooding | Token buckets: 80 messages/sec, 12 actions/sec, then the socket is closed |
-| Oversized payloads | `maxPayload` of 1024 bytes, which the join's match ticket needs; an aim frame is 5 |
+| Oversized payloads | `maxPayload` of 1024 bytes, which the join's match ticket needs; an aim frame is 9 |
 | Malformed binary frames | Every read is bounds-checked; counts validated before allocating; decode failure closes the socket |
 | `NaN`/`Infinity` injection into physics | Aim values are checked with `Number.isFinite` and magnitude-capped in `setAim` |
+| Steering past the mass speed limit with a doctored reach | The reach only picks a share, 0 to 1, of `topSpeedOf(mass)`; `clampReach` bounds it to the arena; the smallest reach buys the old rule, which a cursor at the screen edge already gets |
 | Multi-boxing, connection floods | `MAX_CONN_PER_IP`, default 3 |
 | Third-party clients pointed at your server | `ALLOWED_ORIGINS` allowlist. WebSockets are **not** covered by the browser same-origin policy, so this has to be checked explicitly — it is not automatic |
 | Combat logging (disconnecting to escape a fight) | Cells linger for 6 seconds after you drop, motionless and edible |
@@ -217,7 +219,7 @@ If it ever matters enough, the standard next step is accounts — a login requir
 
 ## Wire protocol
 
-Gameplay travels as binary frames; control messages (join, welcome) stay as JSON text because they are rare and easier to debug. An aim message is **7 bytes**: the offset, and a number the snapshot acknowledges (see *Reconciliation by input replay*).
+Gameplay travels as binary frames; control messages (join, welcome) stay as JSON text because they are rare and easier to debug. An aim message is **9 bytes**: the offset, a number the snapshot acknowledges (see *Reconciliation by input replay*), and the full-speed reach as a `u16` (see *Speed follows the cursor's distance*). Actions carry the same aim, reach included, in 10. The reach is negotiated rather than versioned — the server reads a 7-byte aim or an 8-byte action from an older client as "no reach", and the client only adds it when the welcome carries `aimReach` — so it needed no `PROTOCOL_VERSION` bump, and a deploy does not send a room mid-round to reload.
 
 Pellets are sent as **deltas against a server-held known-set**, not re-sent every tick. Measured with 100 players at a realistic mass spread (20 to 2,000):
 
@@ -560,6 +562,30 @@ Every HUD write now goes through a guard that compares against the last value:
 **Movement was sharp because a cell could reverse in a single frame.** Every twitch of the mouse became a hard corner, which is not how agar.io feels. Heading and speed now ease toward their targets with an 80ms time constant: one frame of opposite input barely moves the heading, and a full reversal takes about 300ms. It lives in `shared/sim.js` so the server and the client's prediction steer identically — client-only smoothing would have fought the correction every tick.
 
 With the simulation providing the softness, the camera went back to a tight 45ms follow. Softening both at once made the picture floaty.
+
+### Speed follows the cursor's distance
+
+How far the pointer is from your cell sets how much of your top speed you steer at: nothing on the cell, rising in a straight line to all of it at the **full-speed distance**, and never more past it. Before, a starting cell was at full speed 24px from its centre — 0.9 of its own radius — so slow, precise movement only existed inside your own membrane.
+
+**The top speed is untouched.** `topSpeedOf(mass)` in `shared/sim.js` is the formula the game has always used, `BASE_SPEED · mass^-0.24 · 60`, given a name. `steerThrottle` picks a share of it from 0 to 1, and the heading is a unit vector, so neither the aim's length nor its direction can buy more. Distance is a length, so a diagonal is no faster than a straight line.
+
+**The full-speed distance is 60% of the way from the middle of the screen to its nearest edge** — `MOUSE_FULL_SPEED_DISTANCE` in `client/render.js`. That is 246px on the 820px-tall screen the camera is framed for, 287px at 1080p, 117px on a phone. It is a share of the screen rather than a pixel count, in CSS pixels, so the sharp setting and device pixel ratio change nothing and a resized window is picked up on the next frame. Why 60%: full speed has to be reachable in every direction with room to hold it, and with the camera's follow lag it lands 65–68% of the way out on every screen size from a phone to 1440p.
+
+**Zoom does not change the feel.** The client converts the distance into world units at the camera's live zoom (`fullSpeedReach`) and sends that **reach** with the aim. As the camera pulls back with mass the reach grows in world units and stays put on the screen. The reach rides on every numbered input, actions included, so input replay steers by exactly the reach each server tick used.
+
+**The server still decides.** The reach is not a speed. `setAim` bounds it to the arena (`clampReach`) and zeroes a non-finite aim, and the most any reach can buy is the top speed a cursor at the edge of the screen already gets. A reach of 0 is the old rule exactly, which is how bots steer and how an aim from a client that predates the reach is read.
+
+**Split pieces each measure their own distance** to the aim point: a piece far from the cursor runs at full speed and one under it stops, so steering pieces back together still works. Split launches, burst fragments and ejected mass are impulses, separate from steering, and are untouched.
+
+**No dead zone was needed.** Two pixels of tremor around the centre moves the server's cell at under 1% of its top speed, and no frame moves the drawn cell as much as a tenth of a pixel; the existing `d > 1` guard in `advanceCell` already stops a cell whose aim is within one world unit.
+
+**What to know about it:**
+
+- The curve is exact measured from your cell **as drawn**. The camera trails the cell by about 35ms at 60fps, so a fast cell is drawn slightly ahead of the screen centre; measured from the screen centre, a starting cell with the cursor at the full-speed distance runs at about 91% of top and reaches full speed at about 1.1 times the distance. The gap closes as cells grow and slow — about 98% at mass 3,000. Measured in a real browser at 1458×820, 1920×955 at 2× and 390×664 at 3×.
+- Parking the cursor between your split pieces brings them together a little more gently, since each slows as it reaches the cursor: they merge about 0.4s later after the cooldown than before. The cooldown itself is unchanged.
+- For a cell so big that 0.9 of its on-screen radius is wider than the full-speed distance — about 6,900 mass on the reference screen — the old rule's own full-speed distance takes over, as it always did.
+
+`test/steer.test.js` holds all of it: the curve at four masses, every heading, every zoom and screen size, a fuzz of the old rule kept verbatim in the test (bit-identical with no reach, and with the aim past the reach), a seeded arena of bots, orbs, viruses, splits and kills that must play out bit for bit as before, hostile aims and reaches straight off the wire, and the real client against a real simulation over a 120ms round trip.
 
 ### Why the moves felt late, and why the motion had a faint stutter
 

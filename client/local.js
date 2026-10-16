@@ -36,7 +36,7 @@ export function createLocalConnection({
 
     on(kind, fn) { listeners[kind]?.push(fn); },
 
-    sendAim(dx, dy) { setAim(world, "me", dx, dy); },
+    sendAim(dx, dy, reach) { setAim(world, "me", dx, dy, reach); },
     sendAction(action) { queueAction(world, "me", action); },
     // Practice only. The bots here are this tab's own, so the player may pick
     // how hard they are, and change it between runs without a new arena.
