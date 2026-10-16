@@ -98,6 +98,8 @@ worse: mass fed from one account to another is now paid for by the house.
 Slower growth (README, "How fast you grow") cut the sizes this pays out on by
 roughly four times for a lone farmer and far more for a round's leader, but it bounds
 nothing: a big enough round still costs the house whatever its winners weigh.
+The orb has since gone from 2 mass back up to 4, which gives some of the farmer's
+cut back; those figures were measured at 2.
 
 The fix is a decision before it is code: a rate derived from the round's pot
 (each place's share of the real prize pool, by mass), a cap, or an operator who
