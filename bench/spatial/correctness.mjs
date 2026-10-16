@@ -466,7 +466,7 @@ c6long("currentC", "splits", QUICK ? 300 : 1200);
 c6long("currentC", "eject", QUICK ? 300 : 1200);
 
 console.log("\nC7  very large cells");
-c7("current"); c7("gcombat");
+c7("current"); need("gcombat") && c7("gcombat");
 console.log("\nC8  walls and bucket corners");
 c8("current"); need("csr") && c8("csr");
 console.log("\nC9  snapshot area of interest");
@@ -479,6 +479,13 @@ console.log("\nC11 discrete collision steps at the normal tick");
 c11("current");
 
 console.log("\nE   alternatives produce bit-identical games (lockstep state hash)");
+// The instrumented build replaces eatPellets with a copy carrying counters and
+// the brute-force hooks. With the hooks off it must play exactly like the
+// real thing, or every count above describes some other game.
+for (const key of ["eject", "splits", "full"]) {
+  const d = lockstep("current", "currentC", key, Math.min(LT, 600), { seed: 23 });
+  check(`E.${key}`, `the instrumented build plays identically to the plain one`, "currentC", d < 0, { firstDivergentTick: d });
+}
 for (const key of ["full", "dense", "giants", "splits", "eject", "churn"]) {
   for (const [a, b] of [["current", "csr"], ["current", "gcombat"], ["fresh", "all"]]) {
     if (!need(a, b)) continue;

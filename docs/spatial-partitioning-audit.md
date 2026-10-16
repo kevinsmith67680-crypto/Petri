@@ -35,6 +35,59 @@ that cross a bucket line are touched: 0 a tick in the live Standard config,
   whole grid after pellets move, as C-1 below first proposed, would add
   0.48–0.58 ms a tick.
 
+## Update: R1 fixed
+
+Collisions are now tested along each step as well as at its end ("swept
+collision" in `shared/sim.js`). That covers eating orbs and thrown mass,
+eating cells, popping on viruses (a cell crossing one, or a shot virus
+crossing a cell) and feeding viruses.
+
+- **Two stages, adding only.** Each test is made at the end of the tick
+  exactly as before. Then, only if that fails and something moved, it is made
+  along both entities' straight steps, which is how the sim already integrates
+  motion, so nothing is approximated. A pair that did not move gets
+  bit-identical results.
+- **Rules unchanged.** The eat ratio, the 0.55 overlap, the owner cooldown,
+  the receding rule, pop mass, feeding only in flight, one pop per player per
+  tick, and the order players and cells are processed in are all as before.
+- **No reaching back.** Swept thresholds use the least favourable size each
+  side had during the tick: the eater's smallest, the prey's largest, the
+  popping cell's smallest. A cell that grew past a threshold only at the end
+  of the tick cannot claim what it passed while below it.
+- **Broad phase covers the step.**
+  - The eat query covers each cell's whole step, padded by the furthest any
+    pellet moved that tick (0 when nothing was thrown).
+  - The combat reject covers the pair's relative path, behind a band filter
+    (twice the longest step any cell took) so far-apart pairs are still
+    rejected on end positions alone.
+  - Virus and feed tests reject on path boxes.
+- **`dt` unchanged.** The tick stays at 20 Hz, stepped by measured time capped
+  at 250 ms. Collisions no longer depend on the step length, and sub-stepping a
+  late tick would only have made it later.
+- **How much it matters at 20 Hz** (`results/r1-swept-share.txt`): caught only
+  along the way were 7.0% of kills and 1.9% of orb eats in the live Standard
+  config, 6.7% / 6.0% in split play, and 8.3% / 6.6% in an ejected-mass storm.
+- **Verified:**
+  - `test/sweep.test.js`, now in `npm test`, fails 23 checks on the pre-change
+    code and passes on this.
+  - In `bench/spatial/correctness.mjs` C10 and C11 now pass, with nothing
+    failing (`results/correctness-r1-fix.txt`).
+  - `test/grid.test.js`'s brute-force predictor applies the full swept rule
+    and still agrees eat-for-eat.
+- **Cost** (`results/r1-sweep-perf.md`, `results/sweep-combat-cost.txt`):
+  - Tick and sim averages are within noise in all six scenarios.
+  - `eatPellets` is 0.05–0.25 ms a tick more.
+  - On identical frozen split-heavy states, `cellCombat` is 1–11% more.
+  - Whole-game p99s differ by more than that in split play, because the games
+    diverge once the sweep catches what the old test missed.
+- **Not changed:**
+  - Client prediction of the player's own orb eats still tests end points.
+    At 60 fps its steps are small, and the server stays authoritative.
+  - A pre-existing glitch: pushing a player's own pieces apart happens after
+    the wall clamp, which can leave one a few units past the wall.
+  - The H-1 grid prototype tests end points only. A swept version must insert
+    cells where they end and query each attacker's whole step plus the band.
+
 ## Status at the branch head (`a8319cc`)
 
 Thirteen commits landed while the audit ran: Poisson-disc orb sowing, a
@@ -426,8 +479,9 @@ bucket, so it is bit-identical.
 
 ### Medium: smaller or less certain benefit
 
-**M-1. Let fast pieces collide along their path.** This addresses R1, in two
-parts.
+**M-1. Let fast pieces collide along their path.** *Done with the swept
+test; the step length and tick rate are unchanged. See "Update: R1 fixed" at
+the top.* This addresses R1, in two parts.
 
 - **Bound the step.** `server/index.js:2077` lets one `stepWorld` cover up to
   250 ms. Either split a long interval into sub-steps of at most `1 / TICK_HZ`,

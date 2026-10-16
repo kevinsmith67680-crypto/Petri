@@ -53,9 +53,10 @@ export const VIRUS_FEED_HITS = 3;
 // puts it ~450 units out over about a second and a half, which reads as a
 // heavy thing drifting into place and is far enough to aim at somebody.
 //
-// 820 units/second is also 41 per tick, just under the 45-unit radius of the
-// smallest cell a virus can pop — so a virus cannot step straight over a cell
-// it should have burst.
+// 820 units/second is also 41 per 50ms tick, under the 45-unit radius of the
+// smallest cell a virus can pop. That alone does not stop a virus stepping
+// over a cell — a late tick can be five times as long — which is why pops are
+// also tested along each step (see "swept collision").
 export const VIRUS_SPLIT_SPEED = 820;
 const VIRUS_FRICTION = 0.97;          // per 1/60s, for readability
 const VIRUS_DECAY = Math.pow(VIRUS_FRICTION, 60);
@@ -330,14 +331,19 @@ function gridMove(g, p, was) {
 // Visits every pellet in the buckets overlapping the box around (x, y, r).
 // Callers still do their own circle test; this only narrows the candidates.
 export function forEachPelletNear(world, x, y, r, fn) {
+  forEachPelletIn(world, x - r, y - r, x + r, y + r, fn);
+}
+
+// The same over any box, for a query that has to cover a whole path.
+function forEachPelletIn(world, minX, minY, maxX, maxY, fn) {
   // Lazily build rather than silently returning nothing: encodeSnapshot can be
   // called before the first tick, and an empty result there would look like
   // "no orbs in view" rather than "index not ready".
   if (!world.grid) buildPelletGrid(world);
-  const x0 = Math.max(0, ((x - r) / GRID) | 0);
-  const x1 = ((x + r) / GRID) | 0;
-  const y0 = Math.max(0, ((y - r) / GRID) | 0);
-  const y1 = ((y + r) / GRID) | 0;
+  const x0 = Math.max(0, (minX / GRID) | 0);
+  const x1 = (maxX / GRID) | 0;
+  const y0 = Math.max(0, (minY / GRID) | 0);
+  const y1 = (maxY / GRID) | 0;
   for (let gx = x0; gx <= x1; gx++) {
     for (let gy = y0; gy <= y1; gy++) {
       const bucket = world.grid.get(key(gx, gy));
@@ -347,6 +353,62 @@ export function forEachPelletNear(world, x, y, r, fn) {
   }
 }
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+// ── swept collision ─────────────────────────────────────────────────────────
+//
+// Everything that moves is integrated as one straight step per tick, so during
+// a tick a cell, a pellet or a virus is somewhere on the segment from where it
+// started to where it ends. Testing collisions only at the end of the tick
+// misses whatever that segment passed over. At 20Hz a small split half travels
+// further in one step than its eat window on small prey is wide, and a late
+// tick (the server steps by measured time, up to 250ms) does the same to
+// thrown mass, shot viruses and big split pieces.
+//
+// So every test is made twice. First at the end of the tick, exactly as it
+// always was. Then, only if that fails and something moved, along the two
+// paths, as if both moved together over the tick. The second can only add a
+// collision the first missed; it never removes one, so a pair that did not
+// move behaves exactly as before. Its thresholds use the least favourable size
+// either side had during the tick, so a cell that only became big enough by
+// the end cannot reach back for something it passed while still too small.
+//
+// Offsets below are "target minus mover": (sx, sy) when the tick began, (ex,
+// ey) at its end.
+
+// The closest the two came during the tick.
+function closestApproach(sx, sy, ex, ey) {
+  const wx = ex - sx, wy = ey - sy;
+  const ww = wx * wx + wy * wy;
+  let t = ww > 0 ? -(sx * wx + sy * wy) / ww : 1;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(sx + wx * t, sy + wy * t);
+}
+
+// Whether the pair came within `reach` at a moment when the target was not
+// receding, (ux, uy) being the direction the target itself was travelling —
+// the rule eatPellets applies at the end of the tick. A target at rest
+// (0, 0) cannot recede.
+function sweptWithin(sx, sy, ex, ey, reach, ux, uy) {
+  const wx = ex - sx, wy = ey - sy;
+  const a = wx * wx + wy * wy;
+  if (!a) return false;                  // no relative motion: the end test stands
+  const b = sx * wx + sy * wy;
+  const disc = b * b - a * (sx * sx + sy * sy - reach * reach);
+  if (disc <= 0) return false;
+  const root = Math.sqrt(disc);
+  const lo = Math.max(0, (-b - root) / a), hi = Math.min(1, (-b + root) / a);
+  if (lo >= hi) return false;
+  if (!ux && !uy) return true;
+  // Receding is linear in time, so if it holds at both ends of the window it
+  // holds throughout.
+  return (sx + wx * lo) * ux + (sy + wy * lo) * uy <= 0 ||
+         (sx + wx * hi) * ux + (sy + wy * hi) * uy <= 0;
+}
+
+// Cheap reject for a moving pair: the offset's path stays clear of the
+// square of half-size r on one axis.
+const sweptApart = (sx, sy, ex, ey, r) =>
+  (sx > r && ex > r) || (sx < -r && ex < -r) || (sy > r && ey > r) || (sy < -r && ey < -r);
 
 // ── deterministic randomness ────────────────────────────────────────────────
 
@@ -382,6 +444,7 @@ export function createWorld(seed = 1, opts = {}) {
     nextVid: 1,       // and the same for viruses, which the client matches on
     pellets: [],
     pelletsDirty: false,
+    pelletStep: 0,    // furthest any pellet moved this tick, on either axis
     grid: null,
     viruses: [],
     players: new Map(),
@@ -533,8 +596,10 @@ function advanceVirus(v, dt, size) {
   if (Math.abs(v.vx) < 1 && Math.abs(v.vy) < 1) { v.vx = 0; v.vy = 0; }
 }
 
+// startX/startY/startMass are where and how big the cell was when the current
+// tick began, for the swept collision tests; a cell made mid-tick starts here.
 function makeCell(world, x, y, mass, ci) {
-  return { id: world.nextId++, x, y, mass, ci, vx: 0, vy: 0, mergeAt: 0 };
+  return { id: world.nextId++, x, y, mass, ci, vx: 0, vy: 0, mergeAt: 0, startX: x, startY: y, startMass: mass };
 }
 
 // ── players ─────────────────────────────────────────────────────────────────
@@ -873,24 +938,46 @@ function burst(world, ent, cell) {
 // Eaten pellets are flagged rather than spliced out, so the grid built at the
 // start of the tick stays valid for everyone else. They are swept once at the
 // end of the tick.
+//
+// The query covers the cell's whole path this tick, widened by the furthest
+// any pellet moved (pellets are filed where they ended up), so a pellet the
+// cell passed over early in a long step is still a candidate.
 function eatPellets(world, ent) {
+  const now = world.tick;
+  const pad = ORB_RADIUS * 3 + world.pelletStep;
   for (const c of ent.cells) {
     const r = radiusOf(c.mass);
-    forEachPelletNear(world, c.x, c.y, r + ORB_RADIUS * 3, p => {
+    // The swept test reaches no further than the cell's smallest size this
+    // tick: one that has just merged must not claim what it passed before.
+    const rs = radiusOf(Math.min(c.startMass, c.mass));
+    const moved = c.startX !== c.x || c.startY !== c.y;
+    const q = r + pad;
+    forEachPelletIn(world,
+      Math.min(c.x, c.startX) - q, Math.min(c.y, c.startY) - q,
+      Math.max(c.x, c.startX) + q, Math.max(c.y, c.startY) + q, p => {
       if (p.dead) return;
       // Your own mass is yours again only after the cooldown, so driving
       // forward sails past it instead of hoovering it up.
       if (p.owner === ent.id && world.time < p.ownerFree) return;
-      // And nothing receding can have been swallowed, whoever threw it.
-      if (p.vx || p.vy) {
-        const away = (p.x - c.x) * p.vx + (p.y - c.y) * p.vy;
-        if (away > 0) return;
-      }
       const dx = p.x - c.x, dy = p.y - c.y;
       // An ejected blob is large enough that ignoring its radius would mean
       // visibly overlapping it without eating it.
-      const reach = r + pelletRadius(p) * 0.6;
-      if (dx * dx + dy * dy < reach * reach) {
+      const pr = pelletRadius(p) * 0.6;
+      const reach = r + pr;
+      // And nothing receding can have been swallowed, whoever threw it.
+      const away = p.vx || p.vy ? dx * p.vx + dy * p.vy : 0;
+      let hit = away <= 0 && dx * dx + dy * dy < reach * reach;
+      if (!hit) {
+        const pm = p.movedAt === now;
+        if (moved || pm) {
+          const px0 = pm ? p.startX : p.x, py0 = pm ? p.startY : p.y;
+          // Receding is judged by the way the pellet travels: its velocity,
+          // or its last step if that has just run out.
+          const ux = p.vx || p.vy ? p.vx : p.x - px0, uy = p.vx || p.vy ? p.vy : p.y - py0;
+          hit = sweptWithin(px0 - c.startX, py0 - c.startY, dx, dy, rs + pr, ux, uy);
+        }
+      }
+      if (hit) {
         c.mass += p.mass;
         p.dead = true;
         world.pelletsDirty = true;
@@ -907,16 +994,35 @@ function eatPellets(world, ent) {
 //
 // The hit is tested against the virus centre plus the blob's own radius, which
 // is what the thrower sees — a blob visibly touching the spikes registers.
+//
+// In flight means it moved this tick. A blob still moving at the end is tested
+// where it is, as always; along its path too, so one that crossed the virus in
+// a single step, or came to rest just past it, still feeds it.
 function feedViruses(world) {
+  const now = world.tick;
   for (const p of world.pellets) {
-    // Velocity first: it is the most selective test by a long way. Thousands
+    // Movement first: it is the most selective test by a long way. Thousands
     // of orbs sit still, and this pass runs over all of them every tick.
-    if (!p.vx && !p.vy) continue;
+    if (p.movedAt !== now) continue;
     if (p.dead || p.owner === undefined) continue;
+    const flying = p.vx || p.vy;
+    const pr = pelletRadius(p);
+    // The ground the blob covered this tick, as a box: most viruses are
+    // nowhere near it, and a still one outside it is rejected on four compares.
+    const x0 = Math.min(p.x, p.startX), x1 = Math.max(p.x, p.startX);
+    const y0 = Math.min(p.y, p.startY), y1 = Math.max(p.y, p.startY);
     for (const v of world.viruses) {
+      const reach = radiusOf(v.mass) + pr;
+      if (v.movedAt !== now &&
+          (v.x + reach < x0 || v.x - reach > x1 || v.y + reach < y0 || v.y - reach > y1)) continue;
       const dx = p.x - v.x, dy = p.y - v.y;
-      const reach = radiusOf(v.mass) + pelletRadius(p);
-      if (dx * dx + dy * dy > reach * reach) continue;
+      let hit = flying && dx * dx + dy * dy <= reach * reach;
+      if (!hit) {
+        const vm = v.movedAt === now;
+        const sx = p.startX - (vm ? v.startX : v.x), sy = p.startY - (vm ? v.startY : v.y);
+        hit = !sweptApart(sx, sy, dx, dy, reach) && closestApproach(sx, sy, dx, dy) <= reach;
+      }
+      if (!hit) continue;
 
       p.dead = true;
       world.pelletsDirty = true;
@@ -924,10 +1030,12 @@ function feedViruses(world) {
 
       // Full. The child is shot off along the line the mass came in on, which
       // is the whole point: you aim a virus at somebody by choosing where you
-      // stand when you feed it.
+      // stand when you feed it. A blob that has just stopped still came in
+      // along its last step.
       v.fed = 0;
-      const speed = Math.hypot(p.vx, p.vy) || 1;
-      splitVirus(world, v, p.vx / speed, p.vy / speed);
+      const ux = flying ? p.vx : p.x - p.startX, uy = flying ? p.vy : p.y - p.startY;
+      const speed = Math.hypot(ux, uy) || 1;
+      splitVirus(world, v, ux / speed, uy / speed);
       break;
     }
   }
@@ -945,13 +1053,29 @@ function splitVirus(world, parent, dirX, dirY) {
 
 // A virus pops any cell big enough to swallow it, the moment that cell's body
 // covers the virus centre. Smaller cells pass over untouched and can shelter.
+//
+// Along the way as well: a cell crossing a virus in one step, or a shot virus
+// crossing a cell, covered its centre in between. Only if the cell was big
+// enough to pop for the whole tick, so a piece that grew past the line during
+// the tick is judged where it ended.
 function eatViruses(world, ent) {
+  const now = world.tick;
   for (const c of ent.cells) {
     if (c.mass <= VIRUS_MASS * VIRUS_EAT_RATIO) continue;
     const r = radiusOf(c.mass);
+    const least = Math.min(c.startMass, c.mass);
+    const rs = least > VIRUS_MASS * VIRUS_EAT_RATIO ? radiusOf(least) : 0;
+    const moved = c.startX !== c.x || c.startY !== c.y;
     for (let i = world.viruses.length - 1; i >= 0; i--) {
       const v = world.viruses[i];
-      if (Math.hypot(v.x - c.x, v.y - c.y) < r) {
+      const dx = v.x - c.x, dy = v.y - c.y;
+      const vm = v.movedAt === now;
+      const sx = (vm ? v.startX : v.x) - c.startX, sy = (vm ? v.startY : v.y) - c.startY;
+      // Neither the end nor the way there comes within the cell's reach on
+      // some axis: no hypot needed.
+      if (sweptApart(sx, sy, dx, dy, r)) continue;
+      if (Math.hypot(dx, dy) < r ||
+          (rs && (moved || vm) && closestApproach(sx, sy, dx, dy) < rs)) {
         c.mass += v.mass * 0.4;
         v.dead = true;         // a bot may be holding it as a shot to line up
         world.viruses.splice(i, 1);
@@ -969,22 +1093,50 @@ function eatViruses(world, ent) {
 
 function cellCombat(world) {
   const ents = [...world.players.values()].filter(p => p.alive && p.cells.length);
+  // No pair can have closed by more than both their steps on an axis, so a
+  // pair further apart at the end than reach plus twice the longest step any
+  // cell took is rejected on end positions alone, as cheaply as before. Zero
+  // when nothing moved.
+  let step = 0;
+  for (const ent of ents) {
+    for (const c of ent.cells) {
+      const d = Math.max(Math.abs(c.x - c.startX), Math.abs(c.y - c.startY));
+      if (d > step) step = d;
+    }
+  }
+  const band = 2 * step;
   for (let i = 0; i < ents.length; i++) {
     for (let j = 0; j < ents.length; j++) {
       if (i === j) continue;
       const A = ents[i], B = ents[j];
       if (!A.cells.length || !B.cells.length) continue;
       for (const a of A.cells) {
-        const ra = radiusOf(a.mass);
+        const ra = radiusOf(a.mass), rw = ra + band;
+        // The smallest this cell was during the tick: all it can have eaten
+        // on the way, whatever it has eaten since.
+        const least = Math.min(a.startMass, a.mass);
         for (let k = B.cells.length - 1; k >= 0; k--) {
           const b = B.cells[k];
           if (a.mass < b.mass * EAT_RATIO) continue;
           // Axis reject before the sqrt: with a hundred players this pair
-          // loop runs ten thousand times a tick.
-          const dx = b.x - a.x; if (dx > ra || dx < -ra) continue;
-          const dy = b.y - a.y; if (dy > ra || dy < -ra) continue;
+          // loop runs ten thousand times a tick. The first covers anything
+          // the band rules out; the second, the way from where the pair
+          // started to where it ended, so two cells that passed through each
+          // other this tick are not thrown out on where they stopped. A pair
+          // that did not move is rejected exactly as before.
+          const dx = b.x - a.x; if (dx > rw || dx < -rw) continue;
+          const dy = b.y - a.y; if (dy > rw || dy < -rw) continue;
+          const sx = b.startX - a.startX, sy = b.startY - a.startY;
+          if (sweptApart(sx, sy, dx, dy, ra)) continue;
           const rb = radiusOf(b.mass);
-          if (Math.hypot(dx, dy) < ra - rb * 0.55) {
+          let hit = Math.hypot(dx, dy) < ra - rb * 0.55;
+          if (!hit && (sx !== dx || sy !== dy)) {
+            // On the way: the eater at its smallest, the prey at its largest.
+            const most = Math.max(b.startMass, b.mass);
+            hit = least >= most * EAT_RATIO &&
+              closestApproach(sx, sy, dx, dy) < radiusOf(least) - radiusOf(most) * 0.55;
+          }
+          if (hit) {
             a.mass += b.mass * EAT_BONUS;
             B.cells.splice(k, 1);
             A.eaten++;
@@ -1481,14 +1633,27 @@ export function stepWorld(world, dt, held = false) {
   // built at the end of last tick, and everything below queries it. Nothing
   // moves a pellet between that rebuild and here, so where a pellet is now is
   // the bucket it is filed under.
+  //
+  // Each remembers where it set off from, for the swept tests, and the
+  // furthest any of them went widens the eat queries by as much: a pellet is
+  // filed where it ended up, but a cell may have touched it anywhere on the way.
   const grid = world.grid;
+  const now = world.tick;
+  world.pelletStep = 0;
   for (const p of world.pellets) {
     if (!p.vx && !p.vy) continue;
     const was = keyOf(p);
+    p.startX = p.x; p.startY = p.y; p.movedAt = now;
     advancePellet(p, dt, world.size);
+    const step = Math.max(Math.abs(p.x - p.startX), Math.abs(p.y - p.startY));
+    if (step > world.pelletStep) world.pelletStep = step;
     if (grid) gridMove(grid, p, was);
   }
-  for (const v of world.viruses) advanceVirus(v, dt, world.size);
+  for (const v of world.viruses) {
+    if (!v.vx && !v.vy) continue;
+    v.startX = v.x; v.startY = v.y; v.movedAt = now;
+    advanceVirus(v, dt, world.size);
+  }
   // After both have moved, so a blob and a virus travelling toward each other
   // are tested where they actually are this tick.
   feedViruses(world);
@@ -1505,6 +1670,10 @@ export function stepWorld(world, dt, held = false) {
       ent.actions.length = 0;
       continue;
     }
+
+    // Where this player's cells set off from this tick. Nothing moves a cell
+    // outside its own player's turn, so this is where the tick found it.
+    for (const c of ent.cells) { c.startX = c.x; c.startY = c.y; c.startMass = c.mass; }
 
     // Target is the player's own centroid plus their aim offset, which keeps
     // the meaning of "aim" independent of any client's viewport.

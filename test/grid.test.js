@@ -77,9 +77,11 @@ function audit(w) {
 }
 const clean = a => !a.missing && !a.extra && !a.twice && !a.misfiled;
 
-// The eat rule, by brute force (eatPellets in shared/sim.js). Cells here are
-// still and below DECAY_ABOVE, so neither position nor reach changes during
-// the tick; pellets are taken where advancePellet will put them.
+// The eat rule, by brute force (eatPellets in shared/sim.js): at the end of
+// the tick, and along the way, since a pellet that crossed a cell in one step
+// is eaten too. Cells here are still and below DECAY_ABOVE, so neither position
+// nor reach changes during the tick; pellets go from where they are to where
+// advancePellet will put them.
 function predictEats(w) {
   const next = new Map();
   for (const p of w.pellets) {
@@ -94,13 +96,36 @@ function predictEats(w) {
       for (const [p, q] of next) {
         if (taken.has(p)) continue;
         if (p.owner === ent.id && w.time + DT < p.ownerFree) continue;
-        if ((q.vx || q.vy) && (q.x - c.x) * q.vx + (q.y - c.y) * q.vy > 0) continue;
         const reach = r + pelletRadius(p) * 0.6;
-        if ((q.x - c.x) ** 2 + (q.y - c.y) ** 2 < reach * reach) taken.set(p, ent.id);
+        const ex = q.x - c.x, ey = q.y - c.y;
+        const moving = q.vx || q.vy;
+        let eat = (!moving || ex * q.vx + ey * q.vy <= 0) && ex * ex + ey * ey < reach * reach;
+        if (!eat && (q.x !== p.x || q.y !== p.y)) {
+          eat = crossesReach(p.x - c.x, p.y - c.y, ex, ey, reach,
+            moving ? q.vx : q.x - p.x, moving ? q.vy : q.y - p.y);
+        }
+        if (eat) taken.set(p, ent.id);
       }
     }
   }
   return taken;
+}
+
+// Whether a point travelling in a straight line from offset (sx, sy) to
+// (ex, ey) passes within `reach` of the origin while heading (ux, uy) does not
+// point away from it. Worked out geometrically, from the closest point of the
+// line, rather than as the quadratic shared/sim.js solves.
+function crossesReach(sx, sy, ex, ey, reach, ux, uy) {
+  const wx = ex - sx, wy = ey - sy, len2 = wx * wx + wy * wy;
+  const tc = -(sx * wx + sy * wy) / len2;
+  const cx = sx + wx * tc, cy = sy + wy * tc;
+  const miss2 = cx * cx + cy * cy;
+  if (miss2 >= reach * reach) return false;
+  const half = Math.sqrt((reach * reach - miss2) / len2);
+  const lo = Math.max(0, tc - half), hi = Math.min(1, tc + half);
+  if (lo >= hi) return false;
+  const facing = t => (sx + wx * t) * ux + (sy + wy * t) * uy <= 0;
+  return facing(lo) || facing(hi);
 }
 
 // ── a blob that crosses a bucket line into reach ────────────────────────────

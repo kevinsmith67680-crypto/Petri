@@ -536,6 +536,19 @@ function botArena(level, { bot: [botMass, botAt], players, virusAt, pelletAt }) 
   return { w, bot };
 }
 
+// The tick on which the bot first split, and on which "human" was first eaten.
+function firstTicks({ w, bot }, ticks) {
+  const at = { split: Infinity, eaten: Infinity };
+  for (let i = 1; i <= ticks; i++) {
+    const before = bot.cells.length;
+    for (const e of stepWorld(w, 1 / TICK_HZ)) {
+      if (e.t === "eat" && e.victim === "human" && at.eaten === Infinity) at.eaten = i;
+    }
+    if (bot.cells.length > before && at.split === Infinity) at.split = i;
+  }
+  return at;
+}
+
 // What the bot did to "human" in the time given.
 function watchBot({ w, bot }, seconds) {
   const seen = { split: false, planned: false, popped: false, eaten: false };
@@ -561,8 +574,13 @@ function watchBot({ w, bot }, seconds) {
   check("normal holds its split until the shot is close", !first("normal").split);
   check("but takes it once it has closed in", watchBot(botArena("normal", prey), 0.5).split);
   check("hard splits from where it stands", first("hard").split);
+  // Compared tick for tick. Within a fixed window this used to hold only
+  // because normal's half, 48 units a step against an eat window 37 wide,
+  // stepped straight over the prey; collisions are now tested along the way.
+  const hardAt = firstTicks(botArena("hard", prey), 20), normalAt = firstTicks(botArena("normal", prey), 20);
   check("and has eaten by the time normal has only split",
-    watchBot(botArena("hard", prey), 0.5).eaten && !watchBot(botArena("normal", prey), 0.5).eaten);
+    hardAt.eaten < normalAt.split && normalAt.split < normalAt.eaten,
+    `hard eats at tick ${hardAt.eaten}; normal splits at ${normalAt.split}, eats at ${normalAt.eaten}`);
 
   // A mass-80 cell nearby cannot eat the whole bot, so it is no reason to
   // run, but it would eat either half. Splitting there is suicide.
