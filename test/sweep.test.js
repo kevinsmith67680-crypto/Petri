@@ -485,12 +485,15 @@ function crowd(seed, ticks) {
         }
       }
     }
-    // Surviving viruses against cells big enough to pop the whole tick.
+    // Surviving viruses against cells big enough to pop the whole tick. A
+    // player pops one virus a tick at most, and at MAX_CELLS the pop adds no
+    // pieces, so its cells still read as plain movement: skip it.
+    const popped = new Set(ev.filter(e => e.t === "pop").map(e => e.id));
     for (const v of w.viruses) {
       const b = virusesBefore.get(v.id);
       if (!b) continue;
       for (const k of plain) {
-        if (k.least * 0.995 <= POP_MASS) continue;
+        if (k.least * 0.995 <= POP_MASS || popped.has(k.owner)) continue;
         const r = radiusOf(k.least) * 0.97 - 0.5;
         if (boxApart(b, v, k, r)) continue;
         stats.pairs++;
@@ -512,7 +515,6 @@ function crowd(seed, ticks) {
       for (const v of w.viruses) if (Math.hypot(v.x - q.x, v.y - q.y) < radiusOf(v.mass) + 30) near = true;
       if (!near) stats.sweptOnly++;
     }
-    void ev;
   }
   return { w, stats };
 }
