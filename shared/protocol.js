@@ -194,11 +194,119 @@ export function viewRadius(player) {
 // client cannot lie about what it already knows to widen its own view.
 export function createClientState(stagger = 0) {
   return {
-    knownPellets: new Set(),
+    // The pellets this client has been told are in view: their ids in the
+    // order they were visited for its last snapshot, and how many; the same
+    // ids in a hash table for lookups, and a second table that the next
+    // snapshot's ids are put into before the two swap.
+    knownOrder: new Float64Array(256),
+    knownCount: 0,
+    knownTable: new Float64Array(512),
+    nextTable: new Float64Array(512),
+    knownBits: 9,
     knownNames: new Set(),
     sinceKeyframe: stagger % KEYFRAME_TICKS,  // spread keyframes across clients
     sinceBoard: stagger % BOARD_TICKS
   };
+}
+
+// ── what every snapshot of a tick shares ────────────────────────────────────
+//
+// Most of a snapshot is the same for every client in the room: where each
+// cell is and how far it reaches, its record on the wire (unless it is the
+// viewer's own), the viruses, the zone, the leaderboard. snapshotFrame works
+// that out once, and each client's encodeSnapshot does only what depends on
+// where it is looking and what it already knows. The bytes are exactly those
+// of encoding each snapshot from scratch.
+//
+// A frame describes the world at one moment. The server makes one per room
+// per tick, once the tick's bookkeeping is done, and uses it for that tick's
+// snapshots only: nothing may change the world in between.
+export function snapshotFrame(world) {
+  let n = 0;
+  for (const p of world.players.values()) if (p.alive) n += p.cells.length;
+  const cells = new Array(n), owners = new Array(n);
+  const xs = new Float64Array(n), ys = new Float64Array(n), reach = new Float64Array(n);
+  const rec = new Writer(n * CELL_BYTES || 1);
+  let i = 0;
+  for (const p of world.players.values()) {
+    if (!p.alive) continue;
+    for (const c of p.cells) {
+      cells[i] = c; owners[i] = p;
+      xs[i] = c.x; ys[i] = c.y; reach[i] = radiusOf(c.mass);
+      // As anyone but its owner sees it: no flags, no motion.
+      rec.u32(c.id).u16(Math.round(c.x)).u16(Math.round(c.y)).u16(clampU16(Math.round(c.mass))).u16(p.nid).u8(0);
+      i++;
+    }
+  }
+  const vs = world.viruses, nv = vs.length;
+  const vx = new Float64Array(nv), vy = new Float64Array(nv);
+  const vrec = new Writer(nv * VIRUS_BYTES || 1);
+  for (let k = 0; k < nv; k++) {
+    const v = vs[k];
+    vx[k] = v.x; vy[k] = v.y;
+    vrec.u16(v.vid).u16(Math.round(v.x)).u16(Math.round(v.y)).u8(v.fed);
+  }
+  return {
+    world, tick: world.tick, n, cells, owners, xs, ys, reach, rec: rec.bytes(),
+    nv, vx, vy, vrec: vrec.bytes(),
+    // The same for everyone in the room, so it is public, not scoped to a view.
+    zone: zoneView(world),
+    board: null      // worked out by the first snapshot this tick that carries it
+  };
+}
+
+// The leaderboard, each row's name and mass already encoded; only the "this
+// is you" byte differs between clients.
+function boardOf(frame) {
+  if (!frame.board) {
+    const rows = leaderboard(frame.world);
+    const w = new Writer(rows.length * 40 || 1);
+    const ends = [];
+    for (const row of rows) { w.str(row.name, 32); w.u32(row.mass); ends.push(w.length); }
+    frame.board = { ids: rows.map(r => r.id), ends, bytes: w.bytes() };
+  }
+  return frame.board;
+}
+
+// Reused by every call: a snapshot is written here and copied out at its exact
+// length, and these lists are refilled rather than allocated per client.
+const out = new Writer(16384);
+const shown = [], newNames = [], added = [], removed = [], virusesShown = [];
+
+// The pellets in a view, as the grid visits them: ids and the pellets
+// themselves, in order. One callback for every client, reading the query from
+// these, so no closure is made per snapshot.
+let seenIds = new Float64Array(1024);
+const seenPellets = [];
+let seenCount = 0, qx = 0, qy = 0, qr2 = 0;
+function collect(p) {
+  if (p.dead) return;
+  const dx = p.x - qx, dy = p.y - qy;
+  if (!(dx * dx + dy * dy < qr2)) return;
+  if (seenCount === seenIds.length) {
+    const grown = new Float64Array(seenCount * 2);
+    grown.set(seenIds);
+    seenIds = grown;
+  }
+  seenIds[seenCount] = p.id;
+  seenPellets[seenCount++] = p;
+}
+
+// Pellet ids in an open-addressed hash table of 2^bits slots, 0 for empty
+// (ids start at 1). Kept at most half full, so a probe is a slot or two.
+// Hashed by multiplying, on the low 32 bits of the id; the whole id is what
+// is compared.
+const slot = (id, bits) => Math.imul(id | 0, 0x9e3779b1) >>> (32 - bits);
+function put(t, bits, id) {
+  const mask = (1 << bits) - 1;
+  let i = slot(id, bits);
+  while (t[i] !== 0) i = (i + 1) & mask;
+  t[i] = id;
+}
+function has(t, bits, id) {
+  const mask = (1 << bits) - 1;
+  for (let i = slot(id, bits); t[i] !== 0; i = (i + 1) & mask) if (t[i] === id) return true;
+  return false;
 }
 
 // `eye` is whose viewpoint the snapshot is built from. Normally that is the
@@ -212,13 +320,17 @@ export function createClientState(stagger = 0) {
 // what lets the client place this snapshot on its own timeline without knowing
 // its ping. Omitted, the snapshot acknowledges nothing and the client falls
 // back to correcting onto the server's position as it stands.
-export function encodeSnapshot(world, player, cs, round = null, eye = null, tickAt = null) {
+//
+// `frame` is this tick's snapshotFrame, shared across the room's clients; left
+// out, or made for another world or tick, the call makes its own.
+export function encodeSnapshot(world, player, cs, round = null, eye = null, tickAt = null, frame = null) {
+  const f = frame && frame.world === world && frame.tick === world.tick ? frame : snapshotFrame(world);
   const view = eye && eye.alive && eye.cells.length ? eye : player;
   const spectating = view !== player;
   const keyframe = cs.sinceKeyframe <= 0;
   if (keyframe) {
     // A keyframe restates everything, so forget what we thought they knew.
-    cs.knownPellets.clear();
+    cs.knownCount = 0;
     cs.knownNames.clear();
     cs.sinceKeyframe = KEYFRAME_TICKS;
   }
@@ -230,58 +342,77 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null, tick
 
   const me = centroid(view);
   const R = viewRadius(view);
-  const near = (x, y, pad = 0) => {
-    const dx = x - me.x, dy = y - me.y;
-    const reach = R + pad;
-    return dx * dx + dy * dy < reach * reach;
-  };
+  const mx = me.x, my = me.y;
 
   // ── cells in view, plus any owner names this client has not been told ──
-  const cells = [];
-  const newNames = [];
-  for (const p of world.players.values()) {
-    if (!p.alive) continue;
-    let visible = false;
-    for (const c of p.cells) {
-      if (!near(c.x, c.y, radiusOf(c.mass))) continue;
-      visible = true;
-      cells.push({ c, p });
-    }
-    if (visible && !cs.knownNames.has(p.nid)) {
-      cs.knownNames.add(p.nid);
-      newNames.push(p);
+  // In view if its body reaches inside the view radius. A player's cells sit
+  // together in the frame, so its name is checked at the first one seen.
+  shown.length = 0;
+  newNames.length = 0;
+  const { xs, ys, reach, owners } = f;
+  let named = null;
+  for (let i = 0; i < f.n; i++) {
+    const dx = xs[i] - mx, dy = ys[i] - my, r = R + reach[i];
+    if (!(dx * dx + dy * dy < r * r)) continue;
+    shown.push(i);
+    const p = owners[i];
+    if (p !== named) {
+      named = p;
+      if (!cs.knownNames.has(p.nid)) { cs.knownNames.add(p.nid); newNames.push(p); }
     }
   }
 
   // ── pellet delta, per the scoping rules at the top of this file ──
-  const inView = new Set();
-  const added = [];
   // Grid query rather than a full scan: with thousands of orbs in the arena,
   // walking the whole list once per client per tick is the single most
   // expensive thing the server does.
-  forEachPelletNear(world, me.x, me.y, R, p => {
-    if (p.dead || !near(p.x, p.y)) return;
-    inView.add(p.id);
-    if (!cs.knownPellets.has(p.id)) added.push(p);
-  });
-  const removed = [];
-  for (const id of cs.knownPellets) {
-    // Covers both "eaten while I was watching" and "scrolled out of my view".
-    // Indistinguishable on the wire, deliberately.
-    if (!inView.has(id)) removed.push(id);
+  seenCount = 0; qx = mx; qy = my; qr2 = R * R;
+  forEachPelletNear(world, mx, my, R, collect);
+  const n = seenCount;
+  // This snapshot's ids into the spare table, sized to stay half empty.
+  let bits = 9;
+  while ((1 << bits) < n * 2) bits++;
+  let next = cs.nextTable;
+  if (next.length < 1 << bits) next = new Float64Array(1 << bits);
+  else next.fill(0, 0, 1 << bits);
+  for (let k = 0; k < n; k++) put(next, bits, seenIds[k]);
+  // Added: in view now, not known before, in the order visited.
+  added.length = 0;
+  for (let k = 0; k < n; k++) {
+    if (!cs.knownCount || !has(cs.knownTable, cs.knownBits, seenIds[k])) added.push(seenPellets[k]);
   }
-  // Replace, never merge. This is rule 1.
-  cs.knownPellets = inView;
+  // Removed: known before, not in view now, in the order they were sent.
+  // Covers both "eaten while I was watching" and "scrolled out of my view".
+  // Indistinguishable on the wire, deliberately. Every id seen now was either
+  // known or added, so when the known ones seen account for all that were
+  // known, nothing was removed, and the lookups can be skipped.
+  removed.length = 0;
+  if (n - added.length !== cs.knownCount) {
+    for (let k = 0; k < cs.knownCount; k++) if (!has(next, bits, cs.knownOrder[k])) removed.push(cs.knownOrder[k]);
+  }
+  // Replace, never merge. This is rule 1. The old table is the next spare.
+  if (cs.knownOrder.length < n) cs.knownOrder = new Float64Array(n * 2);
+  cs.knownOrder.set(seenIds.subarray(0, n));
+  cs.knownCount = n;
+  cs.nextTable = cs.knownTable;
+  cs.knownTable = next;
+  cs.knownBits = bits;
+  seenPellets.length = 0;
 
-  const viruses = world.viruses.filter(v => near(v.x, v.y, 60));
+  virusesShown.length = 0;
+  const vr = R + 60;
+  for (let k = 0; k < f.nv; k++) {
+    const dx = f.vx[k] - mx, dy = f.vy[k] - my;
+    if (dx * dx + dy * dy < vr * vr) virusesShown.push(k);
+  }
   // While spectating, every figure describes the player being watched — that
   // is what a spectator wants to see, and the viewer's own stats are frozen.
   const rank = rankOf(world, view.id);
   const mass = totalMass(view);
-  // The same for everyone in the room, so it is public, not scoped to a view.
-  const zone = zoneView(world);
+  const zone = f.zone;
 
-  const w = new Writer(1024);
+  const w = out;
+  w.o = 0;
   w.u8(MSG.SNAPSHOT);
   w.u8((keyframe ? FLAG_KEYFRAME : 0) | (withBoard ? FLAG_BOARD : 0) | (zone ? FLAG_ZONE : 0));
   w.u32(world.tick);
@@ -307,8 +438,8 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null, tick
   w.u32(view.eaten);
   w.u32(Math.round(mass));
   w.u32(Math.round(view.peak));
-  w.u16(Math.round(me.x));
-  w.u16(Math.round(me.y));
+  w.u16(Math.round(mx));
+  w.u16(Math.round(my));
   w.u8(Math.min(255, rank.rank));
   w.u8(Math.min(255, rank.of));
 
@@ -338,32 +469,29 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null, tick
   w.u16(newNames.length);
   for (const p of newNames) { w.u16(p.nid); w.str(p.name, 32); w.u8(p.ci); }
 
-  // cells
-  w.u16(cells.length);
-  for (const { c, p } of cells) {
-    const mine = p.id === view.id;
+  // cells: everyone else's as the frame wrote them, the viewer's own here
+  w.u16(shown.length);
+  for (const i of shown) {
+    const p = owners[i];
+    if (p.id !== view.id) { w.raw(f.rec, i * CELL_BYTES, i * CELL_BYTES + CELL_BYTES); continue; }
+    const c = f.cells[i];
     w.u32(c.id);
     w.u16(Math.round(c.x));
     w.u16(Math.round(c.y));
     w.u16(clampU16(Math.round(c.mass)));
     w.u16(p.nid);
-    w.u8(
-      (mine ? CELL_MINE : 0) |
-      (mine && world.time < c.mergeAt ? CELL_COOLDOWN : 0)
-    );
-    if (mine) {
-      // Launch velocity from a split or a burst. Without it a confirmed split
-      // piece was predicted as standing still while the server flew it, and
-      // was dragged along behind until the correction caught up.
-      w.i16(Math.round(c.vx || 0));
-      w.i16(Math.round(c.vy || 0));
-      // Steering state, so a replay resumes the turn the cell is part-way
-      // through rather than snapping to the new heading.
-      const steered = c.sp !== undefined;
-      w.i16(steered ? Math.round(c.hx * STEER_SCALE) : 0);
-      w.i16(steered ? Math.round(c.hy * STEER_SCALE) : 0);
-      w.u16(steered ? Math.min(NO_STEER - 1, Math.round(c.sp * SPEED_SCALE)) : NO_STEER);
-    }
+    w.u8(CELL_MINE | (world.time < c.mergeAt ? CELL_COOLDOWN : 0));
+    // Launch velocity from a split or a burst. Without it a confirmed split
+    // piece was predicted as standing still while the server flew it, and
+    // was dragged along behind until the correction caught up.
+    w.i16(Math.round(c.vx || 0));
+    w.i16(Math.round(c.vy || 0));
+    // Steering state, so a replay resumes the turn the cell is part-way
+    // through rather than snapping to the new heading.
+    const steered = c.sp !== undefined;
+    w.i16(steered ? Math.round(c.hx * STEER_SCALE) : 0);
+    w.i16(steered ? Math.round(c.hy * STEER_SCALE) : 0);
+    w.u16(steered ? Math.min(NO_STEER - 1, Math.round(c.sp * SPEED_SCALE)) : NO_STEER);
   }
 
   // pellets added / removed
@@ -399,25 +527,21 @@ export function encodeSnapshot(world, player, cs, round = null, eye = null, tick
   // client match a virus between snapshots and interpolate a shot one instead
   // of stepping it at the tick rate; the feed count is what makes it swell on
   // screen, which is the only warning anybody gets that it is about to split.
-  w.u16(viruses.length);
-  for (const v of viruses) {
-    w.u16(v.vid);
-    w.u16(Math.round(v.x));
-    w.u16(Math.round(v.y));
-    w.u8(v.fed);
-  }
+  w.u16(virusesShown.length);
+  for (const k of virusesShown) w.raw(f.vrec, k * VIRUS_BYTES, k * VIRUS_BYTES + VIRUS_BYTES);
 
   if (withBoard) {
-    const board = leaderboard(world);
-    w.u8(board.length);
-    for (const row of board) {
-      w.str(row.name, 32);
-      w.u32(row.mass);
-      w.u8(row.id === player.id ? 1 : 0);
+    const b = boardOf(f);
+    w.u8(b.ids.length);
+    for (let i = 0; i < b.ids.length; i++) {
+      w.raw(b.bytes, i ? b.ends[i - 1] : 0, b.ends[i]);
+      w.u8(b.ids[i] === player.id ? 1 : 0);
     }
   }
 
-  return w.bytes();
+  // Copied out: the same writer is reused for the next client, and the socket
+  // may still be holding this snapshot when it is.
+  return w.buf.slice(0, w.o);
 }
 
 // Decoded into a plain object; the client folds it into its caches.

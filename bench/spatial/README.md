@@ -26,10 +26,11 @@ working as the code moves.
 | `bench.mjs` | Runs every scenario on every variant, takes medians across repetitions, and prints the tables used in the report. |
 | `client-view.mjs`, `client-render.mjs` | Practice-mode view building (Node) and canvas draw cost (headless Chromium via Playwright). These two use the working-tree client; the report's figures were taken at `d93f567`. |
 | `head-check.mjs` | B1/B2 reproductions and a Standard-config timing on unpatched modules: the working tree, or `--rev <rev>`. |
+| `snapshot-cost.mjs` | Every player's snapshot encoded by the encoder at `dd03e01` and by the current one, from the same world every tick, compared byte for byte and timed; `--only old\|new` counts each one's garbage on its own; also where the bytes go, section by section. |
 | `combat-filing.mjs` | How much of `cellCombat` goes on rebuilding its cell grid each tick, on the working tree. |
 | `sweep-combat-cost.mjs` | `cellCombat`'s pair loop with and without the swept test, on identical frozen states. Whole games diverge once the sweep catches something, so they cannot compare it fairly. |
 | `query-bounds.mjs` | Cost of a single grid query against its radius, showing what the unclamped upper bound costs for very large cells. |
-| `results/` | Output from the runs quoted in the report. `b1-fix-perf.*` and `correctness-b1-fix.*` cover the B1 fix; `r1-*`, `sweep-combat-cost.txt` and `correctness-r1-fix.*` cover R1; `combat-grid-*` and `correctness-combat-grid.*` cover the `cellCombat` grid (H-1); `pelletgrid-*` and `correctness-pellet-grid.*` the flat pellet grid (H-2). These numbers depend on the machine. |
+| `results/` | Output from the runs quoted in the report. `b1-fix-perf.*` and `correctness-b1-fix.*` cover the B1 fix; `r1-*`, `sweep-combat-cost.txt` and `correctness-r1-fix.*` cover R1; `combat-grid-*` and `correctness-combat-grid.*` cover the `cellCombat` grid (H-1); `pelletgrid-*` and `correctness-pellet-grid.*` the flat pellet grid (H-2); `snapshot-*` snapshot encoding. These numbers depend on the machine. |
 
 ## Run
 
@@ -45,6 +46,7 @@ node bench/spatial/query-bounds.mjs
 node --expose-gc bench/spatial/head-check.mjs       # or --rev d93f567
 node bench/spatial/sweep-combat-cost.mjs
 node bench/spatial/combat-filing.mjs
+node --expose-gc bench/spatial/snapshot-cost.mjs
 # the shipped grid against the all-pairs loop it replaced
 SPATIAL_REV=working node bench/spatial/bench.mjs --variants pairs,current --scenarios full,standard,splits
 ```

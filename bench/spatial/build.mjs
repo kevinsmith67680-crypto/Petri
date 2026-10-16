@@ -456,10 +456,19 @@ function counted(src) {
 function countedProtocol(src) {
   src = once(src, "  radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,",
     "  __S, radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,", "import __S");
-  src = once(src, "    if (p.dead || !near(p.x, p.y)) return;",
-    "    __S.c.snapCand++;\n    if (p.dead || !near(p.x, p.y)) return;\n    __S.c.snapNarrow++;", "snap pellets");
-  src = once(src, "      if (!near(c.x, c.y, radiusOf(c.mass))) continue;",
-    "      __S.c.snapCellTests++;\n      if (!near(c.x, c.y, radiusOf(c.mass))) continue;", "snap cells");
+  // One snapshot at a time (up to dd03e01), or from a shared frame after.
+  src = oneOf(src, "snap pellets", [
+    ["    if (p.dead || !near(p.x, p.y)) return;",
+     "    __S.c.snapCand++;\n    if (p.dead || !near(p.x, p.y)) return;\n    __S.c.snapNarrow++;"],
+    ["  if (p.dead) return;\n  const dx = p.x - qx, dy = p.y - qy;\n  if (!(dx * dx + dy * dy < qr2)) return;\n",
+     "  __S.c.snapCand++;\n  if (p.dead) return;\n  const dx = p.x - qx, dy = p.y - qy;\n  if (!(dx * dx + dy * dy < qr2)) return;\n  __S.c.snapNarrow++;\n"]
+  ]);
+  src = oneOf(src, "snap cells", [
+    ["      if (!near(c.x, c.y, radiusOf(c.mass))) continue;",
+     "      __S.c.snapCellTests++;\n      if (!near(c.x, c.y, radiusOf(c.mass))) continue;"],
+    ["    const dx = xs[i] - mx, dy = ys[i] - my, r = R + reach[i];\n",
+     "    __S.c.snapCellTests++;\n    const dx = xs[i] - mx, dy = ys[i] - my, r = R + reach[i];\n"]
+  ]);
   return src;
 }
 

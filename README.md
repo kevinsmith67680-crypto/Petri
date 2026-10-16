@@ -249,9 +249,30 @@ The known-set lives on the server. The client never tells us what it already has
 
 The server treats any decode failure as "close the socket", since a client that cannot speak the protocol has nothing useful to say.
 
+### Encoding cost
+
+Most of a snapshot is the same for every client in a room: where each cell is and how far it reaches, its record on the wire, the viruses, the zone, the leaderboard. `snapshotFrame` works that out once per room per tick. Each client's `encodeSnapshot` shares it and does only what depends on its own view: the cells and viruses it can see, its pellet delta, its own cells' motion. The pellet delta keeps each client's known ids in a small open-addressed hash table in typed arrays, not a fresh `Set` per client per tick. One writer serves every snapshot, and each snapshot is copied out at its exact length.
+
+The bytes are unchanged, so the client needs no change:
+
+- `bench/spatial/snapshot-cost.mjs` encodes every client's snapshot both ways on the same world and compares them byte for byte: 366,000 snapshots, all identical.
+- `test/snapshot.test.js` checks every client's view against the world by brute force: every cell, pellet and virus the view covers and nothing else, with nothing sent twice, nothing removed that was never sent and nothing left on screen after it has gone.
+
+Measured on one machine, a tick's snapshots fell as follows (average over 600 ticks, both encoders taking turns on the same world):
+
+| Scenario | Before | After |
+|---|---:|---:|
+| 100 players, Standard config | 3.95 ms | 2.15 ms |
+| 100 players, heavy split play | 8.08 ms | 4.42 ms |
+| 150 players | 7.86 ms | 4.11 ms |
+
+Garbage-collection time roughly halved.
+
+**A client that stops reading is not sent more.** A socket more than 64 KiB behind (`SEND_BACKLOG`) gets no snapshot until it drains. That covers a backgrounded tab, or a dead link the heartbeat has not caught yet. Nothing is encoded for it either, so its delta state still matches what it was last sent, and the stream resumes consistently. Without this, every tick was queued for it without bound, and it got each one later than the last. `/health` counts snapshots held back, and `test/backlog.test.js` drives it through the real server.
+
 ### Remaining bandwidth work
 
-- Cells are still sent in full each tick. They move constantly so there is less to win, but quantising positions relative to the view origin would save a few bytes each.
+- Cells are still sent in full each tick. They are 54–76% of all snapshot bytes; viruses, sent every tick though they rarely move, are 6–15%. Delta-coding both against what each client last saw might save a third of the bandwidth, but it needs per-client cell state on the server and matching changes in the client. Bandwidth is 3–15 KiB/s per client, and CPU is the server's limit, so it has not been done.
 - The 100-player figures assume one world. Rooms open on demand within a process (see *Rooms on demand*), but a process is one thread: past one CPU core, run several game servers and let the matchmaker route between them (see *Matchmaking*).
 - WebTransport instead of WebSocket, with WebSocket as fallback. It reached Baseline in March 2026, and its unreliable datagrams suit positional updates you would discard on arrival anyway. Keyframes already exist, which is what makes lossy transport survivable.
 
