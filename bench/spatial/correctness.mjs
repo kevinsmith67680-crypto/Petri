@@ -335,6 +335,10 @@ function c8(build) {
 
 // ── C9: snapshot area-of-interest query vs brute force ──────────────────────
 
+// The pellets a client state says it was sent: a Set up to dd03e01, and
+// after that the ids in the order sent (knownOrder, knownCount).
+const sentTo = cs => cs.knownPellets ?? new Set(cs.knownOrder.subarray(0, cs.knownCount));
+
 function c9(build, key, ticks) {
   const { sim, protocol } = B[build];
   const { world, driver } = setupScenario(sim, key, 17);
@@ -349,11 +353,12 @@ function c9(build, key, ticks) {
       if (!cs) states.set(p.id, (cs = protocol.createClientState(i)));
       i++;
       protocol.encodeSnapshot(world, p, cs);
+      const known = sentTo(cs);
       const c = sim.centroid(p), R = protocol.viewRadius(p);
       for (const q of world.pellets) {
         const dx = q.x - c.x, dy = q.y - c.y;
         const want = dx * dx + dy * dy < R * R;
-        const got = cs.knownPellets.has(q.id);
+        const got = known.has(q.id);
         if (want && !got) missing++;
         if (!want && got) extra++;
       }
