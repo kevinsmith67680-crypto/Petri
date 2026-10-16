@@ -30,8 +30,9 @@ export const START_MASS = 20;
 // nobody to fight, reached 550 mass in the first minute and 3,500 by the
 // whistle: past the 200 that breaks even on a stake in seconds, and paid as
 // if it had been won. Growth is meant to come mostly from other players.
-// Cut to 2 for that, then raised to 4 so orbs are worth chasing again.
-export const PELLET_MASS = 4;
+// Cut to 2 for that, raised to 4 so orbs were worth chasing again, then
+// settled at 3.
+export const PELLET_MASS = 3;
 export const EJECT_MASS = 16;       // mass spent ejecting
 export const EJECT_KEEP = 13;       // mass the ejected blob carries
 export const ORB_RADIUS = 6;        // a plain orb, fixed size regardless of mass
