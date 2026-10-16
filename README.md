@@ -422,7 +422,7 @@ During a live round the stake bar at the top centre shows what your mass is "wor
 | | at 0.005/point |
 |---|---|
 | Spawning (mass 20) | 0.10 USDC |
-| One orb (4 mass) | 0.020 USDC |
+| One orb (3 mass) | 0.015 USDC |
 | Mid-game (mass 500) | 2.50 USDC |
 | Large player (mass 2,000) | 10.00 USDC |
 | Round leader (mass 6,000) | 30.00 USDC |
@@ -439,7 +439,7 @@ Three numbers in `shared/sim.js` set how quickly mass comes, and they were retun
 
 | | Was | Now |
 |---|---|---|
-| `PELLET_MASS`, an orb | 3.375 | 2 (since raised to 4) |
+| `PELLET_MASS`, an orb | 3.375 | 2 (since raised to 3) |
 | `EAT_BONUS`, what a kill pays | 1.2x the victim's mass | exactly the victim's mass |
 | `DECAY_RATE`, above `DECAY_ABOVE` (260) | 0.22% a second | 0.5% a second |
 
@@ -454,7 +454,7 @@ The kill bonus was the runaway. At 1.2 every kill made a fifth of the victim out
 
 Since paid places are paid their mass (see "The mass readout"), this is also the single biggest cut to what the house can be asked to fund: a farmer's whistle used to be worth 17.60 USDC on a 1.00 stake, and is now 4.60.
 
-**The orb has since been raised to 4 mass.** The figures above were measured at 2 and have not been re-measured; at 4 a lone farmer grows faster than the "Now" row shows, and is paid more for it at the whistle. The kill bonus and the decay rate are unchanged.
+**The orb has since been raised to 3 mass.** The figures above were measured at 2 and have not been re-measured; at 3 a lone farmer grows faster than the "Now" row shows, and is paid more for it at the whistle. The kill bonus and the decay rate are unchanged.
 
 ### Ejecting mass
 
