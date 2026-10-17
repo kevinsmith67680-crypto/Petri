@@ -767,7 +767,7 @@ const run = (w, seconds, each) => {
 
 {
   const { w, z } = zoned(31);
-  check("the edges start moving when the clock reads 2:00",
+  check("the edges start moving when the clock reads 1:30",
     Math.abs(z.startAt - (600 - ZONE_AT_REMAINING)) < 1e-9, `${z.startAt}`);
   check("announced ten seconds before that",
     Math.abs(z.startAt - z.warnAt - ZONE_WARN_SECONDS) < 1e-9 && ZONE_WARN_SECONDS === 10);
@@ -798,7 +798,7 @@ const run = (w, seconds, each) => {
   for (let seed = 1; seed <= 12; seed++) spots.add(JSON.stringify(zoned(seed).z.to));
   check("the safe square is placed at random", spots.size >= 11, `${spots.size} of 12 distinct`);
   check("and replays from its seed", JSON.stringify(zoned(5).z) === JSON.stringify(zoned(5).z));
-  // Short rounds: test mode's four minutes keep the full warning; a round
+  // Short rounds: test mode's two minutes keep the full warning; a round
   // shorter than the warning gets no zone at all.
   const w = createWorld(1, { pellets: 0, viruses: 0 });
   const short = planZone(w, 20);

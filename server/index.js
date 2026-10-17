@@ -622,7 +622,7 @@ function createRoom(mode, botLevel = BOT_LEVEL) {
     bots: TEST_MODE ? Math.min(BOTS_OVERRIDE ?? mode.lobbyMin, lobbyMax - 1) : 0,
     lobbyMin: TEST_MODE ? 1 : (LOBBY_MIN_OVERRIDE ?? mode.lobbyMin),
     lobbyMax,
-    roundSeconds: ROUND_SECONDS_OVERRIDE ?? (TEST_MODE ? 240 : mode.roundSeconds),
+    roundSeconds: ROUND_SECONDS_OVERRIDE ?? (TEST_MODE ? 120 : mode.roundSeconds),
     paidPositions: PAID_OVERRIDE ?? mode.paidPositions
   };
   // Deliberately NOT populated here. An empty room costs a tick either way;
@@ -1627,7 +1627,7 @@ function releaseRound(room) {
   round.phase = PHASE_LIVE;
   round.endsAt = world.time + room.roundSeconds;
   for (const p of world.players.values()) if (p.alive) p.spawnedAt = world.time;
-  // The closing zone: announced when the clock reads 2:10, closing from 2:00.
+  // The closing zone: announced when the clock reads 1:40, closing from 1:30.
   // Planned here, against the end the round actually has. Planned at the
   // deal, it was timed off the end of the hold and never came at all.
   planZone(world, round.endsAt);

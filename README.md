@@ -1011,11 +1011,11 @@ When the timer expires everyone still alive is ranked by mass, their run is reco
 
 ### The closing zone
 
-Fortnite's storm, on a square board. When the round clock reads **2:00** the safe area starts closing in to a square **60% of the arena's width** (5,280 units in Standard, 3,720 in High stakes), placed at random anywhere it fits. Its four edges slide in at their own steady speeds over **45 seconds**, so it reaches the final square at 1:15 and holds there to the whistle. Every player is told **ten seconds before** the edges move: a banner counts down from 10, the final square is drawn on the minimap and as a dashed outline in the arena, and from then on everything outside the safe area is tinted red, with the moving edge as a solid line.
+Fortnite's storm, on a square board. When the round clock reads **1:30** the safe area starts closing in to a square **60% of the arena's width** (5,280 units in Standard, 3,720 in High stakes), placed at random anywhere it fits. Its four edges slide in at their own steady speeds over **45 seconds**, so it reaches the final square at 0:45 and holds there to the whistle. Every player is told **ten seconds before** the edges move: a banner counts down from 10, the final square is drawn on the minimap and as a dashed outline in the arena, and from then on everything outside the safe area is tinted red, with the moving edge as a solid line.
 
 **Outside, you drain.** Each cell whose centre is outside loses 10% of its mass a second plus 2 flat, and is gone below mass 10. A starting cell lasts under three seconds; a 1,000-mass cell halves in about seven. The far edge never moves faster than 40% of the arena in those 45 seconds (78 units/s in Standard), which any cell short of 40,000 mass outruns, so anyone who heads in when told makes it. The banner turns red and stays up for as long as any of your cells is outside.
 
-**It is a rule, so it lives in `shared/sim.js`.** `planZone(world, roundEndsAt)` picks the square from the world's own seeded generator, so a seed replays its zone; `stepWorld` computes the safe area once a tick (`world.safe`) and drains anything outside it. The host decides only *when*: `startRound` plans it as the round opens, `closeRound` clears it at the whistle, and `resetArena` clears it for the next round. Practice has no round clock and so no zone. Test mode's four-minute round takes the normal path, announced at 2:10 and closing from 2:00, which is also two minutes in. A round shorter than 2:10, from a short `ROUND_SECONDS`, still gets its ten seconds' warning, announced the moment the round opens, and closes until the whistle; one of ten seconds or less gets none.
+**It is a rule, so it lives in `shared/sim.js`.** `planZone(world, roundEndsAt)` picks the square from the world's own seeded generator, so a seed replays its zone; `stepWorld` computes the safe area once a tick (`world.safe`) and drains anything outside it. The host decides only *when*: `startRound` plans it as the round opens, `closeRound` clears it at the whistle, and `resetArena` clears it for the next round. Practice has no round clock and so no zone. Test mode's two-minute round takes the normal path, announced at 1:40 and closing from 1:30. A round shorter than 1:40, from a short `ROUND_SECONDS`, still gets its ten seconds' warning, announced the moment the round opens, and closes until the whistle; one of ten seconds or less gets none.
 
 Three things change once it is announced, and are easy to miss:
 
@@ -1157,7 +1157,7 @@ SLOW : 74 of ~1800 ticks overran their 33.3ms budget in the last minute (avg 41.
 Playing the live PvP mode normally needs 100 signed-in strangers. `TEST_MODE=1` makes it playable alone:
 
 ```bash
-npm run dev          # test mode, 60 bots, 4-minute rounds
+npm run dev          # test mode, 60 bots, 2-minute rounds
 npm run dev:solo     # 100 bots at full density, 1-minute rounds
 ```
 
@@ -1168,7 +1168,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `LOBBY_MIN` | 100 ready | **1 ready** |
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
 | `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
-| `ROUND_SECONDS` | 600 | **240** |
+| `ROUND_SECONDS` | 600 | **120** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
 | `HOLD_SECONDS` | 3 | 3 — nor is the hold |
 | `STANDINGS_SECONDS` | 5 | 5 |

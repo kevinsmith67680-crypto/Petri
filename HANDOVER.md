@@ -10,7 +10,7 @@ dangerous, and what will waste your afternoon.
 **Current state.** `main` is at `5f340b4` (PR #16, merged 2026-09-24). The working
 branch `claude/nice-keller-z8vfyf` adds two things `main` does not have: rooms on
 demand, and a matchmaker with signed tickets and seat leases (see "Things worth
-knowing"), and a closing zone in the last 2:00 of every live round (README, "The
+knowing"), and a closing zone in the last 1:30 of every live round (README, "The
 closing zone"). All twenty suites green, and `npm run test:db` green against Postgres
 16. Supabase migrations `002`–`006` are applied; **the branch needs `007` applied
 before it deploys** — see "Before deploying".
