@@ -21,7 +21,7 @@
 // positions travel as u16.
 export const WORLD = 8800;          // square arena, world units
 export const PELLETS = 4100;        // orbs kept in play at all times
-export const VIRUSES = 90;
+export const VIRUSES = 108;
 export const MAX_WORLD = 65535;
 export const DEFAULT_BOTS = 14;     // guests only; the live arena runs botless
 

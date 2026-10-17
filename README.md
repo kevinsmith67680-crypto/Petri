@@ -843,7 +843,7 @@ Two modes, each served by as many independent rooms as it needs. Each room has i
 | Starts at | 100 ready | **50 ready** |
 | Capacity per room | 150 | 75 |
 | Arena | 8800 × 8800 | **6200 × 6200** |
-| Orbs / spores | 4100 / 90 | 2035 / 45 |
+| Orbs / spores | 4100 / 108 | 2035 / 54 |
 | Round | 10 minutes | 10 minutes |
 | Paid | Top 5 | Top 5 |
 
@@ -923,7 +923,7 @@ Against a scripted player grazing at mass 200, in a 4,000-unit arena with 20 bot
 
 ### Lobby and arena size
 
-The live arena is **8,800 × 8,800** with 4,100 orbs and 90 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players. `WORLD` must stay under 65,535 because positions travel as u16.
+The live arena is **8,800 × 8,800** with 4,100 orbs and 108 spores — scaled from the original 3,400 to keep the same per-player density (~770k units² each) at 100 players, then 20% more spores than that scaling gave. `WORLD` must stay under 65,535 because positions travel as u16.
 
 A round starts only once **`LOBBY_MIN` players have marked themselves ready** (default 100), and a room holds at most **`LOBBY_MAX`** (default 150). Past that the arrival is seated in another room of the same mode, opened if need be; only when the process cannot open one does it refuse with a "full" close (see *Rooms on demand*). The cycle is lobby → **5s countdown** → **3s hold on the starting ring** → 10-minute round → 15s standings → lobby, with everyone un-readied each time so the next round needs a fresh show of hands. Players who connect mid-round wait in the lobby rather than dropping into a game in progress.
 
@@ -1058,7 +1058,7 @@ Only mass **still in flight** counts. Feeding is shooting a blob into a virus, n
 
 Viruses coast on their own friction rather than a cell's. At the cell rate a virus launched fast enough to matter is gone in a third of a second, and one launched slowly travels barely its own diameter — 107 units, against a diameter of 84. `VIRUS_SPLIT_SPEED` of 820 units/second against `VIRUS_FRICTION` 0.97 puts it ~450 units out over about a second and a half. 820 is also 41 units per 50ms tick, under the 45-unit radius of the smallest cell a virus can pop. That alone was never a guarantee: the server steps by measured time, up to 250ms, and a late tick moves a shot virus 165 units. Pops are now tested along each step as well (see *Collisions along the way*).
 
-**In practice the population has a ceiling** of `VIRUS_MAX_RATIO` (1.5) times the count the arena seeds — 135 for Standard. Past it a fed virus still resets and still swallows the mass, it just has nowhere to put the child. Eating a virus tops the population back up only when it is *below* the seeded count, so a long session cannot ratchet upwards one split at a time.
+**In practice the population has a ceiling** of `VIRUS_MAX_RATIO` (1.5) times the count the arena seeds — 162 for Standard. Past it a fed virus still resets and still swallows the mass, it just has nowhere to put the child. Eating a virus tops the population back up only when it is *below* the seeded count, so a long session cannot ratchet upwards one split at a time.
 
 The wire carries a virus's compact id and feed count alongside its position (7 bytes, up from 4). The feed count is what makes it swell on screen — the only warning anyone gets that a virus is primed. The id is what lets the client match a virus between snapshots and interpolate a shot one, instead of stepping it a radius at a time at 20Hz; their order in the list is a function of where the viewer is standing, so position in the array cannot be used for it.
 
