@@ -138,9 +138,9 @@ const STEER_RATE = 12;
 // most 40% of the arena in those 45 seconds — 78 units a second in Standard,
 // which any cell short of 40,000 mass outruns — so anyone paying attention
 // walks in. The drain is what punishes not paying attention.
-export const ZONE_AT_REMAINING = 90;    // the clock reads 1:30
+export const ZONE_AT_REMAINING = 120;   // the clock reads 2:00
 export const ZONE_WARN_SECONDS = 10;
-export const ZONE_SHRINK_SECONDS = 45;  // closed at 0:45
+export const ZONE_SHRINK_SECONDS = 45;  // closed at 1:15
 export const ZONE_SHRINK_TO = 0.6;
 // Lost per second by each cell outside: this share of its mass, plus a flat
 // amount so a small cell cannot sit out there for ever. A 20-mass cell is

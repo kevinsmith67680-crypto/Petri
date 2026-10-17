@@ -268,8 +268,8 @@ def zone_seconds(start, end):
     return math.log((start + b / a) / (end + b / a)) / a
 
 ZONE_SIDE_PCT = K["ZONE_SHRINK_TO"] * 100
-ZONE_CALL_AT = K["ZONE_AT_REMAINING"] + K["ZONE_WARN_SECONDS"]          # 1:40
-ZONE_CLOSED_AT = K["ZONE_AT_REMAINING"] - K["ZONE_SHRINK_SECONDS"]      # 0:45
+ZONE_CALL_AT = K["ZONE_AT_REMAINING"] + K["ZONE_WARN_SECONDS"]          # 2:10
+ZONE_CLOSED_AT = K["ZONE_AT_REMAINING"] - K["ZONE_SHRINK_SECONDS"]      # 1:15
 ZONE_START_LIFE = zone_seconds(K["START_MASS"], K["ZONE_MIN_MASS"])
 ZONE_HALF_1000 = zone_seconds(1000, 500)
 
@@ -1905,12 +1905,12 @@ def story():
           f"actually eat - anything under {1 / K['EAT_RATIO']:.2f}x your mass - and take "
           "them without splitting where possible. In a wagered round this is where "
           "the payout is made: a kill is mass you could not farm."],
-         ["5:00 - 2:00", "Manage the crown",
+         [f"5:00 - {mmss(ZONE_CALL_AT)}", "Manage the crown",
           f"If you are large, you are slow and you are decaying above "
           f"{K['DECAY_ABOVE']}. Stay off viruses, stay off walls, and keep eating "
           "enough to cover the leak. If you are mid-sized, pick off the fragments "
           "from other people's fights - a burst player is nine free meals."],
-         [f"2:00 - {mmss(ZONE_CLOSED_AT)}", "Find the line, then the zone",
+         [f"{mmss(ZONE_CALL_AT)} - {mmss(ZONE_CLOSED_AT)}", "Find the line, then the zone",
           f"Look at where {STD['paidPositions']}th place sits. If you are above it, "
           "your job is no longer to grow. If you are below it, you need one player, "
           "and viruses are how a smaller cell removes a bigger one. At "

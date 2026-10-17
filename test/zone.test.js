@@ -38,7 +38,7 @@ const PORT = 9500 + (process.pid % 200);
 process.env.PORT = String(PORT);
 process.env.TEST_MODE = "1";
 process.env.MATCH_BURST = "1000";
-// Shorter than the zone's 1:40, so it is announced as the round opens and
+// Shorter than the zone's 2:10, so it is announced as the round opens and
 // closes from ten seconds in to the whistle: the short-round path, which a
 // short ROUND_SECONDS takes. Long enough after that for a cell that has eaten
 // its way to a corner to be drained away with seconds to spare.
@@ -101,7 +101,7 @@ check("a round starts", started);
 const live = () => ws.bin.filter(s => s.round.phase === PHASE_LIVE && s.me.alive);
 await until(() => live().length > 0);
 const first = live()[0];
-check("a round shorter than 1:30 announces the zone as it opens",
+check("a round shorter than 2:00 announces the zone as it opens",
   first?.zone?.state === ZONE_WARNING && first.zone.secs === 10,
   JSON.stringify(first?.zone && { state: first.zone.state, secs: first.zone.secs }));
 const to = first?.zone?.to;
