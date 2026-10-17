@@ -907,7 +907,7 @@ The cost is about 0.7ms more per tick with 100 bots (2.6ms → 3.4ms). Two ideas
 
 **A split is only taken when half the bot still eats the prey and lands on it.** The reach is computed from the same numbers `splitCell` and `cellCombat` use: where the launched half starts, how far it coasts, and how deep it has to cover the prey. A bot never splits while anything within its safety radius could eat one of the halves.
 
-**A virus shot is set up from behind the virus.** The child flies along the line the throw came in on, so the bot stands on the far side of the virus on the line through its target and throws down that line. The heading of the throw decides where the virus goes, not the bot's exact spot. A target has to be bigger than mass 127 (a virus has to be able to burst it), and the bot needs enough mass to pay for the throws. A bot big enough to pop on the virus itself only takes a shot it is already behind. While a bot is throwing it holds its ground longer against a larger cell closing in, because the virus is between them and anything big enough to eat the bot pops on it first.
+**A virus shot is set up from behind the virus**, in practice only: a live round never lets a fed virus split, so no bot lines one up there (see "Feeding a virus"). The child flies along the line the throw came in on, so the bot stands on the far side of the virus on the line through its target and throws down that line. The heading of the throw decides where the virus goes, not the bot's exact spot. A target has to be bigger than mass 127 (a virus has to be able to burst it), and the bot needs enough mass to pay for the throws. A bot big enough to pop on the virus itself only takes a shot it is already behind. While a bot is throwing it holds its ground longer against a larger cell closing in, because the virus is between them and anything big enough to eat the bot pops on it first.
 
 **Who picks the level.** The player, in the menu under the stake tiers. It is remembered in `localStorage`.
 
@@ -1011,15 +1011,15 @@ When the timer expires everyone still alive is ranked by mass, their run is reco
 
 ### The closing zone
 
-Fortnite's storm, on a square board. When the round clock reads **2:00** the safe area starts closing in to a square **60% of the arena's width** (5,280 units in Standard, 3,720 in High stakes), placed at random anywhere it fits. Its four edges slide in at their own steady speeds over **45 seconds**, so it reaches the final square at 1:15 and holds there to the whistle. Every player is told **ten seconds before** the edges move: a banner counts down from 10, the final square is drawn on the minimap and as a dashed outline in the arena, and from then on everything outside the safe area is tinted red, with the moving edge as a solid line.
+Fortnite's storm, on a square board. When the round clock reads **1:30** the safe area starts closing in to a square **60% of the arena's width** (5,280 units in Standard, 3,720 in High stakes), placed at random anywhere it fits. Its four edges slide in at their own steady speeds over **45 seconds**, so it reaches the final square at 0:45 and holds there to the whistle. Every player is told **ten seconds before** the edges move: a banner counts down from 10, the final square is drawn on the minimap and as a dashed outline in the arena, and from then on everything outside the safe area is tinted red, with the moving edge as a solid line.
 
 **Outside, you drain.** Each cell whose centre is outside loses 10% of its mass a second plus 2 flat, and is gone below mass 10. A starting cell lasts under three seconds; a 1,000-mass cell halves in about seven. The far edge never moves faster than 40% of the arena in those 45 seconds (78 units/s in Standard), which any cell short of 40,000 mass outruns, so anyone who heads in when told makes it. The banner turns red and stays up for as long as any of your cells is outside.
 
-**It is a rule, so it lives in `shared/sim.js`.** `planZone(world, roundEndsAt)` picks the square from the world's own seeded generator, so a seed replays its zone; `stepWorld` computes the safe area once a tick (`world.safe`) and drains anything outside it. The host decides only *when*: `startRound` plans it as the round opens, `closeRound` clears it at the whistle, and `resetArena` clears it for the next round. Practice has no round clock and so no zone. Test mode's four-minute round takes the normal path, announced at 2:10 and closing from 2:00, which is also two minutes in. A round shorter than 2:10, from a short `ROUND_SECONDS`, still gets its ten seconds' warning, announced the moment the round opens, and closes until the whistle; one of ten seconds or less gets none.
+**It is a rule, so it lives in `shared/sim.js`.** `planZone(world, roundEndsAt)` picks the square from the world's own seeded generator, so a seed replays its zone; `stepWorld` computes the safe area once a tick (`world.safe`) and drains anything outside it. The host decides only *when*: `startRound` plans it as the round opens, `closeRound` clears it at the whistle, and `resetArena` clears it for the next round. Practice has no round clock and so no zone. Test mode's two-minute round takes the normal path, announced at 1:40 and closing from 1:30. A round shorter than 1:40, from a short `ROUND_SECONDS`, still gets its ten seconds' warning, announced the moment the round opens, and closes until the whistle; one of ten seconds or less gets none.
 
 Three things change once it is announced, and are easy to miss:
 
-- **Nothing new appears outside the safe area.** Orbs that are eaten, viruses that are topped up and bots that respawn all come back inside the safe area as it is at that moment. Not inside the final square: orbs left outside still count towards the arena's total, so packing every replacement into the final square put nine in ten orbs into a third of the board, more than the orb sampler's minimum spacing has room for, and with 100 bots the closed zone tripled the tick (4 ms to 12 ms). As it is, the tick costs the same as a round without a zone.
+- **Nothing new appears outside the safe area.** Orbs that are eaten and bots that respawn come back inside the safe area as it is at that moment. (Viruses never come back during a round at all: see "A live round keeps the viruses it was dealt".) Not inside the final square: orbs left outside still count towards the arena's total, so packing every replacement into the final square put nine in ten orbs into a third of the board, more than the orb sampler's minimum spacing has room for, and with 100 bots the closed zone tripled the tick (4 ms to 12 ms). As it is, the tick costs the same as a round without a zone.
 - **Bots aim inside.** Whatever a bot is doing — grazing, hunting, splitting, lining up a virus — its aim is clamped inside the safe area, by 160 units plus one and a half times the radius of its whole mass, so a big bot in pieces keeps the pieces inside too. Across twelve two-minute runs, both arenas, Normal and Hard, full fields, the zone caught no bot at all (`test/sim.test.js` pins one).
 - **A zone death is nobody's kill.** The `death` event carries `zone: true`, and settlement ignores `lastEater` for it: a player who was bitten earlier and then drained is not paid out to whoever bit them. The stake is forfeit, as for a bot kill, and the run is recorded with outcome `zone` (**migration 010**). The death card says "Caught outside the zone", told by the snapshot itself (below).
 
@@ -1046,11 +1046,19 @@ python3 scripts/manual.py
 
 Shoot ejected mass into a virus and it swells. The third hit splits it: a new virus is launched along the line the mass came in on and coasts about 450 units before settling. This is agar.io's mechanic at three feeds rather than seven — enough to be worth doing inside a ten-minute round without turning the board into a minefield.
 
+**A live round keeps the viruses it was dealt, so all of this is practice only.** Every world the server opens is built with `fixedViruses` (`shared/sim.js`), and in one of those nothing adds a virus once `resetArena` has dealt the round its set:
+
+- **Feeding never splits a virus.** The blob is swallowed and nothing more happens. The hit is not counted either, so the virus does not swell to warn of a split that is never coming.
+- **A virus that is eaten is gone for the rest of the round.** It used to be replaced at once, at a random point with no check for who was standing there, so a big cell could pop on a virus that appeared under it: a split nobody caused.
+- **No bot lines up a virus shot**, since the throws would buy nothing.
+
+Over two minutes of a 60-bot Hard room, the old rules added 61 viruses mid-round: 56 shot out of fed ones and 5 dropped in at random. Now a round can only lose viruses (`test/sim.test.js` runs both). Practice runs in the browser with no rounds and never deals a fresh board, so it keeps feeding, the bots' virus shots and the top-up below. The menu's bot-level note leaves virus shots out for staked rooms.
+
 Only mass **still in flight** counts. Feeding is shooting a blob into a virus, not parking next to one, and a blob that runs out of travel short of the virus has missed. The fed mass is swallowed either way, so feeding is a pure sink for the feeder: 16 mass spent, 13 delivered, none of it recoverable. What you buy with it is a hazard placed where you want it.
 
 Viruses coast on their own friction rather than a cell's. At the cell rate a virus launched fast enough to matter is gone in a third of a second, and one launched slowly travels barely its own diameter — 107 units, against a diameter of 84. `VIRUS_SPLIT_SPEED` of 820 units/second against `VIRUS_FRICTION` 0.97 puts it ~450 units out over about a second and a half. 820 is also 41 units per 50ms tick, under the 45-unit radius of the smallest cell a virus can pop. That alone was never a guarantee: the server steps by measured time, up to 250ms, and a late tick moves a shot virus 165 units. Pops are now tested along each step as well (see *Collisions along the way*).
 
-**The population has a ceiling** of `VIRUS_MAX_RATIO` (1.5) times the count the arena seeds — 135 for Standard. Past it a fed virus still resets and still swallows the mass, it just has nowhere to put the child. Eating a virus tops the population back up only when it is *below* the seeded count, so a long round cannot ratchet upwards one split at a time.
+**In practice the population has a ceiling** of `VIRUS_MAX_RATIO` (1.5) times the count the arena seeds — 135 for Standard. Past it a fed virus still resets and still swallows the mass, it just has nowhere to put the child. Eating a virus tops the population back up only when it is *below* the seeded count, so a long session cannot ratchet upwards one split at a time.
 
 The wire carries a virus's compact id and feed count alongside its position (7 bytes, up from 4). The feed count is what makes it swell on screen — the only warning anyone gets that a virus is primed. The id is what lets the client match a virus between snapshots and interpolate a shot one, instead of stepping it a radius at a time at 20Hz; their order in the list is a function of where the viewer is standing, so position in the array cannot be used for it.
 
@@ -1157,7 +1165,7 @@ SLOW : 74 of ~1800 ticks overran their 33.3ms budget in the last minute (avg 41.
 Playing the live PvP mode normally needs 100 signed-in strangers. `TEST_MODE=1` makes it playable alone:
 
 ```bash
-npm run dev          # test mode, 60 bots, 4-minute rounds
+npm run dev          # test mode, 60 bots, 2-minute rounds
 npm run dev:solo     # 100 bots at full density, 1-minute rounds
 ```
 
@@ -1168,7 +1176,7 @@ Then open **`http://localhost:8080/?mode=online`** — the `?mode=online` matter
 | `LOBBY_MIN` | 100 ready | **1 ready** |
 | `BOTS` | 0 | **60**, and a fixed count rather than "seats humans left" |
 | `BOT_DIFFICULTY` | — (no bots) | `normal` for the standing rooms; players can pick their own level in the menu |
-| `ROUND_SECONDS` | 600 | **240** |
+| `ROUND_SECONDS` | 600 | **120** |
 | `COUNTDOWN_SECONDS` | 5 | 5 — the count is not shortened in test mode |
 | `HOLD_SECONDS` | 3 | 3 — nor is the hold |
 | `STANDINGS_SECONDS` | 5 | 5 |

@@ -499,6 +499,81 @@ console.log("\n-- ejected mass behaves like a projectile --");
     w.viruses.length === before - 1, `${before} -> ${w.viruses.length}`);
 }
 
+// ── a match keeps the viruses it was dealt ──────────────────────────────────
+
+{
+  // A cell big enough to pop a virus, put on top of one, in an arena at its
+  // seeded count. The server's rooms are built with fixedViruses on.
+  const popOne = fixedViruses => {
+    const w = createWorld(41, { size: 8800, pellets: 0, viruses: 6, fixedViruses });
+    const vids = new Set(w.viruses.map(v => v.vid));
+    const eater = addPlayer(w, { id: "big", name: "Big" });
+    Object.assign(eater.cells[0], { x: w.viruses[0].x, y: w.viruses[0].y, mass: VIRUS_MASS * 2 });
+    stepWorld(w, 1 / TICK_HZ);
+    // Long enough for anything that was going to appear to have appeared.
+    for (let i = 0; i < TICK_HZ * 5; i++) stepWorld(w, 1 / TICK_HZ);
+    return { w, vids, popped: [...vids].filter(id => !w.viruses.some(v => v.vid === id)).length };
+  };
+
+  const match = popOne(true);
+  check("in a match, a virus that is eaten is gone", match.popped === 1, `${match.popped} popped`);
+  check("and nothing takes its place", match.w.viruses.length === 5, `${match.w.viruses.length}`);
+  check("every virus left is one the round was dealt",
+    match.w.viruses.every(v => match.vids.has(v.vid)));
+
+  const practice = popOne(false);
+  check("practice still tops back up to the seeded count",
+    practice.popped === 1 && practice.w.viruses.length === 6, `${practice.w.viruses.length}`);
+
+  // Fed far past the hits that would split it: the mass is swallowed, the
+  // virus does not swell, and nothing is shot out of it.
+  const feed = fixedViruses => {
+    const w = createWorld(42, { size: 8800, pellets: 0, viruses: 2, fixedViruses });
+    const target = w.viruses[0];
+    for (let i = 0; i < VIRUS_FEED_HITS * 3; i++) {
+      w.pellets.push({ id: 7000 + i, x: target.x - 1, y: target.y, mass: EJECT_KEEP,
+                       vx: 200, vy: 0, ci: 0, owner: "ghost", ownerFree: 0 });
+      stepWorld(w, 1 / TICK_HZ);
+    }
+    return { count: w.viruses.length, fed: target.fed, left: w.pellets.length };
+  };
+  const fedMatch = feed(true);
+  check("feeding a virus in a match never splits it", fedMatch.count === 2, JSON.stringify(fedMatch));
+  check("nor swells it towards a split", fedMatch.fed === 0, `${fedMatch.fed}`);
+  check("though the mass is still swallowed", fedMatch.left === 0, `${fedMatch.left} blobs left`);
+  check("practice still splits a fed virus", feed(false).count > 2);
+
+  // A whole round of a busy room: bots eat viruses, and hard bots would feed
+  // them if they could. Count every virus the board has not seen before.
+  const busy = fixedViruses => {
+    const room = createWorld(43, { botLevel: "hard", fixedViruses });
+    fillBots(room, 60);
+    const seen = new Set(room.viruses.map(v => v.vid));
+    const dealt = seen.size;
+    let shot = 0, dropped = 0, plans = 0;
+    for (let i = 0; i < TICK_HZ * 120; i++) {
+      stepWorld(room, 1 / TICK_HZ);
+      for (const p of room.players.values()) if (p.plan) plans++;
+      for (const v of room.viruses) {
+        if (seen.has(v.vid)) continue;
+        seen.add(v.vid);
+        // A fed one is born moving, shot out of its parent; a refill stands still.
+        if (v.vx || v.vy) shot++; else dropped++;
+      }
+    }
+    return { dealt, left: room.viruses.length, shot, dropped, plans };
+  };
+  const round = busy(true);
+  check("over two minutes of a busy match, no new virus appears",
+    round.shot === 0 && round.dropped === 0, JSON.stringify(round));
+  check("and no bot lines up a virus shot", round.plans === 0, `${round.plans} plan ticks`);
+  check("so the board only ever loses viruses", round.left <= round.dealt, JSON.stringify(round));
+  // The same room without the rule, so the checks above are known to see them.
+  const open = busy(false);
+  check("where the old rules would have added both kinds",
+    open.shot > 0 && open.dropped > 0, JSON.stringify(open));
+}
+
 // ── bot difficulty ──────────────────────────────────────────────────────────
 
 console.log("\n-- bot difficulty --");
@@ -767,7 +842,7 @@ const run = (w, seconds, each) => {
 
 {
   const { w, z } = zoned(31);
-  check("the edges start moving when the clock reads 2:00",
+  check("the edges start moving when the clock reads 1:30",
     Math.abs(z.startAt - (600 - ZONE_AT_REMAINING)) < 1e-9, `${z.startAt}`);
   check("announced ten seconds before that",
     Math.abs(z.startAt - z.warnAt - ZONE_WARN_SECONDS) < 1e-9 && ZONE_WARN_SECONDS === 10);
@@ -798,7 +873,7 @@ const run = (w, seconds, each) => {
   for (let seed = 1; seed <= 12; seed++) spots.add(JSON.stringify(zoned(seed).z.to));
   check("the safe square is placed at random", spots.size >= 11, `${spots.size} of 12 distinct`);
   check("and replays from its seed", JSON.stringify(zoned(5).z) === JSON.stringify(zoned(5).z));
-  // Short rounds: test mode's four minutes keep the full warning; a round
+  // Short rounds: test mode's two minutes keep the full warning; a round
   // shorter than the warning gets no zone at all.
   const w = createWorld(1, { pellets: 0, viruses: 0 });
   const short = planZone(w, 20);

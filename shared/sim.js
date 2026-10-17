@@ -138,9 +138,9 @@ const STEER_RATE = 12;
 // most 40% of the arena in those 45 seconds — 78 units a second in Standard,
 // which any cell short of 40,000 mass outruns — so anyone paying attention
 // walks in. The drain is what punishes not paying attention.
-export const ZONE_AT_REMAINING = 120;   // the clock reads 2:00
+export const ZONE_AT_REMAINING = 90;    // the clock reads 1:30
 export const ZONE_WARN_SECONDS = 10;
-export const ZONE_SHRINK_SECONDS = 45;  // closed at 1:15
+export const ZONE_SHRINK_SECONDS = 45;  // closed at 0:45
 export const ZONE_SHRINK_TO = 0.6;
 // Lost per second by each cell outside: this share of its mass, plus a flat
 // amount so a small cell cannot sit out there for ever. A 20-mass cell is
@@ -541,6 +541,10 @@ export function createWorld(seed = 1, opts = {}) {
     size,
     pelletCount: opts.pellets ?? PELLETS,
     virusCount: opts.viruses ?? VIRUSES,
+    // A match's viruses are the ones its round was dealt: none is replaced
+    // when eaten, and feeding never splits one. The server's rooms turn this
+    // on. Practice, which never deals a fresh board, leaves it off.
+    fixedViruses: opts.fixedViruses ?? false,
     botLevel: isBotLevel(opts.botLevel) ? opts.botLevel : DEFAULT_BOT_LEVEL,
     rng: mulberry32(seed),
     tick: 0,
@@ -569,7 +573,7 @@ const rand = (world, a, b) => a + world.rng() * (b - a);
 // Kept clear of the walls, so nothing spawns already pinned against one.
 const SPAWN_PAD = 140;
 
-// While the zone closes, anything new — an orb, a virus, a bot coming back —
+// While the zone closes, anything new — an orb or a bot coming back —
 // appears inside the safe area, never where it is already lethal. The safe
 // area as it is now, not the square it is closing to: orbs left outside are
 // still counted, so sowing every replacement into the final square packed
@@ -1180,6 +1184,9 @@ function feedViruses(world) {
 
       p.dead = true;
       world.pelletsDirty = true;
+      // Swallowed and nothing more. Not counted either, so the virus does not
+      // swell to warn of a split that is never coming.
+      if (world.fixedViruses) break;
       if (++v.fed < VIRUS_FEED_HITS) break;
 
       // Full. The child is shot off along the line the mass came in on, which
@@ -1233,10 +1240,16 @@ function eatViruses(world, ent) {
         c.mass += v.mass * 0.4;
         v.dead = true;         // a bot may be holding it as a shot to line up
         world.viruses.splice(i, 1);
-        // Topped back up only to the count the arena seeds. Replacing
-        // unconditionally would make every fed split permanent, so a long
-        // round could only ever gain viruses.
-        if (world.viruses.length < world.virusCount) world.viruses.push(makeVirus(world));
+        // Never replaced in a match. The replacement landed at a random
+        // point, under whoever happened to be standing there, and a big cell
+        // popped on it the next tick: a split nobody caused. A round keeps the
+        // viruses it was dealt, and resetArena deals the next one a full set.
+        // Practice has no rounds, so it still tops back up, only to the count
+        // the arena seeds: replacing unconditionally would make every fed
+        // split permanent.
+        if (!world.fixedViruses && world.viruses.length < world.virusCount) {
+          world.viruses.push(makeVirus(world));
+        }
         world.events.push({ t: "pop", id: ent.id, x: c.x, y: c.y });
         burst(world, ent, c);
         return;
@@ -1711,8 +1724,9 @@ function driveBot(world, bot, dt) {
   const split = lvl.split && bot.cells.length <= (lvl.split.cells || 1) && lead.mass >= 36 &&
     world.time >= bot.nextSplit ? lvl.split : null;
   const double = split && split.double && whole && lead.mass >= 72 ? split : null;
-  const look = lvl.virus && whole && !bot.plan && c0.mass >= lvl.virus.minMass &&
-    world.time >= bot.nextVirus && world.time >= bot.nextLook;
+  // Never where feeding cannot split one: the throws would be mass for nothing.
+  const look = lvl.virus && !world.fixedViruses && whole && !bot.plan &&
+    c0.mass >= lvl.virus.minMass && world.time >= bot.nextVirus && world.time >= bot.nextLook;
   if (look) bot.nextLook = world.time + 0.5;
 
   let threat = null, threatD2 = Infinity, prey = null, preyD2 = Infinity;
