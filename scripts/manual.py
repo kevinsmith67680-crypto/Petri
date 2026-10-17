@@ -1106,7 +1106,7 @@ def story():
            "apart, and the ring sitting exactly on the wall padding.", S_BODY)],
         [dia_board("standard"),
          legend_row(colors.HexColor("#b4afc8"), "orbs (one in nine drawn)", 1.6),
-         legend_row(VIRUS, "viruses, all 90 of them", 2.4),
+         legend_row(VIRUS, f"viruses, all {STD['world']['viruses']} of them", 2.4),
          legend_row(ACCENT, f"the {STD['lobbyMin']} opening positions", 2.0)],
         ratio=0.52))
 

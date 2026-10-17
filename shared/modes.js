@@ -23,7 +23,7 @@ export const MODES = [
     lobbyMax: 150,
     paidPositions: 5,
     roundSeconds: 600,
-    world: { size: 8800, pellets: 4100, viruses: 90 }
+    world: { size: 8800, pellets: 4100, viruses: 108 }
   },
   {
     id: "highstakes",
@@ -35,7 +35,7 @@ export const MODES = [
     paidPositions: 5,
     roundSeconds: 600,
     // sqrt(770_667 * 50) ≈ 6200, and orbs and spores scale with the area.
-    world: { size: 6200, pellets: 2035, viruses: 45 }
+    world: { size: 6200, pellets: 2035, viruses: 54 }
   }
 ];
 
