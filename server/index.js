@@ -598,8 +598,10 @@ function createRoom(mode, botLevel = BOT_LEVEL) {
   const n = (roomsOpened.get(mode.id) || 0) + 1;
   roomsOpened.set(mode.id, n);
   // Two rooms opened in the same millisecond must not share an orb layout.
+  // No virus is added to a round once it is dealt: see fixedViruses in
+  // shared/sim.js.
   const world = createWorld((Date.now() + ++roomSerial) & 0xffffffff,
-    { ...mode.world, botLevel });
+    { ...mode.world, botLevel, fixedViruses: true });
   const lobbyMax = LOBBY_MAX_OVERRIDE ?? mode.lobbyMax;
   const room = {
     // Numbers are never reused, so a log line naming standard-2 cannot mean
