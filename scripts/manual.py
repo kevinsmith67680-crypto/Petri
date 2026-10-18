@@ -258,8 +258,9 @@ EJECT_LOSS = (K["EJECT_MASS"] - K["EJECT_KEEP"]) / K["EJECT_MASS"] * 100
 MASS_PER_USDC = K["UNIT"] / K["MICRO_PER_MASS"]         # 200
 ORBS_TO_100 = -(-(100 - K["START_MASS"]) // K["PELLET_MASS"])
 DECAY_PCT = K["DECAY_RATE"] * 100                       # 0.5
-# What eating a rival pays, in words: exactly their mass, or a multiple.
-EATS = "all of their mass" if K["EAT_BONUS"] == 1 else f"{K['EAT_BONUS']:g}x their mass"
+# What eating a rival pays, in words: exactly their mass, or a share of it.
+EATS = "all of their mass" if K["EAT_BONUS"] == 1 else f"{100 * K['EAT_BONUS']:g}% of their mass"
+EATS_CAP = EATS[0].upper() + EATS[1:]
 
 def zone_seconds(start, end):
     """How long a cell outside the zone takes to drain from one mass to
@@ -451,7 +452,7 @@ def dia_eat_rule():
     d.add(String(285, 100, f"eats, and gains {100 * K['EAT_BONUS']:g}", fontName="Helvetica-Bold",
                  fontSize=7.5, fillColor=VIRUS_EDGE, textAnchor="middle"))
     arrow(d, 320, y, 366, y, ACCENT, 1.2, 5)
-    d.add(String(430, y - 3, EATS.replace("of their ", "their "), fontName="Helvetica-Bold",
+    d.add(String(430, y - 3, EATS.replace("all of their ", "all their "), fontName="Helvetica-Bold",
                  fontSize=8, fillColor=ACCENT, textAnchor="middle"))
     d.add(String(430, y - 15, "is what you collect", fontName="Helvetica", fontSize=7.5,
                  fillColor=MUTED, textAnchor="middle"))
@@ -1321,7 +1322,7 @@ def story():
         ["When this happens", "Your money does this"],
         [["You join a wagered round", "Your stake moves out of your balance and into "
                                       "escrow - your pot. You cannot spend it while the round runs."],
-         ["You eat a staked player", "All of their mass becomes yours, and their pot moves "
+         ["You eat a staked player", f"{EATS_CAP} becomes yours, and their pot moves "
                                      "into yours. The mass is what you are paid on."],
          ["You are eaten by a staked player", "Your whole pot becomes theirs."],
          [f"You finish in the top {STD['paidPositions']}, alive",
@@ -1351,7 +1352,7 @@ def story():
         f"{STD['paidPositions']} and the mass value on your HUD at the whistle is what "
         f"you are paid. Mass {MASS_PER_USDC:.0f} gets a {money(K['UNIT'])} stake back; "
         "every point above it is profit.",
-        "<b>Eating a big player is the fastest money there is.</b> All of their mass "
+        f"<b>Eating a big player is the fastest money there is.</b> {EATS_CAP} "
         "becomes yours in one bite, and every point of it is paid if you place.",
         "<b>Size makes you a target.</b> Late in a round the biggest players are "
         "carrying the most money, and everybody can see how big they are.",

@@ -78,12 +78,13 @@ export const MAX_CELLS = 16;
 // leader snowballs sooner. Worth playing a full round before deciding it is
 // right.
 export const EAT_RATIO = 1.098;
-// What absorbing a rival pays, as a multiple of its mass. Exactly its mass:
-// at 1.2 every kill made a fifth of the victim out of nothing, and in a full
-// room that compounded — a simulated 100-player round went from 2,000 mass on
-// the board to 774,000 by 1:30 left, and the closing zone fed one player the
-// lot.
-export const EAT_BONUS = 1.0;
+// What absorbing a rival pays, as a multiple of its mass: 85% of it, and the
+// other 15% is gone from the board. Was exactly its mass, and before that
+// 1.2, at which every kill made a fifth of the victim out of nothing; in a
+// full room that compounded — a simulated 100-player round went from 2,000
+// mass on the board to 774,000 by 1:30 left, and the closing zone fed one
+// player the lot.
+export const EAT_BONUS = 0.85;
 export const MERGE_DELAY = 1.75;     // multiplier on the rejoin cooldown
 // Above DECAY_ABOVE a cell loses DECAY_RATE of its mass a second, so staying
 // big means going on eating: 2 a second at 400, 8 at 1,600. Was 0.22%, which
