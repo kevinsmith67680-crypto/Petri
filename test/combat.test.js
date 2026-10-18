@@ -87,7 +87,7 @@ const G = await import(pathToFileURL(path.join(dir, "grid.mjs")).href);
 const P = await import(pathToFileURL(path.join(dir, "pairs.mjs")).href);
 fs.rmSync(dir, { recursive: true, force: true });
 
-const { radiusOf, EAT_RATIO, MAX_CELLS, TICK_HZ } = G;
+const { radiusOf, EAT_RATIO, EAT_BONUS, MAX_CELLS, TICK_HZ } = G;
 const DT = 1 / TICK_HZ;
 const CELL_GRID = 256;               // as in shared/sim.js; only used to place fixtures
 const bucket = v => Math.max(0, Math.floor(v / CELL_GRID));
@@ -206,7 +206,8 @@ console.log("\nPaths across buckets");
   const ev = g.events.filter(e => e.t === "eat");
   check("a victim filed in four buckets is eaten once",
     ev.length === 1 && g.players.get("eater").eaten === 1 &&
-    cellsOf(g, "eater")[0].mass === 2020 && same, `${ev.length} bite(s), mass ${cellsOf(g, "eater")[0].mass}`);
+    cellsOf(g, "eater")[0].mass === 2000 + 20 * EAT_BONUS && same,
+    `${ev.length} bite(s), mass ${cellsOf(g, "eater")[0].mass}`);
 }
 {
   // Cells pushed a little past the wall are still filed and found.
@@ -266,16 +267,20 @@ console.log("\nPriority rules");
   // A bite grows the cell. Its next victims are searched for at the new
   // size, so prey that was outside its first search, in another bucket, is
   // eaten if its player comes later in join order, and not if earlier.
+  //
+  // Late sits 150 out: across the bucket line, past the first reach (117) and
+  // inside the reach after the meal (158 at 85% of it).
   const x = 10 * CELL_GRID - 140;           // 126 short of the bucket line
   const ra = radiusOf(1000);
+  const grown = radiusOf(1000 + 900 * EAT_BONUS);
   for (const [order, eaten] of [[["a", "meal", "late"], true], [["a", "late", "meal"], false]]) {
     const w = arena();
-    const cells = { a: [cell(x, 3000, 1000)], meal: [cell(x - 10, 3000, 900)], late: [cell(x + 160, 3000, 20)] };
+    const cells = { a: [cell(x, 3000, 1000)], meal: [cell(x - 10, 3000, 900)], late: [cell(x + 150, 3000, 20)] };
     for (const id of order) player(w, id, cells[id]);
     const { g, same } = both(w);
     check(`growth reaches a later player in another bucket: ${order.join(" > ")}`,
       (cellsOf(g, "late").length === 0) === eaten && cellsOf(g, "meal").length === 0 && same,
-      `first reach ${(ra - radiusOf(20) * 0.55).toFixed(0)}, after ${(radiusOf(1900) - radiusOf(20) * 0.55).toFixed(0)}, prey at 160`);
+      `first reach ${(ra - radiusOf(20) * 0.55).toFixed(0)}, after ${(grown - radiusOf(20) * 0.55).toFixed(0)}, prey at 150`);
   }
 }
 {

@@ -568,10 +568,13 @@ console.log("\n-- ejected mass behaves like a projectile --");
     round.shot === 0 && round.dropped === 0, JSON.stringify(round));
   check("and no bot lines up a virus shot", round.plans === 0, `${round.plans} plan ticks`);
   check("so the board only ever loses viruses", round.left <= round.dealt, JSON.stringify(round));
-  // The same room without the rule, so the checks above are known to see them.
+  // The same room without the rule, so the checks above are known to see new
+  // viruses. Which kind depends on the run: fed ones that keep the count above
+  // the seeded one leave the top-up nothing to do. The top-up has its own
+  // check above.
   const open = busy(false);
-  check("where the old rules would have added both kinds",
-    open.shot > 0 && open.dropped > 0, JSON.stringify(open));
+  check("where the old rules would have added some",
+    open.shot + open.dropped > 0, JSON.stringify(open));
 }
 
 // ── bot difficulty ──────────────────────────────────────────────────────────
