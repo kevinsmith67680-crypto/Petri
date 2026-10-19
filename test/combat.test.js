@@ -269,7 +269,7 @@ console.log("\nPriority rules");
   // eaten if its player comes later in join order, and not if earlier.
   //
   // Late sits 150 out: across the bucket line, past the first reach (117) and
-  // inside the reach after the meal (158 at 85% of it).
+  // inside the reach after the meal (160 at 90% of it).
   const x = 10 * CELL_GRID - 140;           // 126 short of the bucket line
   const ra = radiusOf(1000);
   const grown = radiusOf(1000 + 900 * EAT_BONUS);
