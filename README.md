@@ -440,7 +440,7 @@ Three numbers in `shared/sim.js` set how quickly mass comes, and they were retun
 | | Was | Now |
 |---|---|---|
 | `PELLET_MASS`, an orb | 3.375 | 2 (since raised to 3) |
-| `EAT_BONUS`, what a kill pays | 1.2x the victim's mass | exactly the victim's mass (since lowered to 0.85x) |
+| `EAT_BONUS`, what a kill pays | 1.2x the victim's mass | exactly the victim's mass (since lowered to 0.9x) |
 | `DECAY_RATE`, above `DECAY_ABOVE` (260) | 0.22% a second | 0.5% a second |
 
 Measured in the real simulation over ten-minute Standard rounds with the closing zone. "Farmer" is a scripted player taking the best orb in reach, alone, with nobody to fight; the rest is a room of 100 Normal bots.
