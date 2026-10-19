@@ -29,7 +29,7 @@
 import { Reader, Writer, clampU16 } from "./codec.js";
 import {
   radiusOf, totalMass, centroid, leaderboard, rankOf, MAX_WORLD, forEachPelletNear,
-  PELLET_MASS, zoneBounds, driftHeading
+  PELLET_MASS, zoneBounds
 } from "./sim.js";
 
 // Positions travel as u16. createWorld enforces the same bound at construction
@@ -58,9 +58,7 @@ export const WORLD_LIMIT = MAX_WORLD;
 // open from before keeps playing against a new server, and a new tab matched
 // onto a server not yet redeployed keeps playing too — both steer by the old
 // rule — instead of a whole room being told to reload mid-round.
-//
-// 13: each virus record carries a heading byte, for the red ones that drift.
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 12;
 
 export const MSG = {
   JOIN: "join",        // text
@@ -123,12 +121,7 @@ const NO_STEER = 0xffff;   // speed sentinel: the cell has not been steered yet
 const CELL_BYTES = 13;
 const PELLET_BYTES = 10;
 const REMOVE_BYTES = 4;
-const VIRUS_BYTES = 8;
-
-// A drifting virus's heading in one byte: 0 for one that sits still, else
-// 1-255 around the circle, a step of 1.4 degrees.
-const encodeHeading = a => (a === null ? 0 : 1 + (Math.round(((a / (2 * Math.PI)) % 1 + 1) % 1 * 255) % 255));
-const decodeHeading = b => (b === 0 ? null : ((b - 1) / 255) * 2 * Math.PI);
+const VIRUS_BYTES = 7;
 
 // The zone as the client needs it: what stage it is at, the whole seconds
 // left in that stage, the safe area now and the square it is closing to.
@@ -274,7 +267,7 @@ export function snapshotFrame(world) {
   for (let k = 0; k < nv; k++) {
     const v = vs[k];
     vx[k] = v.x; vy[k] = v.y;
-    vrec.u16(v.vid).u16(Math.round(v.x)).u16(Math.round(v.y)).u8(v.fed).u8(encodeHeading(driftHeading(v)));
+    vrec.u16(v.vid).u16(Math.round(v.x)).u16(Math.round(v.y)).u8(v.fed);
   }
   return {
     world, tick: world.tick, n, cells, owners, xs, ys, reach, rec: rec.bytes(),
@@ -665,7 +658,7 @@ export function decodeSnapshot(buffer) {
   const virusCount = r.expect(r.u16(), VIRUS_BYTES);
   for (let i = 0; i < virusCount; i++) {
     const vid = r.u16();
-    viruses.push([r.u16(), r.u16(), r.u8(), vid, decodeHeading(r.u8())]);
+    viruses.push([r.u16(), r.u16(), r.u8(), vid]);
   }
 
   let board = null;

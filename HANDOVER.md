@@ -163,10 +163,6 @@ it the game still plays and still settles — the stake is forfeit either way �
 such match record fails to write and logs `recordMatch:`, so it is missing from the
 player's history.
 
-**This branch: `PROTOCOL_VERSION` 12 → 13.** Each virus record gains a heading byte, for
-the red viruses that drift (README, "Drifting viruses"). Same consequence as every bump:
-open tabs are told to reload. Deploy between rounds.
-
 **This branch: `PROTOCOL_VERSION` 11 → 12.** The netcode rework: aims and actions are
 numbered and acknowledged, actions carry their aim, own cells carry their motion,
 snapshot time is an f64 (README, "Reconciliation by input replay"). Same consequence as
