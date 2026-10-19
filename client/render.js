@@ -63,9 +63,6 @@ export const THEMES = {
     nameEdge: "rgba(0,0,0,.34)",
     virusFill: "#6aa84f",
     virusEdge: "#47772f",
-    driftFill: "#d9483b",
-    driftEdge: "#9e2c24",
-    driftArrow: "#9e2c24",
     player: "#7a56a8",
     // The closing zone: the red the clock turns in its last thirty seconds,
     // and the safe square in ink, like the edge of a map.
@@ -85,9 +82,6 @@ export const THEMES = {
     nameEdge: "rgba(0,0,0,.5)",
     virusFill: "#57a84c",
     virusEdge: "#356f2e",
-    driftFill: "#e0584a",
-    driftEdge: "#a3342a",
-    driftArrow: "#f08a7e",
     player: "#a884e0",
     zoneTint: "rgba(240,138,128,.14)",
     zoneEdge: "#f08a80",
@@ -231,27 +225,11 @@ export function createRenderer(canvas, mapCanvas) {
       i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     }
     ctx.closePath();
-    // Red for one that drifts, with an arrowhead off its rim showing which way:
-    // it holds that heading until it bounces off a wall, so the arrow is all
-    // anyone needs to see where it will be.
-    const heading = v[4];
-    const drifts = heading !== null && heading !== undefined;
-    ctx.fillStyle = drifts ? th.driftFill : th.virusFill;
+    ctx.fillStyle = th.virusFill;
     ctx.fill();
     ctx.lineWidth = 2.5;
-    ctx.strokeStyle = drifts ? th.driftEdge : th.virusEdge;
+    ctx.strokeStyle = th.virusEdge;
     ctx.stroke();
-    if (drifts) {
-      const ux = Math.cos(heading), uy = Math.sin(heading);
-      const tip = r * 1.75, base = r * 1.3, half = r * 0.28;
-      ctx.beginPath();
-      ctx.moveTo(v[0] + ux * tip, v[1] + uy * tip);
-      ctx.lineTo(v[0] + ux * base - uy * half, v[1] + uy * base + ux * half);
-      ctx.lineTo(v[0] + ux * base + uy * half, v[1] + uy * base - ux * half);
-      ctx.closePath();
-      ctx.fillStyle = th.driftArrow;
-      ctx.fill();
-    }
   }
 
   // Everything outside a box, as four rectangles: no clip region and no

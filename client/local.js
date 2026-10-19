@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import {
-  createWorld, addPlayer, fillBots, setAim, queueAction, setBotLevel, driftHeading,
+  createWorld, addPlayer, fillBots, setAim, queueAction, setBotLevel,
   stepWorld, totalMass, centroid, leaderboard, rankOf
 } from "../shared/sim.js";
 import { PHASE_NONE } from "../shared/protocol.js";
@@ -66,7 +66,7 @@ export function createLocalConnection({
         [p.x, p.y, p.ci, p.mass > PELLET_MASS ? 1 : 0, p.owner === "me" ? 1 : 0]);
       // Same shape the wire uses, feed count and id included, so practice and
       // live render a fed virus identically.
-      const viruses = world.viruses.map(v => [v.x, v.y, v.fed, v.vid, driftHeading(v)]);
+      const viruses = world.viruses.map(v => [v.x, v.y, v.fed, v.vid]);
       const c = centroid(me);
       const rank = rankOf(world, "me");
 

@@ -40,7 +40,6 @@ ACCENT_SOFT = colors.HexColor("#efe9f7")
 VIRUS = colors.HexColor("#6aa84f")
 VIRUS_EDGE = colors.HexColor("#47772f")
 DANGER = colors.HexColor("#d1493f")
-DRIFT = colors.HexColor("#d9483b")       # a drifting virus, as the game draws it
 RULE = colors.HexColor("#d9d9d6")
 PAPER = colors.HexColor("#faf9f7")
 STAINS = ["#3b6ea5", "#d1493f", "#7a56a8", "#d9779f", "#3f9377", "#d09030", "#5f8f57"]
@@ -63,7 +62,7 @@ def read_constants():
       'EJECT_OWNER_COOLDOWN','VIRUS_FEED_HITS','VIRUS_SPLIT_SPEED','VIRUS_MAX_RATIO',
       'SPAWN_GAP','TICK_HZ','ZONE_AT_REMAINING','ZONE_WARN_SECONDS',
       'ZONE_SHRINK_SECONDS','ZONE_SHRINK_TO','ZONE_DRAIN','ZONE_DRAIN_FLAT','ZONE_MIN_MASS',
-      'VIRUS_CLEAR','DRIFT_SHARE','DRIFT_SPEED'];
+      'VIRUS_CLEAR'];
     const out = {};
     for (const n of names) out[n] = S[n];
     out.MODES = MODES;
@@ -174,7 +173,7 @@ def read_constants():
         // A thinned sample for drawing. Every 9th orb keeps the spread
         // visible without putting 4,100 circles in a PDF.
         orbs: w.pellets.filter((_, i) => i % 9 === 0).map(q => [Math.round(q.x), Math.round(q.y)]),
-        vir: w.viruses.map(q => [Math.round(q.x), Math.round(q.y), q.drift ? 1 : 0]),
+        vir: w.viruses.map(q => [Math.round(q.x), Math.round(q.y)]),
       };
     }
     out.spawnPad = 140;
@@ -271,9 +270,6 @@ EJECT_LOSS = (K["EJECT_MASS"] - K["EJECT_KEEP"]) / K["EJECT_MASS"] * 100
 MASS_PER_USDC = K["UNIT"] / K["MICRO_PER_MASS"]         # 200
 ORBS_TO_100 = -(-(100 - K["START_MASS"]) // K["PELLET_MASS"])
 DECAY_PCT = K["DECAY_RATE"] * 100                       # 0.5
-# Red, drifting viruses on each board, rounded half up as scatterViruses does.
-DRIFTERS_STD = int(STD["world"]["viruses"] * K["DRIFT_SHARE"] + 0.5)
-DRIFTERS_HIGH = int(HIGH["world"]["viruses"] * K["DRIFT_SHARE"] + 0.5)
 # What eating a rival pays, in words: exactly their mass, or a share of it.
 EATS = "all of their mass" if K["EAT_BONUS"] == 1 else f"{100 * K['EAT_BONUS']:g}% of their mass"
 EATS_CAP = EATS[0].upper() + EATS[1:]
@@ -701,8 +697,8 @@ def dia_board(mode="standard", side=None, ring=True):
     for x, y in b["orbs"]:
         d.add(Circle(x * sc, y * sc, 0.85, fillColor=colors.HexColor("#b4afc8"),
                      strokeColor=None))
-    for x, y, drift in b["vir"]:
-        d.add(Circle(x * sc, y * sc, 2.1, fillColor=DRIFT if drift else VIRUS, strokeColor=None))
+    for x, y in b["vir"]:
+        d.add(Circle(x * sc, y * sc, 2.1, fillColor=VIRUS, strokeColor=None))
 
     if ring:
         r = b["ringRadius"] * sc
@@ -1122,7 +1118,6 @@ def story():
         [dia_board("standard"),
          legend_row(colors.HexColor("#b4afc8"), "orbs (one in nine drawn)", 1.6),
          legend_row(VIRUS, f"viruses, all {STD['world']['viruses']} of them", 2.4),
-         legend_row(DRIFT, f"the {DRIFTERS_STD} of them that drift", 2.4),
          legend_row(ACCENT, f"the {STD['lobbyMin']} opening positions", 2.0)],
         ratio=0.52))
 
@@ -1215,7 +1210,6 @@ def story():
          ["Closest pair on a sample board",
           f"{STDB['virusMin']:.0f} units apart", f"{HIB['virusMin']:.0f} units apart"],
          ["Nearest to any opening", f"{STDB['openClear']:.0f} units", f"{HIB['openClear']:.0f} units"],
-         ["Red, drifting at " + f"{K['DRIFT_SPEED']} units/s", str(DRIFTERS_STD), str(DRIFTERS_HIGH)],
          ["Added once the round starts", "none", "none"]],
         [56 * mm, None, None]))
 
@@ -1228,15 +1222,10 @@ def story():
         f"{STDB['virusMin']:.0f} units apart, so there is no virus wall to trap a "
         f"player over {POP_MASS:.0f} mass and no cluster for a small one to hide in "
         "that only some openings can reach.",
-        f"About one in {round(1 / K['DRIFT_SHARE']):.0f} is red, and drifts at "
-        f"{K['DRIFT_SPEED']} units a second in a straight line, bouncing off the walls. "
-        "Any cell can outrun one, and the arrow on its rim shows where it is going: "
-        "a red virus only catches someone who was not looking. It pops a big cell "
-        "exactly as a green one does.",
         "The population is fixed once a round starts. Nothing adds a virus: feeding "
         "one never splits it, and one that is eaten is not replaced, so a round can "
         "only lose viruses. Every virus on the board is one the round was dealt, "
-        "and all but the red ones sit where they were dealt.",
+        "sitting where it was dealt.",
     ]))
 
     s.append(PageBreak())
