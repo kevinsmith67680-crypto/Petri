@@ -37,7 +37,7 @@ import { WebSocketServer } from "ws";
 
 import {
   createWorld, addPlayer, removePlayer, fillBots, resetArena, spawnRing, planZone,
-  setAim, queueAction, stepWorld, totalMass, TICK_HZ, STAIN_COUNT,
+  scatterViruses, setAim, queueAction, stepWorld, totalMass, TICK_HZ, STAIN_COUNT,
   isBotLevel, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL
 } from "../shared/sim.js";
 import {
@@ -1608,6 +1608,9 @@ async function startRound(room) {
   }
   const bots = [...world.players.values()].filter(p => p.bot);
   spawnRing(world, startingOrder(humans, bots));
+  // Again, against the ring the round actually opens on: resetArena's ring
+  // was everyone in the room, at another angle.
+  scatterViruses(world);
   dealEntrants(room);
 
   room.lastEater.clear();

@@ -52,7 +52,7 @@ def read_constants():
     the game cannot disagree."""
     script = """
     import * as S from './shared/sim.js';
-    const { createWorld, addPlayer, spawnRing, orbGap } = S;
+    const { createWorld, addPlayer, spawnRing, resetArena, orbGap } = S;
     import { MODES } from './shared/modes.js';
     import * as W from './shared/wager.js';
     import { MOUSE_FULL_SPEED_DISTANCE } from './client/render.js';
@@ -61,7 +61,8 @@ def read_constants():
       'EAT_BONUS','MERGE_DELAY','DECAY_ABOVE','DECAY_RATE','BASE_SPEED','EJECT_SPEED',
       'EJECT_OWNER_COOLDOWN','VIRUS_FEED_HITS','VIRUS_SPLIT_SPEED','VIRUS_MAX_RATIO',
       'SPAWN_GAP','TICK_HZ','ZONE_AT_REMAINING','ZONE_WARN_SECONDS',
-      'ZONE_SHRINK_SECONDS','ZONE_SHRINK_TO','ZONE_DRAIN','ZONE_DRAIN_FLAT','ZONE_MIN_MASS'];
+      'ZONE_SHRINK_SECONDS','ZONE_SHRINK_TO','ZONE_DRAIN','ZONE_DRAIN_FLAT','ZONE_MIN_MASS',
+      'VIRUS_CLEAR'];
     const out = {};
     for (const n of names) out[n] = S[n];
     out.MODES = MODES;
@@ -101,8 +102,10 @@ def read_constants():
     // The board: measured, not asserted. A real seeded arena is built and its
     // orb and virus layout is sampled, so the map in the manual is a map of a
     // world the server could actually deal.
-    const nn = pts => {
-      const G = 400, b = new Map(), key = (a, c) => a * 100003 + c;
+    // G is the bucket size, and the search reaches at least that far: wide
+    // enough for orbs at 400, and for evenly spread viruses it has to be wider.
+    const nn = (pts, G = 400) => {
+      const b = new Map(), key = (a, c) => a * 100003 + c;
       pts.forEach((q, i) => {
         const k = key((q.x / G) | 0, (q.y / G) | 0);
         if (!b.has(k)) b.set(k, []);
@@ -126,8 +129,13 @@ def read_constants():
 
     out.board = {};
     for (const m of MODES) {
+      // Dealt as a round is, with a full lobby on the ring: the viruses keep
+      // clear of where everyone opens, and the orbs are sown around them.
       const w = createWorld(42, { size: m.world.size, pellets: m.world.pellets,
                                   viruses: m.world.viruses });
+      for (let i = 0; i < m.lobbyMin; i++) addPlayer(w, { id: 'p' + i, name: 'P' + i });
+      resetArena(w);
+      const opens = [...w.players.values()].map(p => p.cells[0]);
       // Hundredths of the sown square, inside the wall padding. Counted over
       // the whole board, the edge squares would only be measuring the padding.
       const Sz = m.world.size, N = 10, cells = new Array(N * N).fill(0);
@@ -148,8 +156,12 @@ def read_constants():
         size: Sz,
         orbGap: med(nn(w.pellets)),
         orbMin: orbGap(w),
-        virusGap: med(nn(w.viruses)),
-        virusMin: nn(w.viruses)[0],
+        virusGap: med(nn(w.viruses, 1500)),
+        virusMin: nn(w.viruses, 1500)[0],
+        // From the edge of the nearest opening cell to the nearest virus centre.
+        openClear: Math.min(...opens.map(c => Math.min(...w.viruses.map(v =>
+          Math.hypot(v.x - c.x, v.y - c.y))) - S.radiusOf(c.mass))),
+        opens: opens.map(c => [Math.round(c.x), Math.round(c.y)]),
         areaPerOrb: Sz * Sz / w.pellets.length,
         areaPerVirus: Sz * Sz / w.viruses.length,
         richest: Math.max(...cells),
@@ -694,12 +706,10 @@ def dia_board(mode="standard", side=None, ring=True):
         d.add(Circle(c, c, r, fillColor=None, strokeColor=ACCENT, strokeWidth=0.8,
                      strokeDashArray=[2, 2]))
         # The real count, not a decorative sample: this is what a full lobby
-        # standing on the ring actually looks like.
-        n = STD["lobbyMin"] if mode == "standard" else HIGH["lobbyMin"]
-        for i in range(n):
-            a = i * 2 * math.pi / n
-            d.add(Circle(c + math.cos(a) * r, c + math.sin(a) * r, 1.5,
-                         fillColor=ACCENT, strokeColor=None))
+        # standing on the ring actually looks like, where the viruses were
+        # dealt around it.
+        for x, y in b["opens"]:
+            d.add(Circle(x * sc, y * sc, 1.5, fillColor=ACCENT, strokeColor=None))
     d.add(String(0, side + 5, "ONE REAL ARENA, TO SCALE", fontName="Helvetica-Bold",
                  fontSize=7, fillColor=MUTED))
     return d
@@ -1186,9 +1196,10 @@ def story():
                "one, and free to anyone who reaches it first.", S_BODY))
 
     s.append(P("How the viruses are spread", S_H2))
-    s.append(P("Uniformly at random, so unlike the orbs they do clump - and for "
-               "viruses that matters, because the gaps are wide enough to plan around "
-               "and the clusters are dangerous.", S_BODY))
+    s.append(P("Evenly, like the orbs. Each is put where it has the most room from "
+               "the others, so they never clump, and none is dealt within "
+               f"{K['VIRUS_CLEAR']} units of a starting spot. Nobody opens beside a "
+               "virus, or beside a cluster of them.", S_BODY))
 
     s.append(datatable(
         ["Viruses", "Standard", "High stakes"],
@@ -1198,6 +1209,7 @@ def story():
           f"{STDB['virusGap']:.0f} units", f"{HIB['virusGap']:.0f} units"],
          ["Closest pair on a sample board",
           f"{STDB['virusMin']:.0f} units apart", f"{HIB['virusMin']:.0f} units apart"],
+         ["Nearest to any opening", f"{STDB['openClear']:.0f} units", f"{HIB['openClear']:.0f} units"],
          ["Added once the round starts", "none", "none"]],
         [56 * mm, None, None]))
 
@@ -1206,16 +1218,10 @@ def story():
         f"typical one sits about {STDB['virusGap']:.0f} units from its nearest "
         "neighbour - so most of the board is open, and you can usually plan a route "
         "that never comes near one.",
-        # Whichever the sample board dealt: a near pair, or one that overlaps.
-        f"But pairs happen. The closest two on the sample board above are "
-        f"{STDB['virusMin']:.0f} units apart, barely more than their own diameters. "
-        f"A gap like that is a death corridor if you are over {POP_MASS:.0f} mass, and "
-        "a fortress if you are under it."
-        if STDB['virusMin'] >= radius_of(K['VIRUS_MASS']) else
-        f"But pairs happen. The closest two on the sample board above are "
-        f"{STDB['virusMin']:.0f} units apart, centre to centre - closer than one is "
-        f"wide, so they overlap. A pair like that is a wall if you are over "
-        f"{POP_MASS:.0f} mass, and a fortress if you are under it.",
+        f"No pairs to luck into. The closest two on the sample board are "
+        f"{STDB['virusMin']:.0f} units apart, so there is no virus wall to trap a "
+        f"player over {POP_MASS:.0f} mass and no cluster for a small one to hide in "
+        "that only some openings can reach.",
         "The population is fixed once a round starts. Nothing adds a virus: feeding "
         "one never splits it, and one that is eaten is not replaced, so a round can "
         "only lose viruses. Every virus on the board is one the round was dealt, "

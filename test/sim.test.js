@@ -17,7 +17,8 @@ import {
   BOT_LEVELS, BOT_LEVEL_IDS, DEFAULT_BOT_LEVEL, setBotLevel,
   PELLET_MASS, orbGap, forEachPelletNear,
   planZone, zoneBounds, outsideZone, ZONE_AT_REMAINING, ZONE_WARN_SECONDS,
-  ZONE_SHRINK_SECONDS, ZONE_SHRINK_TO, ZONE_MIN_MASS
+  ZONE_SHRINK_SECONDS, ZONE_SHRINK_TO, ZONE_MIN_MASS,
+  scatterViruses, VIRUS_CLEAR
 } from "../shared/sim.js";
 import { MODES } from "../shared/modes.js";
 
@@ -575,6 +576,65 @@ console.log("\n-- ejected mass behaves like a projectile --");
   const open = busy(false);
   check("where the old rules would have added some",
     open.shot + open.dropped > 0, JSON.stringify(open));
+}
+
+// ── viruses are dealt evenly, clear of every opening ────────────────────────
+
+{
+  const gaps = pts => pts.map((a, i) => Math.min(...pts.filter((_, j) => j !== i)
+    .map(b => Math.hypot(a.x - b.x, a.y - b.y))));
+  for (const m of MODES) {
+    let closest = Infinity, opening = Infinity, count = true;
+    for (let seed = 1; seed <= 5; seed++) {
+      const w = createWorld(seed, { ...m.world });
+      for (let i = 0; i < m.lobbyMin; i++) addPlayer(w, { id: "p" + i, name: "P" + i });
+      resetArena(w);
+      count = count && w.viruses.length === m.world.viruses;
+      closest = Math.min(closest, ...gaps(w.viruses));
+      for (const p of w.players.values()) {
+        const c = p.cells[0];
+        for (const v of w.viruses) opening = Math.min(opening, Math.hypot(v.x - c.x, v.y - c.y) - radiusOf(c.mass));
+      }
+    }
+    // Dropped at random, the closest pair was 9 to 145 units apart and some
+    // opening always had a virus within 140.
+    check(`${m.label}: every round is dealt its full count`, count);
+    check(`${m.label}: no two viruses closer than 350`, closest >= 350, `${closest.toFixed(0)}`);
+    check(`${m.label}: none within VIRUS_CLEAR of an opening`, opening >= VIRUS_CLEAR, `${opening.toFixed(0)}`);
+  }
+
+  // The server deals its own ring after resetArena, at another angle and
+  // with only the players who readied, then scatters again against it.
+  const w = createWorld(6, { ...MODES[0].world });
+  const field = [];
+  for (let i = 0; i < 100; i++) field.push(addPlayer(w, { id: "p" + i, name: "P" + i }));
+  resetArena(w);
+  spawnRing(w, field.slice(0, 60));
+  for (const p of field.slice(60)) { p.alive = false; p.cells = []; }
+  scatterViruses(w);
+  let gap = Infinity;
+  for (const p of field.slice(0, 60)) {
+    const c = p.cells[0];
+    for (const v of w.viruses) gap = Math.min(gap, Math.hypot(v.x - c.x, v.y - c.y) - radiusOf(c.mass));
+  }
+  check("scattered again, they clear the ring the round really opens on", gap >= VIRUS_CLEAR,
+    `${gap.toFixed(0)}`);
+
+  // Practice still puts an eaten virus back, and never beside anyone.
+  const pr = createWorld(7, { size: 4000, pellets: 0, viruses: 8 });
+  for (let i = 0; i < 20; i++) addPlayer(pr, { id: "b" + i, name: "B" + i });
+  const eater = addPlayer(pr, { id: "big", name: "Big" });
+  Object.assign(eater.cells[0], { x: pr.viruses[0].x, y: pr.viruses[0].y, mass: VIRUS_MASS * 2 });
+  const before = new Set(pr.viruses.map(v => v.vid));
+  const others = [...pr.players.values()].filter(p => p !== eater).map(p => ({ ...p.cells[0] }));
+  stepWorld(pr, 1 / TICK_HZ);
+  const fresh = pr.viruses.filter(v => !before.has(v.vid));
+  const near = fresh.length === 1 ? Math.min(...others.map(c =>
+    Math.hypot(fresh[0].x - c.x, fresh[0].y - c.y) - radiusOf(c.mass))) : -1;
+  // Measured against where the others stood before the tick, and bots move
+  // a little before the virus is placed, so a few units of slack.
+  check("practice puts an eaten virus back clear of every cell", near >= VIRUS_CLEAR - 60,
+    `${fresh.length} new, ${near.toFixed(0)} from the nearest cell`);
 }
 
 // ── bot difficulty ──────────────────────────────────────────────────────────
