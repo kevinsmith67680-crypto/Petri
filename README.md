@@ -996,6 +996,27 @@ With a minimum gap nowhere can hold much more than its share, and a replacement 
 
 **A replacement never lands under a living cell.** Every cell sits in the hole it has just eaten, which is exactly the room the sampler looks for, so without the rule it steers orbs onto whoever stands still: in the same runs the bots ate 32–37k orbs in three minutes, against 27–30k under uniform placement and 24–26k with the rule. Uniform placement had its own version of this, dropping orbs under cells at random in proportion to their size. In one 100-bot test room that fed the round's eventual giant every orb on the board, every tick, by the ninth minute.
 
+### How viruses are placed
+
+**Viruses are spread evenly and kept clear of every opening.** `scatterViruses` in `shared/sim.js` places each virus by best-candidate sampling: of 40 random darts, the one with the most room to the viruses already down. A wall counts as a neighbour half as far away, or the first darts would all go to the edges. No dart within `VIRUS_CLEAR` (450 units) of a living cell is used while any other is available. So no two viruses clump, and nobody opens beside a virus or a cluster of them.
+
+Every round is dealt this way after the field is on its starting ring. `resetArena` scatters them against its own ring. The server then deals the real ring, from the players who readied and at a new angle, and scatters again against that one. Practice puts an eaten virus back with the same sampler, so even there it never appears under somebody. A live round puts none back at all (see "Feeding a virus").
+
+Measured over ten seeds with a full lobby on the ring:
+
+| | Uniform random | Even spread |
+|---|---|---|
+| Standard: closest two viruses | 9–99 units | 428–512 units |
+| Standard: nearest virus to any opening | 19–56 units | 470–488 units |
+| High stakes: closest two viruses | 23–145 units | 418–484 units |
+| High stakes: nearest virus to any opening | 13–140 units | 468–508 units |
+
+A deal takes 2–4 ms with 150 players on the ring, once or twice a round.
+
+**This makes openings fair, not identical.** Exactly identical openings would need the layout to repeat from one opening to the next, which with about one virus per player puts every virus on a single circle around the centre. A circle that crowded walls the board off for big cells (about 268 units between viruses in Standard, so nothing over ~1,100 mass crosses it). The square board also limits how identical the ring can be: at a full lobby an opening mid-side starts 140 units from the wall, while one facing a corner has about 1,400 behind it.
+
+**Own pieces are held inside the walls after they are pushed apart.** `advanceCell` clamps each cell to the wall, and the push that keeps a player's unmergeable pieces apart came after it. With sixteen pieces in a corner, that pushed one back out past the wall, by more than its own radius on about one seed in forty of the crowded test arena in `test/sweep.test.js`. `resolveOwnCells` now holds them in after the push, and the client's `separateCells` does the same for its prediction.
+
 ### Live rounds
 
 The shared arena is **player versus player with no bots**, running in **ten-minute rounds**.

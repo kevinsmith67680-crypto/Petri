@@ -565,7 +565,7 @@ export function createWorld(seed = 1, opts = {}) {
   };
 
   sowOrbs(world);
-  for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
+  scatterViruses(world);
   return world;
 }
 
@@ -675,6 +675,63 @@ function underCell(cells, x, y) {
     if (dx * dx + dy * dy < r * r) return true;
   }
   return false;
+}
+
+// ── placing viruses ─────────────────────────────────────────────────────────
+//
+// Spread evenly, not dropped at random. Dropped at random, two would land on
+// top of each other (13 units apart on the manual's sample board), and one
+// opening could start beside a cluster while the next had none for a screen
+// in every direction.
+//
+// Best-candidate sampling: each virus is the one of VIRUS_TRIES darts with
+// the most room to the viruses already placed, so the board fills in evenly
+// with no clumps. A wall counts as a neighbour half as far away, or the
+// first darts would all go to the edges. No dart within VIRUS_CLEAR of a
+// living cell is used while there is any other, so nobody opens beside a
+// virus, and one that practice puts back never appears under somebody.
+export const VIRUS_CLEAR = 450;
+const VIRUS_TRIES = 40;
+
+function placeVirus(world, cells) {
+  let x = 0, y = 0, best = -Infinity;
+  for (let i = 0; i < VIRUS_TRIES; i++) {
+    const p = spawnPoint(world);
+    let room = -1;
+    if (!nearCell(cells, p.x, p.y, VIRUS_CLEAR)) {
+      const wall = 2 * Math.min(p.x, p.y, world.size - p.x, world.size - p.y);
+      room = wall * wall;
+      for (const v of world.viruses) {
+        const dx = v.x - p.x, dy = v.y - p.y;
+        const d = dx * dx + dy * dy;
+        if (d < room) room = d;
+      }
+    }
+    if (room > best) { best = room; x = p.x; y = p.y; }
+  }
+  return makeVirus(world, x, y);
+}
+
+function nearCell(cells, x, y, gap) {
+  for (const c of cells) {
+    const dx = c.x - x, dy = c.y - y, r = radiusOf(c.mass) + gap;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  return false;
+}
+
+const livingCells = world => {
+  const cells = [];
+  for (const p of world.players.values()) if (p.alive) for (const c of p.cells) cells.push(c);
+  return cells;
+};
+
+// Deal the board its viruses afresh, clear of everyone standing on it now.
+// A round calls this once the field is on its starting ring.
+export function scatterViruses(world) {
+  world.viruses.length = 0;
+  const cells = livingCells(world);
+  for (let i = 0; i < world.virusCount; i++) world.viruses.push(placeVirus(world, cells));
 }
 
 function makeVirus(world, x, y, vx = 0, vy = 0) {
@@ -981,6 +1038,18 @@ function resolveOwnCells(world, ent) {
       if (!mergeable && d < ra + rb) pushApart(a, b, dx, dy, d, ra, rb, SEPARATE_PER_TICK);
     }
   }
+  holdInside(cells, world.size);
+}
+
+// The push comes after advanceCell has held each piece inside the walls, so
+// a piece crowded against a wall was pushed back out past it: with sixteen
+// pieces in a corner, by more than its own radius. Held in again after it.
+function holdInside(cells, size) {
+  for (const c of cells) {
+    const r = radiusOf(c.mass);
+    c.x = clamp(c.x, r, size - r);
+    c.y = clamp(c.y, r, size - r);
+  }
 }
 
 // Own cells that cannot merge yet are pushed apart, closing this share of the
@@ -1001,8 +1070,10 @@ function pushApart(a, b, dx, dy, d, ra, rb, k) {
 //
 // `steps` is how many server ticks `dt` spans. The push is a per-tick
 // relaxation, not a rate, so a client stepping at its frame rate scales it to
-// close the same share of the overlap per second as the server does.
-export function separateCells(cells, locked, steps = 1) {
+// close the same share of the overlap per second as the server does. Given the
+// arena's `size`, the pieces are held inside its walls afterwards, as the
+// server holds them.
+export function separateCells(cells, locked, steps = 1, size = 0) {
   const k = steps === 1
     ? SEPARATE_PER_TICK
     : 2 * (1 - Math.pow(1 - SEPARATE_PER_TICK / 2, steps));
@@ -1016,6 +1087,7 @@ export function separateCells(cells, locked, steps = 1) {
       if (d < ra + rb) pushApart(a, b, dx, dy, d, ra, rb, k);
     }
   }
+  if (size) holdInside(cells, size);
 }
 
 function splitCell(world, ent, cell, dirX, dirY, mass) {
@@ -1241,15 +1313,15 @@ function eatViruses(world, ent) {
         c.mass += v.mass * 0.4;
         v.dead = true;         // a bot may be holding it as a shot to line up
         world.viruses.splice(i, 1);
-        // Never replaced in a match. The replacement landed at a random
+        // Never replaced in a match. A replacement used to land at a random
         // point, under whoever happened to be standing there, and a big cell
         // popped on it the next tick: a split nobody caused. A round keeps the
         // viruses it was dealt, and resetArena deals the next one a full set.
-        // Practice has no rounds, so it still tops back up, only to the count
-        // the arena seeds: replacing unconditionally would make every fed
-        // split permanent.
+        // Practice has no rounds, so it still tops back up, clear of every
+        // cell (see placeVirus) and only to the count the arena seeds:
+        // replacing unconditionally would make every fed split permanent.
         if (!world.fixedViruses && world.viruses.length < world.virusCount) {
-          world.viruses.push(makeVirus(world));
+          world.viruses.push(placeVirus(world, livingCells(world)));
         }
         world.events.push({ t: "pop", id: ent.id, x: c.x, y: c.y });
         burst(world, ent, c);
@@ -2100,12 +2172,13 @@ export function resetArena(world) {
   world.zone = null;
   world.safe = null;
 
-  world.viruses.length = 0;
-  for (let i = 0; i < world.virusCount; i++) world.viruses.push(makeVirus(world));
-
   // Evenly spaced rather than scattered: a fresh round should not hand anyone
   // a neighbour within eating distance while someone else opens alone.
   spawnRing(world, [...world.players.values()]);
+
+  // After the ring, so they keep clear of where everyone opens. A host that
+  // deals its own ring afterwards scatters them again against that one.
+  scatterViruses(world);
 
   // Sown after the ring, so the cells it keeps clear of are this round's and
   // not wherever the last round left them. The index is emptied first: it

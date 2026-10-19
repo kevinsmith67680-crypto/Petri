@@ -93,7 +93,12 @@ await fast.deliver({ type: "ready", ready: true });
 for (let i = 0; i < 60 && !slow.snaps.some(s => s.round.phase === PHASE_LIVE); i++) await settle(100);
 await settle(500);
 
-const before = { slow: slow.snaps.length, fast: fast.snaps.length, held: (await health()).tick.snapshotsHeld };
+// The health request first: a tick can run while it is in flight, and one run
+// after the counts were taken would send an ordinary snapshot that then looks
+// like one sent while backed up. Nothing awaits between the counts and the
+// backlog.
+const heldBefore = (await health()).tick.snapshotsHeld;
+const before = { slow: slow.snaps.length, fast: fast.snaps.length, held: heldBefore };
 slow.bufferedAmount = 10 * 1024 * 1024;     // ten megabytes queued: well past the limit
 await settle(1000);
 const during = { slow: slow.snaps.length, fast: fast.snaps.length, held: (await health()).tick.snapshotsHeld };

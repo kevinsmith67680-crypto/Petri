@@ -427,10 +427,12 @@ function crowd(seed, ticks) {
     const ids = [];
     for (const p of w.players.values()) for (const c of p.cells) {
       ids.push(c.id);
-      // Not "inside the board": pushing a player's own pieces apart happens
-      // after the wall clamp, which can leave one a few units over the line.
-      // That predates the swept tests and is not theirs to fix; a step taken
-      // along a path must still never throw anything further than that.
+      // Not "inside the board": a piece a split has just launched from a cell
+      // against a wall can sit a little over the line until its next step.
+      // (Pushing a player's own pieces apart used to leave them over it too,
+      // past this bound on about one seed in forty; they are held in after
+      // the push now.) A step taken along a path must never throw anything
+      // further than that.
       const r = radiusOf(c.mass);
       if (!(c.x >= -r && c.x <= w.size + r && c.y >= -r && c.y <= w.size + r && c.mass > 0)) stats.badPos++;
     }

@@ -655,7 +655,7 @@ export function createSocketConnection({
     const tx = sx / sm + aim.x, ty = sy / sm + aim.y;
     const fullReach = reachOf(aim);
     for (const p of cells) advanceCell(p, tx, ty, dt, worldSize, fullReach);
-    separateCells(cells, isLocked, steps);
+    separateCells(cells, isLocked, steps, worldSize);
   }
 
   // Mirrors doSplit and doEject in shared/sim.js. The aim is the one sent
