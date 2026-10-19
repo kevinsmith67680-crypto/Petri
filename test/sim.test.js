@@ -18,7 +18,8 @@ import {
   PELLET_MASS, orbGap, forEachPelletNear,
   planZone, zoneBounds, outsideZone, ZONE_AT_REMAINING, ZONE_WARN_SECONDS,
   ZONE_SHRINK_SECONDS, ZONE_SHRINK_TO, ZONE_MIN_MASS,
-  scatterViruses, VIRUS_CLEAR
+  scatterViruses, VIRUS_CLEAR,
+  DRIFT_SHARE, DRIFT_SPEED, driftHeading
 } from "../shared/sim.js";
 import { MODES } from "../shared/modes.js";
 
@@ -635,6 +636,76 @@ console.log("\n-- ejected mass behaves like a projectile --");
   // a little before the virus is placed, so a few units of slack.
   check("practice puts an eaten virus back clear of every cell", near >= VIRUS_CLEAR - 60,
     `${fresh.length} new, ${near.toFixed(0)} from the nearest cell`);
+}
+
+// ── a share of the viruses are red and drift ────────────────────────────────
+
+console.log("\n-- drifting viruses --");
+{
+  for (const m of MODES) {
+    const w = createWorld(3, { ...m.world });
+    for (let i = 0; i < m.lobbyMin; i++) addPlayer(w, { id: "p" + i, name: "P" + i });
+    resetArena(w);
+    const drifting = w.viruses.filter(v => v.drift);
+    check(`${m.label}: ${Math.round(DRIFT_SHARE * 100)}% of the viruses drift`,
+      drifting.length === Math.round(m.world.viruses * DRIFT_SHARE), `${drifting.length} of ${w.viruses.length}`);
+    check(`${m.label}: every one at DRIFT_SPEED`,
+      drifting.every(v => Math.abs(Math.hypot(v.dvx, v.dvy) - DRIFT_SPEED) < 1e-9));
+  }
+
+  // Held on the starting ring, nothing drifts either.
+  const held = createWorld(8, { size: 8800, pellets: 0, viruses: 20 });
+  const before = held.viruses.map(v => `${v.x},${v.y}`).join();
+  for (let i = 0; i < TICK_HZ * 3; i++) stepWorld(held, 1 / TICK_HZ, true);
+  check("drifters hold still while the field is held", held.viruses.map(v => `${v.x},${v.y}`).join() === before);
+
+  // Five minutes on an empty board: always inside the walls, always at the
+  // same speed, and a heading that changes only against a wall.
+  const w = createWorld(9, { size: 6200, pellets: 0, viruses: 40 });
+  const pad = radiusOf(VIRUS_MASS);
+  let outside = 0, offSpeed = 0, turnedInOpen = 0, bounces = 0;
+  for (let i = 0; i < TICK_HZ * 300; i++) {
+    const was = w.viruses.map(v => driftHeading(v));
+    stepWorld(w, 1 / TICK_HZ);
+    w.viruses.forEach((v, k) => {
+      if (!v.drift) return;
+      if (v.x < pad - 1e-9 || v.x > w.size - pad + 1e-9 || v.y < pad - 1e-9 || v.y > w.size - pad + 1e-9) outside++;
+      if (Math.abs(Math.hypot(v.dvx, v.dvy) - DRIFT_SPEED) > 1e-9) offSpeed++;
+      if (driftHeading(v) !== was[k]) {
+        bounces++;
+        const step = DRIFT_SPEED / TICK_HZ;
+        const wall = Math.min(v.x - pad, w.size - pad - v.x, v.y - pad, w.size - pad - v.y);
+        if (wall > step) turnedInOpen++;
+      }
+    });
+  }
+  check("over five minutes, every drifter stays inside the walls", outside === 0, `${outside}`);
+  check("at the same speed throughout", offSpeed === 0, `${offSpeed}`);
+  check("turning only where it meets a wall", turnedInOpen === 0 && bounces > 0,
+    `${bounces} bounces, ${turnedInOpen} turns in open board`);
+
+  // In a straight line between walls: a second's drift is a second of heading.
+  const line = createWorld(10, { size: 8800, pellets: 0, viruses: 7 });
+  const d = line.viruses.find(v => v.drift);
+  Object.assign(d, { x: 4400, y: 4400 });
+  const h = driftHeading(d);
+  for (let i = 0; i < TICK_HZ; i++) stepWorld(line, 1 / TICK_HZ);
+  const ex = 4400 + Math.cos(h) * DRIFT_SPEED, ey = 4400 + Math.sin(h) * DRIFT_SPEED;
+  check("a drifter goes exactly where its heading points", Math.hypot(d.x - ex, d.y - ey) < 1e-6,
+    `${d.x.toFixed(2)},${d.y.toFixed(2)} vs ${ex.toFixed(2)},${ey.toFixed(2)}`);
+
+  // It is still a virus: a big cell that stands in its path pops.
+  const pop = createWorld(11, { size: 8800, pellets: 0, viruses: 7 });
+  const v = pop.viruses.find(o => o.drift);
+  Object.assign(v, { x: 4400, y: 4400 });
+  const big = addPlayer(pop, { id: "big", name: "Big" });
+  const hv = driftHeading(v);
+  Object.assign(big.cells[0], { x: 4400 + Math.cos(hv) * 150, y: 4400 + Math.sin(hv) * 150, mass: 400 });
+  let popped = false;
+  for (let i = 0; i < TICK_HZ * 4 && !popped; i++) {
+    popped = stepWorld(pop, 1 / TICK_HZ).some(e => e.t === "pop" && e.id === "big");
+  }
+  check("a big cell that stays in a drifter's path is popped by it", popped);
 }
 
 // ── bot difficulty ──────────────────────────────────────────────────────────

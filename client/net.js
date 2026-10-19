@@ -941,7 +941,7 @@ export function createSocketConnection({
     const wasAt = new Map(older.viruses.map(v => [v[3], v]));
     const viruses = newer.viruses.map(v => {
       const q = wasAt.get(v[3]);
-      return q ? [lerp(q[0], v[0], km), lerp(q[1], v[1], km), v[2], v[3]] : v;
+      return q ? [lerp(q[0], v[0], km), lerp(q[1], v[1], km), v[2], v[3], v[4]] : v;
     });
 
     // The zone's edges move a few units a tick; taken straight from the

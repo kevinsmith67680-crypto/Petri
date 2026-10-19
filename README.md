@@ -1013,6 +1013,20 @@ Measured over ten seeds with a full lobby on the ring:
 
 A deal takes 2–4 ms with 150 players on the ring, once or twice a round.
 
+### Drifting viruses
+
+**15% of the viruses a board is dealt are red and never stop moving** (`DRIFT_SHARE`, so 16 in Standard and 8 in High stakes). Each drifts at `DRIFT_SPEED`, 35 units a second, in a straight line, and bounces off the walls with the angle in equal to the angle out. The first viruses `scatterViruses` places are the most spread out, so those are the ones that drift, each on a heading drawn from the world's generator. A seed replays its drifters exactly.
+
+They are meant to test attention, not luck, and everything about them is chosen for that:
+
+- **Slow.** A cell's top speed falls with mass, but even the biggest on a full board manages about 130 units a second, so any cell can outrun one. A virus coming into view at the 760-unit minimum view radius is about 20 seconds away.
+- **Straight.** The heading changes only at a wall, so where a drifter will be is plain from where it is heading. The client draws an arrowhead off its rim to show which way.
+- **Still while the field is held** on its starting ring, so nobody's opening changes before they can move.
+
+Otherwise a drifter is an ordinary virus: it pops any cell big enough the moment its body covers the virus centre, along the step as well as at the end of it. It can be fed in practice, and a fed split's child is a plain green one. Bots never line a virus shot up behind a drifter, since it will not be there when the shot lands. In a live round an eaten drifter is gone like any other. Practice puts one back as a drifter while there are fewer than its share.
+
+**On the wire (protocol 13).** Each virus record carries one more byte, its heading: 0 for one that sits still, else 1–255 around the circle, 1.4 degrees a step. The client interpolates a drifter's position between snapshots by its id, as it does a shot one.
+
 **This makes openings fair, not identical.** Exactly identical openings would need the layout to repeat from one opening to the next, which with about one virus per player puts every virus on a single circle around the centre. A circle that crowded walls the board off for big cells (about 268 units between viruses in Standard, so nothing over ~1,100 mass crosses it). The square board also limits how identical the ring can be: at a full lobby an opening mid-side starts 140 units from the wall, while one facing a corner has about 1,400 behind it.
 
 **Own pieces are held inside the walls after they are pushed apart.** `advanceCell` clamps each cell to the wall, and the push that keeps a player's unmergeable pieces apart came after it. With sixteen pieces in a corner, that pushed one back out past the wall, by more than its own radius on about one seed in forty of the crowded test arena in `test/sweep.test.js`. `resolveOwnCells` now holds them in after the push, and the client's `separateCells` does the same for its prediction.
@@ -1081,7 +1095,7 @@ Viruses coast on their own friction rather than a cell's. At the cell rate a vir
 
 **In practice the population has a ceiling** of `VIRUS_MAX_RATIO` (1.5) times the count the arena seeds — 162 for Standard. Past it a fed virus still resets and still swallows the mass, it just has nowhere to put the child. Eating a virus tops the population back up only when it is *below* the seeded count, so a long session cannot ratchet upwards one split at a time.
 
-The wire carries a virus's compact id and feed count alongside its position (7 bytes, up from 4). The feed count is what makes it swell on screen — the only warning anyone gets that a virus is primed. The id is what lets the client match a virus between snapshots and interpolate a shot one, instead of stepping it a radius at a time at 20Hz; their order in the list is a function of where the viewer is standing, so position in the array cannot be used for it.
+The wire carries a virus's compact id and feed count alongside its position (7 bytes, up from 4; 8 since drifters added a heading). The feed count is what makes it swell on screen — the only warning anyone gets that a virus is primed. The id is what lets the client match a virus between snapshots and interpolate a shot one, instead of stepping it a radius at a time at 20Hz; their order in the list is a function of where the viewer is standing, so position in the array cannot be used for it.
 
 **Everyone starts the same distance apart.** Random spawn points decided rounds before they began: two players could open within eating distance of each other while a third had a quarter of the board to itself. The field is now dealt onto one ring at equal angular spacing (`spawnRing` in `shared/sim.js`), so every opening position is interchangeable — same distance to either neighbour, same distance to the centre, same distance to the wall. The target gap is 520 units; a lobby too big to seat at that spacing gets the widest ring the arena holds instead, which is tighter but still even (100 players come out 268 apart, about fifteen starting diameters). The ring is turned by a seeded angle each round, so it is reproducible from the world seed without landing on the same points every time. Where bots stand in for a short lobby, the humans are dealt into the ring at even intervals rather than left in a block.
 

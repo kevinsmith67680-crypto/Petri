@@ -463,5 +463,25 @@ console.log("\n-- what reconciliation needs --");
     theirs && theirs.vx === undefined && theirs.hx === undefined, JSON.stringify(theirs));
 }
 
+// ── a drifter's heading travels with it ──────────────────────────────────────
+
+{
+  const w = createWorld(24, { size: 8800, pellets: 0, viruses: 7 });
+  const me = addPlayer(w, { id: "me", name: "Me" });
+  me.cells[0].mass = 400;
+  w.viruses.forEach((v, i) => { v.x = me.cells[0].x + 200 + i * 30; v.y = me.cells[0].y; });
+  const got = decodeSnapshot(encodeSnapshot(w, me, createClientState(0))).viruses;
+  const byVid = new Map(got.map(v => [v[3], v]));
+  const drifters = w.viruses.filter(v => v.drift);
+  check("a drifting virus is sent with its heading", drifters.length === 1 && drifters.every(v => {
+    const r = byVid.get(v.vid);
+    const want = Math.atan2(v.dvy, v.dvx);
+    const off = Math.abs(((r[4] - want) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI);
+    return r && r[4] !== null && off < Math.PI / 180;
+  }), JSON.stringify(drifters.map(v => byVid.get(v.vid))));
+  check("and one that sits still with none",
+    w.viruses.filter(v => !v.drift).every(v => byVid.get(v.vid)?.[4] === null));
+}
+
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
