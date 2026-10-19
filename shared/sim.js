@@ -67,6 +67,15 @@ const VIRUS_LN = Math.log(VIRUS_DECAY);
 // it a fed virus still resets, it just has nowhere to put the child — without
 // this, a round long enough turns every arena into a wall of green.
 export const VIRUS_MAX_RATIO = 1.5;
+// Drifting viruses. DRIFT_SHARE of the viruses a board is dealt are red and
+// never stop: DRIFT_SPEED in a straight line, bouncing off the walls like a
+// ball. Slow enough for any cell to outrun — the biggest on a full board
+// still manages about 130 units a second — and straight, so where one will be
+// is plain from where it is heading. Being caught by one is not paying
+// attention, not bad luck. They hold still while the field is held on its
+// starting ring.
+export const DRIFT_SHARE = 0.15;
+export const DRIFT_SPEED = 35;
 export const MAX_CELLS = 16;
 // Size advantage needed to eat a rival. Lowered from 1.22 by 10%: you now
 // need to be 9.8% bigger rather than 22%, so to swallow a mass-100 player you
@@ -732,7 +741,24 @@ export function scatterViruses(world) {
   world.viruses.length = 0;
   const cells = livingCells(world);
   for (let i = 0; i < world.virusCount; i++) world.viruses.push(placeVirus(world, cells));
+  // The first placed are the most spread out, so the drifters start evenly
+  // across the board rather than wherever a random pick put them.
+  for (let i = 0; i < driftersWanted(world); i++) setDrifting(world, world.viruses[i]);
 }
+
+const driftersWanted = world => Math.min(world.viruses.length, Math.round(world.virusCount * DRIFT_SHARE));
+
+// Sets a virus off on a heading drawn from the world's generator, so a seed
+// replays its drifters exactly.
+function setDrifting(world, v) {
+  const a = world.rng() * Math.PI * 2;
+  v.drift = true;
+  v.dvx = Math.cos(a) * DRIFT_SPEED;
+  v.dvy = Math.sin(a) * DRIFT_SPEED;
+}
+
+// The way a drifter is heading, in radians, or null for one that sits still.
+export const driftHeading = v => (v.drift ? Math.atan2(v.dvy, v.dvx) : null);
 
 function makeVirus(world, x, y, vx = 0, vy = 0) {
   const p = x === undefined ? spawnPoint(world) : { x, y };
@@ -745,23 +771,37 @@ function makeVirus(world, x, y, vx = 0, vy = 0) {
     x: p.x, y: p.y,
     mass: VIRUS_MASS,
     fed: 0,             // ejected blobs absorbed since the last split
-    vx, vy
+    vx, vy,             // a shot one's launch, coasting to a stop
+    drift: false        // a red one: dvx, dvy for ever, see DRIFT_SHARE
   };
 }
 
 // A shot virus coasts to a stop. Integrated exactly, for the same reason
 // ejected mass is (see advancePellet): a client drawing at 60fps and a server
 // stepping at 20Hz have to agree on where it ends up.
-function advanceVirus(v, dt, size) {
-  if (!v.vx && !v.vy) return;
-  const f = Math.pow(VIRUS_DECAY, dt);
-  const travel = (f - 1) / VIRUS_LN;
+//
+// A drifter moves on top of that, at its steady speed, unless `held`. It
+// bounces off a wall with the angle in equal to the angle out, so its path
+// stays a straight line anyone can read until it reaches one.
+function advanceVirus(v, dt, size, held = false) {
   const pad = radiusOf(v.mass);
-  v.x = clamp(v.x + v.vx * travel, pad, size - pad);
-  v.y = clamp(v.y + v.vy * travel, pad, size - pad);
-  v.vx *= f;
-  v.vy *= f;
-  if (Math.abs(v.vx) < 1 && Math.abs(v.vy) < 1) { v.vx = 0; v.vy = 0; }
+  if (v.vx || v.vy) {
+    const f = Math.pow(VIRUS_DECAY, dt);
+    const travel = (f - 1) / VIRUS_LN;
+    v.x = clamp(v.x + v.vx * travel, pad, size - pad);
+    v.y = clamp(v.y + v.vy * travel, pad, size - pad);
+    v.vx *= f;
+    v.vy *= f;
+    if (Math.abs(v.vx) < 1 && Math.abs(v.vy) < 1) { v.vx = 0; v.vy = 0; }
+  }
+  if (v.drift && !held) {
+    v.x += v.dvx * dt;
+    v.y += v.dvy * dt;
+    if (v.x < pad) { v.x = Math.min(2 * pad - v.x, size - pad); v.dvx = Math.abs(v.dvx); }
+    else if (v.x > size - pad) { v.x = Math.max(2 * (size - pad) - v.x, pad); v.dvx = -Math.abs(v.dvx); }
+    if (v.y < pad) { v.y = Math.min(2 * pad - v.y, size - pad); v.dvy = Math.abs(v.dvy); }
+    else if (v.y > size - pad) { v.y = Math.max(2 * (size - pad) - v.y, pad); v.dvy = -Math.abs(v.dvy); }
+  }
 }
 
 // startX/startY/startMass are where and how big the cell was when the current
@@ -1321,7 +1361,12 @@ function eatViruses(world, ent) {
         // cell (see placeVirus) and only to the count the arena seeds:
         // replacing unconditionally would make every fed split permanent.
         if (!world.fixedViruses && world.viruses.length < world.virusCount) {
-          world.viruses.push(placeVirus(world, livingCells(world)));
+          const back = placeVirus(world, livingCells(world));
+          world.viruses.push(back);
+          // A drifter put back as a drifter, so practice keeps its share.
+          let drifting = 0;
+          for (const o of world.viruses) if (o.drift) drifting++;
+          if (drifting < driftersWanted(world)) setDrifting(world, back);
         }
         world.events.push({ t: "pop", id: ent.id, x: c.x, y: c.y });
         burst(world, ent, c);
@@ -1615,6 +1660,8 @@ function planVirusShot(world, bot, lvl, me, myMass, target, owner) {
   const pops = myMass > POP_MASS;
   let best = null, bestD = lvl.virus.travel;
   for (const v of world.viruses) {
+    // A drifter will not be where the shot was lined up by the time it lands.
+    if (v.drift) continue;
     const shot = virusShot(v, aim, myMass);
     if (!inVirusRange(shot.d, target.mass)) continue;
     if (pops && (me.x - v.x) * shot.ux + (me.y - v.y) * shot.uy > 0) continue;
@@ -2041,9 +2088,9 @@ export function stepWorld(world, dt, held = false) {
     if (grid) gridMove(world, p, was);
   }
   for (const v of world.viruses) {
-    if (!v.vx && !v.vy) continue;
+    if (!v.vx && !v.vy && !(v.drift && !held)) continue;
     v.startX = v.x; v.startY = v.y; v.movedAt = now;
-    advanceVirus(v, dt, world.size);
+    advanceVirus(v, dt, world.size, held);
   }
   // After both have moved, so a blob and a virus travelling toward each other
   // are tested where they actually are this tick.
