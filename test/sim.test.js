@@ -407,8 +407,11 @@ console.log("\n-- ejected mass behaves like a projectile --");
 // ── feeding a virus splits it ───────────────────────────────────────────────
 
 // agar.io's virus feeding: shoot ejected mass into one and the third hit
-// splits it, sending a new virus off along the line the mass came in on.
-{
+// splits it, sending a new virus off along the line the mass came in on. The
+// same in a live round, whose world is built the way the server builds its
+// rooms, as in practice.
+for (const [where, rules] of [["practice", {}], ["a live round", { refillViruses: false }]]) {
+  console.log(`\n-- feeding a virus in ${where} --`);
   // Throw one blob at the virus and run until it lands. The thrower is parked
   // out of the way after each throw, or it chases its own mass down.
   const feed = (w, ent, v) => {
@@ -423,7 +426,7 @@ console.log("\n-- ejected mass behaves like a projectile --");
     for (let i = 0; i < 20; i++) stepWorld(w, 1 / TICK_HZ);
   };
 
-  const world = createWorld(11, { size: 8800, pellets: 0, viruses: 1 });
+  const world = createWorld(11, { size: 8800, pellets: 0, viruses: 1, ...rules });
   const thrower = addPlayer(world, { id: "a", name: "A" });
   const virus = world.viruses[0];
   virus.x = 4400; virus.y = 4400;
@@ -461,7 +464,7 @@ console.log("\n-- ejected mass behaves like a projectile --");
 
   // Mass that has run out of travel has missed. Otherwise a blob could be
   // parked against a virus and feeding would cost nothing to aim.
-  const rest = createWorld(12, { size: 8800, pellets: 0, viruses: 1 });
+  const rest = createWorld(12, { size: 8800, pellets: 0, viruses: 1, ...rules });
   const rv = rest.viruses[0];
   rv.x = 4400; rv.y = 4400;
   rest.pellets.push({ id: 999, x: rv.x, y: rv.y, mass: EJECT_KEEP, vx: 0, vy: 0, ci: 0,
@@ -500,13 +503,13 @@ console.log("\n-- ejected mass behaves like a projectile --");
     w.viruses.length === before - 1, `${before} -> ${w.viruses.length}`);
 }
 
-// ── a match keeps the viruses it was dealt ──────────────────────────────────
+// ── a match never puts an eaten virus back ──────────────────────────────────
 
 {
   // A cell big enough to pop a virus, put on top of one, in an arena at its
-  // seeded count. The server's rooms are built with fixedViruses on.
-  const popOne = fixedViruses => {
-    const w = createWorld(41, { size: 8800, pellets: 0, viruses: 6, fixedViruses });
+  // seeded count. The server's rooms are built with refillViruses off.
+  const popOne = refillViruses => {
+    const w = createWorld(41, { size: 8800, pellets: 0, viruses: 6, refillViruses });
     const vids = new Set(w.viruses.map(v => v.vid));
     const eater = addPlayer(w, { id: "big", name: "Big" });
     Object.assign(eater.cells[0], { x: w.viruses[0].x, y: w.viruses[0].y, mass: VIRUS_MASS * 2 });
@@ -516,66 +519,55 @@ console.log("\n-- ejected mass behaves like a projectile --");
     return { w, vids, popped: [...vids].filter(id => !w.viruses.some(v => v.vid === id)).length };
   };
 
-  const match = popOne(true);
+  const match = popOne(false);
   check("in a match, a virus that is eaten is gone", match.popped === 1, `${match.popped} popped`);
   check("and nothing takes its place", match.w.viruses.length === 5, `${match.w.viruses.length}`);
   check("every virus left is one the round was dealt",
     match.w.viruses.every(v => match.vids.has(v.vid)));
 
-  const practice = popOne(false);
+  const practice = popOne(true);
   check("practice still tops back up to the seeded count",
     practice.popped === 1 && practice.w.viruses.length === 6, `${practice.w.viruses.length}`);
 
-  // Fed far past the hits that would split it: the mass is swallowed, the
-  // virus does not swell, and nothing is shot out of it.
-  const feed = fixedViruses => {
-    const w = createWorld(42, { size: 8800, pellets: 0, viruses: 2, fixedViruses });
-    const target = w.viruses[0];
-    for (let i = 0; i < VIRUS_FEED_HITS * 3; i++) {
-      w.pellets.push({ id: 7000 + i, x: target.x - 1, y: target.y, mass: EJECT_KEEP,
-                       vx: 200, vy: 0, ci: 0, owner: "ghost", ownerFree: 0 });
-      stepWorld(w, 1 / TICK_HZ);
-    }
-    return { count: w.viruses.length, fed: target.fed, left: w.pellets.length };
-  };
-  const fedMatch = feed(true);
-  check("feeding a virus in a match never splits it", fedMatch.count === 2, JSON.stringify(fedMatch));
-  check("nor swells it towards a split", fedMatch.fed === 0, `${fedMatch.fed}`);
-  check("though the mass is still swallowed", fedMatch.left === 0, `${fedMatch.left} blobs left`);
-  check("practice still splits a fed virus", feed(false).count > 2);
+  // Fed far past the hits that would split it: a match has the same ceiling
+  // as practice, and swallows the mass once it is reached.
+  const w = createWorld(42, { size: 8800, pellets: 0, viruses: 4, refillViruses: false });
+  const target = w.viruses[0];
+  for (let i = 0; i < 40; i++) {
+    w.pellets.push({ id: 7000 + i, x: target.x - 1, y: target.y, mass: EJECT_KEEP,
+                     vx: 200, vy: 0, ci: 0, owner: "ghost", ownerFree: 0 });
+    stepWorld(w, 1 / TICK_HZ);
+  }
+  const cap = Math.round(4 * VIRUS_MAX_RATIO);
+  check("feeding in a match stops at the same ceiling", w.viruses.length === cap,
+    `${w.viruses.length} of ${cap}`);
+  check("and swallows the mass once it is full", w.pellets.length === 0, `${w.pellets.length} blobs left`);
 
-  // A whole round of a busy room: bots eat viruses, and hard bots would feed
-  // them if they could. Count every virus the board has not seen before.
-  const busy = fixedViruses => {
-    const room = createWorld(43, { botLevel: "hard", fixedViruses });
-    fillBots(room, 60);
-    const seen = new Set(room.viruses.map(v => v.vid));
-    const dealt = seen.size;
-    let shot = 0, dropped = 0, plans = 0;
-    for (let i = 0; i < TICK_HZ * 120; i++) {
-      stepWorld(room, 1 / TICK_HZ);
-      for (const p of room.players.values()) if (p.plan) plans++;
-      for (const v of room.viruses) {
-        if (seen.has(v.vid)) continue;
-        seen.add(v.vid);
-        // A fed one is born moving, shot out of its parent; a refill stands still.
-        if (v.vx || v.vy) shot++; else dropped++;
-      }
+  // A whole round of a busy room: bots eat viruses and hard bots feed them.
+  // Count every virus the board has not seen before.
+  const room = createWorld(43, { botLevel: "hard", refillViruses: false });
+  fillBots(room, 60);
+  const seen = new Set(room.viruses.map(v => v.vid));
+  const dealt = seen.size, ceiling = Math.round(dealt * VIRUS_MAX_RATIO);
+  let shot = 0, dropped = 0, plans = 0, most = dealt;
+  for (let i = 0; i < TICK_HZ * 120; i++) {
+    stepWorld(room, 1 / TICK_HZ);
+    for (const p of room.players.values()) if (p.plan) plans++;
+    most = Math.max(most, room.viruses.length);
+    for (const v of room.viruses) {
+      if (seen.has(v.vid)) continue;
+      seen.add(v.vid);
+      // A fed one is born moving, shot out of its parent; a refill stands still.
+      if (v.vx || v.vy) shot++; else dropped++;
     }
-    return { dealt, left: room.viruses.length, shot, dropped, plans };
-  };
-  const round = busy(true);
-  check("over two minutes of a busy match, no new virus appears",
-    round.shot === 0 && round.dropped === 0, JSON.stringify(round));
-  check("and no bot lines up a virus shot", round.plans === 0, `${round.plans} plan ticks`);
-  check("so the board only ever loses viruses", round.left <= round.dealt, JSON.stringify(round));
-  // The same room without the rule, so the checks above are known to see new
-  // viruses. Which kind depends on the run: fed ones that keep the count above
-  // the seeded one leave the top-up nothing to do. The top-up has its own
-  // check above.
-  const open = busy(false);
-  check("where the old rules would have added some",
-    open.shot + open.dropped > 0, JSON.stringify(open));
+  }
+  const round = { dealt, left: room.viruses.length, most, shot, dropped, plans };
+  check("over two minutes of a busy match, feeding shoots new viruses out",
+    round.shot > 0, JSON.stringify(round));
+  check("bots line virus shots up there too", round.plans > 0, `${round.plans} plan ticks`);
+  check("but none is ever dropped in at random", round.dropped === 0, JSON.stringify(round));
+  check("and the population never passes the ceiling", round.most <= ceiling,
+    `${round.most} of ${ceiling}`);
 }
 
 // ── viruses are dealt evenly, clear of every opening ────────────────────────

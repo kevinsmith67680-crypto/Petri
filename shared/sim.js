@@ -46,7 +46,8 @@ export const VIRUS_PIECES = 9;       // fragments a virus scatters you into
 // Feeding a virus. Shoot ejected mass into one and it swells; the third hit
 // splits it, and the new virus is shot off along the line the mass came in on.
 // agar.io uses seven feeds; three is enough to be worth doing inside a
-// ten-minute round without turning the board into a minefield.
+// ten-minute round without turning the board into a minefield. The same in a
+// live round as in practice.
 export const VIRUS_FEED_HITS = 3;
 // How the virus that is shot out travels. It coasts on its own, gentler
 // friction rather than a cell's: at the cell rate a virus launched fast enough
@@ -542,10 +543,10 @@ export function createWorld(seed = 1, opts = {}) {
     size,
     pelletCount: opts.pellets ?? PELLETS,
     virusCount: opts.viruses ?? VIRUSES,
-    // A match's viruses are the ones its round was dealt: none is replaced
-    // when eaten, and feeding never splits one. The server's rooms turn this
-    // on. Practice, which never deals a fresh board, leaves it off.
-    fixedViruses: opts.fixedViruses ?? false,
+    // Whether an eaten virus is put back. Practice, which never deals a fresh
+    // board, does. The server's rooms turn this off: a round keeps what it was
+    // dealt plus whatever feeding adds, and resetArena deals the next a full set.
+    refillViruses: opts.refillViruses ?? true,
     botLevel: isBotLevel(opts.botLevel) ? opts.botLevel : DEFAULT_BOT_LEVEL,
     rng: mulberry32(seed),
     tick: 0,
@@ -1257,9 +1258,6 @@ function feedViruses(world) {
 
       p.dead = true;
       world.pelletsDirty = true;
-      // Swallowed and nothing more. Not counted either, so the virus does not
-      // swell to warn of a split that is never coming.
-      if (world.fixedViruses) break;
       if (++v.fed < VIRUS_FEED_HITS) break;
 
       // Full. The child is shot off along the line the mass came in on, which
@@ -1316,11 +1314,12 @@ function eatViruses(world, ent) {
         // Never replaced in a match. A replacement used to land at a random
         // point, under whoever happened to be standing there, and a big cell
         // popped on it the next tick: a split nobody caused. A round keeps the
-        // viruses it was dealt, and resetArena deals the next one a full set.
-        // Practice has no rounds, so it still tops back up, clear of every
-        // cell (see placeVirus) and only to the count the arena seeds:
-        // replacing unconditionally would make every fed split permanent.
-        if (!world.fixedViruses && world.viruses.length < world.virusCount) {
+        // viruses it was dealt and the ones fed out of them, and resetArena
+        // deals the next one a full set. Practice has no rounds, so it still
+        // tops back up, clear of every cell (see placeVirus) and only to the
+        // count the arena seeds: replacing unconditionally would make every
+        // fed split permanent.
+        if (world.refillViruses && world.viruses.length < world.virusCount) {
           world.viruses.push(placeVirus(world, livingCells(world)));
         }
         world.events.push({ t: "pop", id: ent.id, x: c.x, y: c.y });
@@ -1797,8 +1796,7 @@ function driveBot(world, bot, dt) {
   const split = lvl.split && bot.cells.length <= (lvl.split.cells || 1) && lead.mass >= 36 &&
     world.time >= bot.nextSplit ? lvl.split : null;
   const double = split && split.double && whole && lead.mass >= 72 ? split : null;
-  // Never where feeding cannot split one: the throws would be mass for nothing.
-  const look = lvl.virus && !world.fixedViruses && whole && !bot.plan &&
+  const look = lvl.virus && whole && !bot.plan &&
     c0.mass >= lvl.virus.minMass && world.time >= bot.nextVirus && world.time >= bot.nextLook;
   if (look) bot.nextLook = world.time + 0.5;
 
