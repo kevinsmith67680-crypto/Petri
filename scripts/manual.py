@@ -1210,7 +1210,9 @@ def story():
          ["Closest pair on a sample board",
           f"{STDB['virusMin']:.0f} units apart", f"{HIB['virusMin']:.0f} units apart"],
          ["Nearest to any opening", f"{STDB['openClear']:.0f} units", f"{HIB['openClear']:.0f} units"],
-         ["Added once the round starts", "none", "none"]],
+         ["Ceiling once players start feeding them",
+          f"{STD['world']['viruses'] * K['VIRUS_MAX_RATIO']:.0f}",
+          f"{HIGH['world']['viruses'] * K['VIRUS_MAX_RATIO']:.0f}"]],
         [56 * mm, None, None]))
 
     s.append(bullets([
@@ -1222,10 +1224,9 @@ def story():
         f"{STDB['virusMin']:.0f} units apart, so there is no virus wall to trap a "
         f"player over {POP_MASS:.0f} mass and no cluster for a small one to hide in "
         "that only some openings can reach.",
-        "The population is fixed once a round starts. Nothing adds a virus: feeding "
-        "one never splits it, and one that is eaten is not replaced, so a round can "
-        "only lose viruses. Every virus on the board is one the round was dealt, "
-        "sitting where it was dealt.",
+        "One that is eaten is not replaced, so nothing ever appears under you. The "
+        "only new viruses in a round are the ones players feed out of the old ones, "
+        "up to the ceiling - and they are wherever those players wanted them.",
     ]))
 
     s.append(PageBreak())
@@ -1288,16 +1289,13 @@ def story():
         [30 * mm, None]))
 
     s.append(P("Feeding a virus", S_H2))
-    s.append(P("<b>Practice only.</b> In a live round a virus swallows whatever you "
-               "shoot into it and nothing more happens: it does not swell, it never "
-               "splits, and the board never gains a virus.", S_BODY))
-    s.append(P(f"In practice, shoot ejected mass into a virus and it swells visibly. The "
+    s.append(P(f"Shoot ejected mass into a virus and it swells visibly. The "
                f"<b>{K['VIRUS_FEED_HITS']}rd hit splits it</b>: a new virus is launched "
                "along exactly the line your mass came in on, and coasts about 450 "
-               "units before settling.", S_BODY))
+               "units before settling. Live rounds and practice alike.", S_BODY))
     s.append(dia_virus_feed())
 
-    s.append(P("There it is the only aimed weapon in the game. You are not throwing the "
+    s.append(P("This is the only aimed weapon in the game. You are not throwing the "
                "virus at someone so much as choosing where you stand while you feed "
                "it - the line from you, through the virus, is where the new one goes. "
                "Used properly it puts a mine in the path of a player far too big for "
@@ -1308,7 +1306,7 @@ def story():
         [P("What it costs you", S_H3),
          P(f"Three throws is {K['VIRUS_FEED_HITS'] * K['EJECT_MASS']} mass off your own "
            "total, gone. Feeding is a pure sink: the virus keeps it, you get nothing "
-           "back. What you buy is position - and in a live round, nothing.", S_BODY)],
+           "back. What you buy is position.", S_BODY)],
         [P("Two things that will catch you out", S_H3),
          P("Only mass <i>still in flight</i> feeds a virus - a blob that runs out of "
            "travel short of it has missed. And if you are over "
@@ -1515,7 +1513,7 @@ def story():
           f"even when already in up to {H['split']['cells']} pieces"],
          ["Double split", "never", "never",
           "yes - a quarter thrown from the half in flight"],
-         ["Shoots viruses at bigger cells, in practice", "never",
+         ["Shoots viruses at bigger cells", "never",
           "only one it is already lined up behind",
           f"spots targets up to {H['virus']['see']:,} away and walks up to "
           f"{H['virus']['travel']} to line a virus up"],
@@ -1552,9 +1550,8 @@ def story():
         f"<b>Turn late.</b> Hard bots aim {H['lead']}s ahead of where you are going. "
         "A change of direction as they commit sends the split into empty space.",
         f"<b>Above mass {POP_MASS:.0f}, mind the viruses.</b> Never chase a small Hard "
-        "bot through one: it runs behind a virus so that you burst on it. And in "
-        "practice, a virus near a big Hard bot that swells as blobs hit it is being "
-        "aimed at you - it "
+        "bot through one: it runs behind a virus so that you burst on it. And a virus "
+        "near a big Hard bot that swells as blobs hit it is being aimed at you - it "
         f"takes {K['VIRUS_FEED_HITS']} feeds, and the new virus flies along the line "
         "the blobs came in on.",
         "<b>Stay near something bigger than the bot.</b> Bots of every level refuse "
@@ -1600,12 +1597,12 @@ def story():
           "you are on. Under it they are your best cover - a big chaser physically "
           "cannot follow you onto one. Over it they are the thing most likely to "
           "kill you.",
-          "The advanced half is offensive, and only in practice: feeding one takes "
+          "The advanced half is offensive: feeding one takes "
           f"{K['VIRUS_FEED_HITS']} throws and lets you place a new virus roughly 450 "
-          "units away along a line you choose. In a live round a fed virus never "
-          "splits."],
+          "units away along a line you choose."],
          "Grow past the threshold in Practice and deliberately run a bot chase near "
-         "viruses until you can feel the danger radius."),
+         "viruses until you can feel the danger radius. Then spend a round doing "
+         "nothing but feeding viruses, to learn the range and lead of a throw."),
 
         (4, "Orb economy", "Growth",
          [f"Orbs are {K['PELLET_MASS']:g} mass each and there are {STD['world']['pellets']:,} "
@@ -1767,7 +1764,7 @@ def story():
          ["Merge", "Nothing, but you cannot hurry it", "Back to one fast, safe body"],
          ["Feed a virus", f"{K['EJECT_MASS']} mass a throw, "
                           f"{EJECT_LOSS:.0f}% of it lost outright",
-          "In practice, a hazard placed where you choose; in a live round, nothing"],
+          "A hazard placed where you choose"],
          ["Preserve", f"Nothing below {K['DECAY_ABOVE']} mass; above it you leak "
                       f"{DECAY_PCT:g}% a second", "Speed, and the ability to run"]],
         [26 * mm, 52 * mm, None]))
@@ -1856,13 +1853,11 @@ def story():
     s.append(P("<b>Offensively</b>, there are two plays. The first needs no setup: "
                "herd a large player toward a virus. They know the danger, so the "
                "threat of it alone steers them, which is often all you want.", S_BODY))
-    s.append(P(f"The second is feeding, and it is practice only. There, "
-               f"{K['VIRUS_FEED_HITS']} blobs of ejected mass "
+    s.append(P(f"The second is feeding. {K['VIRUS_FEED_HITS']} blobs of ejected mass "
                "split a virus and launch a new one along the line your mass came in "
-               "on, about 450 units: how a small player removes a large one without "
-               "ever being big enough to fight it. In a live round a fed virus "
-               "swallows the mass and never splits, so the only offensive play there "
-               "is the herd.", S_BODY))
+               "on, about 450 units. That is how a small player removes a large one "
+               "without ever being big enough to fight it - and how you close off the "
+               "open water someone was running for.", S_BODY))
     s.append(bullets([
         f"Cost: {K['VIRUS_FEED_HITS'] * K['EJECT_MASS']} of your own mass, "
         "unrecoverable.",
@@ -2003,7 +1998,7 @@ def story():
          ["Pieces you burst into", f"{K['VIRUS_PIECES']}"],
          ["Feeds to split one", f"{K['VIRUS_FEED_HITS']} blobs of ejected mass, still in flight"],
          ["Where the new one goes", "along the line your mass came in on, about 450 units"],
-         ["In a live round", "a fed one never splits, and none is added"]],
+         ["Population ceiling", f"{K['VIRUS_MAX_RATIO']}x the count the arena seeds"]],
         [30 * mm, None]),
         P("The round", S_H3), datatable(
         ["", "Std", "High"],

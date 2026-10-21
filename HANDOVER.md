@@ -257,13 +257,13 @@ of a round. If you would rather trade exact equality for using the whole board, 
 phyllotaxis spiral gives near-even *density* instead; `spawnRing()` in
 `shared/sim.js` is the only thing to change.
 
-**A live round's viruses are fixed; practice's are not.** The server builds every
-room with `fixedViruses`: once a round is dealt, feeding never splits a virus, an
-eaten one is not replaced, and bots do not line up virus shots. The replacement used
-to land at a random point, under whoever was there, and popped big cells for no
-reason. In practice, feeding adds viruses up to `VIRUS_MAX_RATIO` (1.5) times the
-count the arena seeds, and eating one tops the population back up *only when it is
-below the seeded count*. If you raise the ceiling, check the tick cost first.
+**A live round never replaces an eaten virus; practice does.** The server builds
+every room with `refillViruses` off. The replacement used to land at a random point,
+under whoever was there, and popped big cells for no reason. Feeding works the same
+everywhere: the third blob splits a virus and launches the new one, up to
+`VIRUS_MAX_RATIO` (1.5) times the count the arena seeds. In practice, eating one
+tops the population back up *only when it is below the seeded count*. If you raise
+the ceiling, check the tick cost first.
 
 **`round_start` is not proof that you are alive.** This caused a live bug and the
 shape of it will recur. The newest snapshot a client holds when the whistle blows was

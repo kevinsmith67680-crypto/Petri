@@ -980,14 +980,6 @@ export function createUI({
     hard: "They hunt you down, double-split from range and hide behind viruses. Pass mass 127 and they line viruses up to burst you."
   };
 
-  // A staked room never lets a fed virus split (fixedViruses in
-  // shared/sim.js), so no bot there shoots one, at any level.
-  const LEVEL_NOTE_STAKED = {
-    easy: "They chase what they can catch. They never split at you.",
-    normal: "They split to engulf you at close range.",
-    hard: "They hunt you down, double-split from range and hide behind viruses."
-  };
-
   // Said once a staked room is joined at a level, so the choice is not a
   // surprise to someone expecting the practice arena's rules.
   const LEVEL_SEATING = "In a staked game you are seated with players who picked the same.";
@@ -1005,8 +997,7 @@ export function createUI({
     // with no bots in it.
     el.levels.hidden = !practice && !liveBots;
     for (const [id, btn] of levelButtons) btn.setAttribute("aria-checked", String(id === botLevel));
-    el.levelNote.textContent = practice
-      ? LEVEL_NOTE[botLevel] : `${LEVEL_NOTE_STAKED[botLevel]} ${LEVEL_SEATING}`;
+    el.levelNote.textContent = practice ? LEVEL_NOTE[botLevel] : `${LEVEL_NOTE[botLevel]} ${LEVEL_SEATING}`;
   }
 
   function setLiveBots(on) {
